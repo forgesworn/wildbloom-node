@@ -54,6 +54,7 @@ if LD_LIBRARY_PATH="$tor_library_dir" ldd "$tor_binary" | grep -q 'not found'; t
   LD_LIBRARY_PATH="$tor_library_dir" ldd "$tor_binary" >&2
   exit 1
 fi
+echo "installed Linux package contains an executable Tor runtime with resolved libraries"
 
 Xvfb :99 -screen 0 1280x800x24 -nolisten tcp >"$runtime_root/xvfb.log" 2>&1 &
 xvfb_pid="$!"
@@ -111,14 +112,22 @@ if [ "$ready" != "1" ]; then
   sed -n '1,200p' "$runtime_root/app.stderr.log" >&2
   exit 1
 fi
+echo "installed Linux desktop reached Tor and Blossom readiness"
 
-test -n "$hostname_path"
-test -n "$database_path"
-test -n "$node_port"
-test "$(stat -c '%a' "$database_path")" = "600"
+if [ "$(stat -c '%a' "$database_path")" != "600" ]; then
+  echo "the installed desktop created its database with unsafe permissions" >&2
+  exit 1
+fi
 secret_key="$(find "$XDG_DATA_HOME" -type f -name hs_ed25519_secret_key -print -quit)"
-test -n "$secret_key"
-test "$(stat -c '%a' "$secret_key")" = "600"
+if [ -z "$secret_key" ]; then
+  echo "the installed desktop did not create an onion-service secret key" >&2
+  exit 1
+fi
+if [ "$(stat -c '%a' "$secret_key")" != "600" ]; then
+  echo "the installed desktop created its onion key with unsafe permissions" >&2
+  exit 1
+fi
+echo "installed Linux desktop kept its database and onion key private"
 
 "$executable" >"$runtime_root/second.stdout.log" 2>"$runtime_root/second.stderr.log" &
 second_pid="$!"
@@ -135,8 +144,11 @@ if kill -0 "$second_pid" 2>/dev/null; then
 fi
 wait "$second_pid" || true
 
-app_count="$(ps -eo args= | awk -v executable="$executable" '$1 == executable { count += 1 } END { print count + 0 }')"
-test "$app_count" = "1"
+if ! kill -0 "$app_pid" 2>/dev/null; then
+  echo "the original desktop process stopped during the second launch" >&2
+  exit 1
+fi
+echo "installed Linux desktop enforced one application instance"
 
 kill -TERM "$app_pid"
 for _ in $(seq 1 30); do
@@ -157,7 +169,11 @@ for _ in $(seq 1 30); do
   test "$remaining_children" = "0" && break
   sleep 1
 done
-test "$remaining_children" = "0"
+if [ "$remaining_children" != "0" ]; then
+  echo "a bundled Tor or Wildbloom child remained after the desktop stopped" >&2
+  exit 1
+fi
+echo "installed Linux desktop stopped its bundled child processes"
 
 sudo apt-get remove --purge --yes "$package_name"
 if dpkg-query --show "$package_name" >/dev/null 2>&1; then
