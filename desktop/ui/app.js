@@ -9,6 +9,8 @@ const elements = {
   used: document.querySelector("#used-space"),
   free: document.querySelector("#free-space"),
   pubkey: document.querySelector("#pubkey"),
+  friendGrants: document.querySelector("#friend-grants"),
+  openShelter: document.querySelector("#open-shelter"),
   writeStatus: document.querySelector("#write-status"),
   quota: document.querySelector("#quota"),
   autostart: document.querySelector("#autostart"),
@@ -40,11 +42,16 @@ async function refresh() {
     elements.used.textContent = formatBytes(status.storage?.bytes ?? 0);
     const free = Math.max(0, (status.storage?.quotaBytes ?? 0) - (status.storage?.bytes ?? 0));
     elements.free.textContent = formatBytes(free);
-    elements.writeStatus.textContent = status.settings.allowedPubkey
-      ? "Only this public key may upload, mirror or delete blobs."
-      : "The node is read-only until you add a public key.";
+    const friends = status.settings.friendGrants?.length ?? 0;
+    elements.writeStatus.textContent = status.settings.openShelter
+      ? `${friends} friend grant${friends === 1 ? "" : "s"}; spare capacity is open to signed guest mirrors.`
+      : status.settings.allowedPubkey || friends > 0
+        ? `${friends} friend grant${friends === 1 ? "" : "s"}; unknown writers are denied.`
+        : "The node is read-only until you add an owner, a friend grant or open shelter.";
     if (!settingsLoaded) {
       elements.pubkey.value = status.settings.allowedPubkey || "";
+      elements.friendGrants.value = (status.settings.friendGrants || []).join("\n");
+      elements.openShelter.checked = Boolean(status.settings.openShelter);
       elements.quota.value = String(status.settings.quotaGib);
       elements.autostart.checked = status.settings.startAtLogin;
       settingsLoaded = true;
@@ -65,6 +72,11 @@ elements.form.addEventListener("submit", async (event) => {
     await invoke("save_settings", {
       settings: {
         allowedPubkey: elements.pubkey.value.trim() || null,
+        friendGrants: elements.friendGrants.value
+          .split(/\r?\n/)
+          .map((grant) => grant.trim())
+          .filter(Boolean),
+        openShelter: elements.openShelter.checked,
         quotaGib: Number(elements.quota.value),
         startAtLogin: elements.autostart.checked,
       },

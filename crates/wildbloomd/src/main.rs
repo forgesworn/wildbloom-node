@@ -1,12 +1,38 @@
 use clap::Parser;
-use std::{net::SocketAddr, path::PathBuf};
+use std::{net::SocketAddr, path::PathBuf, str::FromStr};
 use tracing_subscriber::EnvFilter;
 use url::Url;
-use wildbloom_core::{AppState, BlossomConfig, Store, StoreConfig, router};
+use wildbloom_core::{AppState, BlossomConfig, FriendGrant, Store, StoreConfig, router};
 
 mod tor;
 
 use tor::TorService;
+
+#[derive(Debug, Clone)]
+struct FriendGrantArg(FriendGrant);
+
+impl FromStr for FriendGrantArg {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let parts = value.split(':').collect::<Vec<_>>();
+        let [pubkey, byte_limit, expires_at] = parts.as_slice() else {
+            return Err("expected PUBKEY:BYTE_LIMIT:EXPIRES_AT".to_owned());
+        };
+        let byte_limit = byte_limit
+            .parse::<u64>()
+            .map_err(|_| "friend byte limit must be an unsigned integer".to_owned())?;
+        let expires_at = expires_at
+            .parse::<u64>()
+            .map_err(|_| "friend expiry must be a Unix timestamp".to_owned())?;
+        Ok(Self(FriendGrant {
+            pubkey: (*pubkey).to_owned(),
+            byte_limit,
+            expires_at,
+            grant_id: format!("local:{pubkey}:{expires_at}"),
+        }))
+    }
+}
 
 #[derive(Debug, Parser)]
 #[command(
@@ -51,7 +77,7 @@ struct Cli {
     #[arg(long = "server-name", env = "WILDBLOOM_SERVER_NAME")]
     server_names: Vec<String>,
 
-    /// Nostr public key allowed to upload, mirror and delete (repeatable).
+    /// Owner Nostr public key allowed to upload, mirror and delete (repeatable).
     #[arg(
         long = "allow-pubkey",
         env = "WILDBLOOM_ALLOW_PUBKEYS",
@@ -59,13 +85,18 @@ struct Cli {
     )]
     allowed_pubkeys: Vec<String>,
 
-    /// Accept writes from any valid Nostr public key. Unsafe on a shared quota.
+    /// Expiring friend grant as PUBKEY:BYTE_LIMIT:EXPIRES_AT (repeatable).
     #[arg(
-        long,
-        env = "WILDBLOOM_ALLOW_PUBLIC_WRITES",
-        conflicts_with = "allowed_pubkeys"
+        long = "friend-grant",
+        env = "WILDBLOOM_FRIEND_GRANTS",
+        value_delimiter = ','
     )]
-    allow_public_writes: bool,
+    friend_grants: Vec<FriendGrantArg>,
+
+    /// Accept signed BUD-04 mirrors from unknown keys as evictable guest data.
+    /// Direct unknown uploads remain denied.
+    #[arg(long, env = "WILDBLOOM_OPEN_SHELTER")]
+    open_shelter: bool,
 
     /// Maximum simultaneous upload and mirror streams.
     #[arg(long, env = "WILDBLOOM_MAX_CONCURRENT_WRITES", default_value_t = 4)]
@@ -137,9 +168,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     }
-    if cli.allowed_pubkeys.is_empty() && !cli.allow_public_writes {
+    if cli.allowed_pubkeys.is_empty() && cli.friend_grants.is_empty() && !cli.open_shelter {
         tracing::warn!(
-            "no writer public keys are configured; the node is read-only until --allow-pubkey is supplied"
+            "no owner, friend grant or open-shelter policy is configured; the node is read-only"
         );
     }
     let listener = tokio::net::TcpListener::bind(cli.bind).await?;
@@ -191,7 +222,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             public_base_url: public_url.clone(),
             accepted_server_names: server_names.clone(),
             allowed_pubkeys: cli.allowed_pubkeys,
-            allow_public_writes: cli.allow_public_writes,
+            friend_grants: cli.friend_grants.into_iter().map(|grant| grant.0).collect(),
+            open_shelter: cli.open_shelter,
             max_concurrent_writes: cli.max_concurrent_writes,
             mirror_proxy,
         },
@@ -321,6 +353,23 @@ mod tests {
     fn bud_server_scope_uses_the_hostname_without_the_port() {
         let url = Url::parse("http://localhost:3742/").unwrap();
         assert_eq!(url_server_name(&url).unwrap(), "localhost");
+    }
+
+    #[test]
+    fn parses_expiring_friend_grants_and_open_shelter() {
+        let pubkey = "a".repeat(64);
+        let cli = Cli::try_parse_from([
+            "wildbloomd",
+            "--friend-grant",
+            &format!("{pubkey}:1048576:2000000000"),
+            "--open-shelter",
+        ])
+        .unwrap();
+        assert!(cli.open_shelter);
+        assert_eq!(cli.friend_grants.len(), 1);
+        assert_eq!(cli.friend_grants[0].0.pubkey, pubkey);
+        assert_eq!(cli.friend_grants[0].0.byte_limit, 1_048_576);
+        assert_eq!(cli.friend_grants[0].0.expires_at, 2_000_000_000);
     }
 
     #[cfg(target_os = "linux")]

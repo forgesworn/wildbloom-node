@@ -24,8 +24,9 @@ blob through BUD-04.
 
 It is not a torrent client.  Every replica currently stores a complete blob and
 serves it over ordinary Blossom HTTP.  Nostr can carry private storage offers
-and replication intent; Tor carries the bytes.  RelaySwarm is a promising later
-direct transport, but it is not yet part of the durability claim.
+and replication intent; Tor carries the bytes.  A separate QUIC and opaque-relay
+lane is a future spike, not part of the durability claim.  RelaySwarm's WebRTC
+session remains for live browser media rather than storage.
 
 ## What works
 
@@ -36,13 +37,21 @@ direct transport, but it is not yet part of the durability claim.
 - BUD-06 authorised upload preflight with quota and per-blob checks.
 - Strict BUD-11 kind `24242` signature, operation, hash, server and expiry
   checks.
-- BUD-12 owner-aware deletion.  One signer cannot delete another signer's
-  retained ownership.
+- Authenticated, self-only BUD-12 listing with bounded cursor pagination, plus
+  claim-aware deletion.  One signer cannot list or delete another signer's
+  claims.
 - Persistent SQLite metadata and a disk content-addressed store.
 - Pre-stream global quota reservation, per-blob limits, deduplication and
   interrupted-upload cleanup.
 - Deny-by-default writes, bounded concurrent streams, complete integrity scans
   and repair from previously verified mirror sources.
+- Claim-aware owner, friend and guest retention over one deduplicated CAS.
+  Friends have expiring per-key byte ceilings; signed guest mirrors use only
+  spare capacity and are evicted first.
+- Opaque attachment serving for friend-only and guest-only blobs, including
+  `nosniff`; conflicting owner MIME claims also fail opaque.
+- Crash reconciliation restores indexed tombstones and removes unindexed files
+  left by interrupted file/database transactions.
 - Loopback-only binding by default and a persistent Tor v3 onion identity.
 - Native Rust and Tauri compile CI configured for macOS, Linux and Windows.
 - A native Tauri tray shell with platform data directories, start-at-login,
@@ -56,10 +65,10 @@ strangers willing to hold data.  Repair can restore a damaged local copy only
 when the node already recorded a verified source which is still online.  Those
 boundaries are documented in the [roadmap](docs/ROADMAP.md).
 
-The next storage revision will prefer the operator's files, then explicitly
-invited friends, while using spare capacity for signed guest mirrors with no
-retention promise.  That policy is specified, but not yet implemented, in the
-[storage priority contract](docs/STORAGE-POLICY.md).
+The [storage priority contract](docs/STORAGE-POLICY.md) defines the exact
+admission and eviction promises.  The implementation and adversarial local
+tests are present; cross-platform CI and the independent V4V recovery journey
+remain release evidence rather than assumptions.
 
 ## Install and run
 
@@ -115,13 +124,13 @@ cargo build --release
 The first Tor bootstrap can take a few minutes.  Once ready, the log prints the
 stable `.onion` Blossom URL.  Add that URL to a Blossom-capable client.  The
 node stores data in the operating system's per-user application-data directory
-unless `--data-dir` or `WILDBLOOM_DATA_DIR` says otherwise.  Without an allowed
-public key it remains read-only.
+unless `--data-dir` or `WILDBLOOM_DATA_DIR` says otherwise.  Without an owner,
+friend grant or explicit open-shelter policy it remains read-only.
 
-For local development without Tor and with deliberately public writes:
+For local development without Tor, keep the same explicit owner authority:
 
 ```sh
-cargo run -p wildbloomd -- --no-tor --allow-public-writes
+cargo run -p wildbloomd -- --no-tor --allow-pubkey <64-lower-case-hex-public-key>
 ```
 
 Useful controls:
@@ -129,7 +138,9 @@ Useful controls:
 ```text
 --quota-bytes <BYTES>          total stored blob quota, default 10 GiB
 --max-blob-bytes <BYTES>       maximum single blob, default 1 GiB
---allow-pubkey <HEX>           permitted writer public key, repeatable
+--allow-pubkey <HEX>           owner public key, repeatable
+--friend-grant <P:L:E>         friend pubkey, byte limit and Unix expiry
+--open-shelter                 admit unknown signed mirrors as guest data
 --max-concurrent-writes <N>    concurrent upload/mirror limit, default 4
 --repair-interval <SECONDS>    integrity and repair interval, default 3600
 --verify-storage               verify every stored byte and exit
@@ -154,6 +165,12 @@ Applications use the onion URL exactly as they use another Blossom server:
    normal Nostr records.
 5. To add another replica, sign for the destination node and call its
    `PUT /mirror` with the source descriptor URL.
+
+An operator may add an invited key with
+`--friend-grant <pubkey>:<byte-limit>:<expires-at>`.  `--open-shelter` is a
+separate, explicit policy: unknown keys may submit signed BUD-04 mirrors when
+the high free-space watermark remains intact, but they still cannot upload
+directly and receive no retention promise.
 
 Wildbloom's browser app keeps encryption client-side, so a node stores ciphertext
 rather than plaintext.  See the exact [protocol and trust boundaries](docs/PROTOCOL.md)

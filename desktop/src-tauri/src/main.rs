@@ -20,9 +20,11 @@ use tauri_plugin_shell::{
 use tauri_plugin_updater::UpdaterExt as _;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 struct Settings {
     allowed_pubkey: Option<String>,
+    friend_grants: Vec<String>,
+    open_shelter: bool,
     quota_gib: u64,
     start_at_login: bool,
 }
@@ -31,6 +33,8 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             allowed_pubkey: None,
+            friend_grants: Vec::new(),
+            open_shelter: false,
             quota_gib: 10,
             start_at_login: false,
         }
@@ -405,6 +409,13 @@ async fn start_node_sidecar(
         arguments.push("--allow-pubkey".into());
         arguments.push(pubkey.into());
     }
+    for grant in &settings.friend_grants {
+        arguments.push("--friend-grant".into());
+        arguments.push(grant.into());
+    }
+    if settings.open_shelter {
+        arguments.push("--open-shelter".into());
+    }
     #[cfg(target_os = "linux")]
     {
         arguments.push("--parent-pid".into());
@@ -569,10 +580,47 @@ fn validate_settings(settings: &Settings) -> Result<(), String> {
     {
         return Err("the Nostr public key must be 64 lower-case hexadecimal characters".into());
     }
+    let mut friend_pubkeys = std::collections::BTreeSet::new();
+    for encoded in &settings.friend_grants {
+        let (pubkey, byte_limit, expires_at) = parse_friend_grant(encoded)?;
+        if pubkey.len() != 64
+            || !pubkey
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            || byte_limit == 0
+            || expires_at > i64::MAX as u64
+        {
+            return Err(
+                "each friend grant must be PUBKEY:POSITIVE_BYTE_LIMIT:UNIX_EXPIRY".into(),
+            );
+        }
+        if settings.allowed_pubkey.as_ref() == Some(&pubkey) {
+            return Err("the owner key must not also appear as a friend".into());
+        }
+        if !friend_pubkeys.insert(pubkey) {
+            return Err("each friend public key may appear only once".into());
+        }
+    }
     if !(1..=16_384).contains(&settings.quota_gib) {
         return Err("the storage quota must be between 1 GiB and 16 TiB".into());
     }
     Ok(())
+}
+
+fn parse_friend_grant(value: &str) -> Result<(String, u64, u64), String> {
+    let parts = value.split(':').collect::<Vec<_>>();
+    let [pubkey, byte_limit, expires_at] = parts.as_slice() else {
+        return Err("each friend grant must be PUBKEY:POSITIVE_BYTE_LIMIT:UNIX_EXPIRY".into());
+    };
+    Ok((
+        (*pubkey).to_owned(),
+        byte_limit
+            .parse()
+            .map_err(|_| "friend byte limit must be an unsigned integer".to_owned())?,
+        expires_at
+            .parse()
+            .map_err(|_| "friend expiry must be a Unix timestamp".to_owned())?,
+    ))
 }
 
 fn read_settings(app: &AppHandle) -> Result<Settings, String> {
@@ -795,6 +843,29 @@ mod tests {
         assert!(validate_settings(&settings).is_err());
         settings.allowed_pubkey = Some("a".repeat(63));
         assert!(validate_settings(&settings).is_err());
+    }
+
+    #[test]
+    fn validates_distinct_friend_grants_and_backward_compatible_defaults() {
+        let mut settings = Settings {
+            allowed_pubkey: Some("a".repeat(64)),
+            friend_grants: vec![format!("{}:1048576:2000000000", "b".repeat(64))],
+            open_shelter: true,
+            ..Settings::default()
+        };
+        assert!(validate_settings(&settings).is_ok());
+
+        settings.friend_grants.push(format!("{}:1:2000000001", "b".repeat(64)));
+        assert!(validate_settings(&settings).is_err());
+        settings.friend_grants = vec![format!("{}:1:2000000000", "a".repeat(64))];
+        assert!(validate_settings(&settings).is_err());
+
+        let old: Settings = serde_json::from_str(
+            r#"{"allowedPubkey":null,"quotaGib":10,"startAtLogin":false}"#,
+        )
+        .unwrap();
+        assert!(old.friend_grants.is_empty());
+        assert!(!old.open_shelter);
     }
 
     #[test]

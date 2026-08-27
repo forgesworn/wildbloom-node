@@ -15,6 +15,13 @@
   workflow for Developer ID, notarisation and Windows Authenticode builds.
 - `AppState::with_fetcher` lets a shell supply an explicit transport adapter
   and refuses to combine one with a mirror proxy.
+- Owner, friend and guest claims over one deduplicated CAS, with expiring friend
+  ceilings, mirror-only open shelter, watermarks and oldest-guest-first eviction.
+- Authenticated self-only BUD-12 listing with bounded SHA-256 cursor pagination.
+- Opaque attachment responses for friend-only, guest-only and MIME-ambiguous
+  blobs.
+- Startup recovery for interrupted CAS/database moves and migration from the
+  0.2 owner schema.
 
 ### Changed
 
@@ -27,6 +34,8 @@
   published onion is still unreachable, and takes its Tor bootstrap budget
   from `WILDBLOOM_TEST_TOR_TIMEOUT` (default 300 seconds) for days when
   directory fetches stall.
+- The unsafe public direct-write switch is replaced by explicit
+  `--open-shelter`, which admits unknown signers only through BUD-04 mirroring.
 
 - Platform-native per-user data directories replace the working directory as
   the headless daemon default.

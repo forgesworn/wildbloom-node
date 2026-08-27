@@ -40,8 +40,15 @@
 - On Unix, node state, temporary files, database files and onion keys are mode
   `0700` or `0600`.  Windows uses the current user's application-data directory
   and its inherited ACL.  Clean-machine installer review remains a release gate.
-- A default node accepts no writes.  Operators must allow one or more exact
-  lower-case hexadecimal Nostr public keys or deliberately enable public writes.
+- A default node accepts no writes.  Operators configure exact owner keys and
+  may issue expiring per-key friend byte grants.  Open shelter is separate and
+  accepts unknown keys only for signed BUD-04 mirrors above the high free-space
+  watermark; unknown direct uploads remain denied.
+- Owner and friend reservations may evict only best-effort guest blobs.  Guest
+  requests cannot consume the protected reserve or evict a stronger claim.
+- Friend-only and guest-only responses are opaque attachments with `nosniff`.
+  A declared MIME type becomes inline only for an unambiguous active owner
+  claim.
 - Upload and mirror concurrency is bounded.  Complete integrity scans hash the
   bytes on disk, and repair accepts only the exact length and SHA-256 from a
   previously verified hash-addressed source.

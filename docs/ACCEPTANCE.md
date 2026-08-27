@@ -123,3 +123,25 @@ Environment: macOS, Rust 1.94.1, Homebrew Tor 0.4.9.5, branch
   exact bytes after node A stopped, and kept its onion identity across a
   restart.  The transport in that record is what the adapter reported, not an
   inference from the fact that retrieval succeeded.
+
+## 2026-08-27 tiered storage policy
+
+Environment: macOS, Rust 1.94.1, stacked branch
+`feat/tiered-storage-policy`.
+
+- The 39 core tests, three daemon tests and four desktop tests passed.  New
+  adversarial cases cover
+  mirror-only guest admission, high-watermark preservation, oldest-guest-first
+  eviction, refusal to evict owner/friend data, friend logical ceilings through
+  deduplication, restart and expiry, strongest-claim selection, ambiguous MIME
+  fallback, policy demotion, self-only bounded BUD-12 listing and 0.2 schema
+  migration.
+- In-process HTTP acceptance proves that an unknown but valid signer is denied
+  direct upload, admitted as `guest` only through BUD-04 when open shelter is
+  enabled, served as `application/octet-stream` plus attachment and `nosniff`,
+  and cannot list another signer's claims.
+- Startup acceptance proves that an indexed tombstone is restored after an
+  interrupted file transaction and an unindexed CAS file is removed.  The
+  SQLite schema migration runs in one immediate transaction.
+- Cross-platform CI and the V4V two-node encrypted-media failure/recovery
+  journey remain required before this revision is called production-shipped.

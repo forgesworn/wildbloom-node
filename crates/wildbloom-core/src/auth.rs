@@ -50,6 +50,8 @@ pub enum AuthError {
     WrongHash,
     #[error("authorisation is not scoped to this server")]
     WrongServer,
+    #[error("authorisation signer does not match the requested public key")]
+    WrongPubkey,
     #[error("authorisation event contains ambiguous security tags")]
     AmbiguousTags,
 }
@@ -115,7 +117,7 @@ impl AuthPolicy {
         expected_hash: &str,
         now: u64,
     ) -> Result<VerifiedUpload, AuthError> {
-        self.verify_operation(authorization, expected_hash, "upload", now)
+        self.verify_operation(authorization, Some(expected_hash), "upload", now)
     }
 
     pub fn verify_delete(
@@ -124,13 +126,26 @@ impl AuthPolicy {
         expected_hash: &str,
         now: u64,
     ) -> Result<VerifiedUpload, AuthError> {
-        self.verify_operation(authorization, expected_hash, "delete", now)
+        self.verify_operation(authorization, Some(expected_hash), "delete", now)
+    }
+
+    pub fn verify_list(
+        &self,
+        authorization: Option<&str>,
+        expected_pubkey: &str,
+        now: u64,
+    ) -> Result<VerifiedUpload, AuthError> {
+        let verified = self.verify_operation(authorization, None, "list", now)?;
+        if verified.owner_pubkey != expected_pubkey {
+            return Err(AuthError::WrongPubkey);
+        }
+        Ok(verified)
     }
 
     fn verify_operation(
         &self,
         authorization: Option<&str>,
-        expected_hash: &str,
+        expected_hash: Option<&str>,
         expected_verb: &str,
         now: u64,
     ) -> Result<VerifiedUpload, AuthError> {
@@ -170,12 +185,14 @@ impl AuthPolicy {
         if verb != expected_verb {
             return Err(AuthError::WrongVerb);
         }
-        let hashes = scoped_tags(&raw.tags, "x")?;
-        if hashes.is_empty()
-            || hashes.iter().any(|hash| !is_canonical_hash(hash))
-            || !hashes.contains(&expected_hash)
-        {
-            return Err(AuthError::WrongHash);
+        if let Some(expected_hash) = expected_hash {
+            let hashes = scoped_tags(&raw.tags, "x")?;
+            if hashes.is_empty()
+                || hashes.iter().any(|hash| !is_canonical_hash(hash))
+                || !hashes.contains(&expected_hash)
+            {
+                return Err(AuthError::WrongHash);
+            }
         }
         let servers = scoped_tags(&raw.tags, "server")?;
         if servers.is_empty()
