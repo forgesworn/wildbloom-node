@@ -165,7 +165,11 @@ wait "$app_pid" || true
 app_pid=""
 
 for _ in $(seq 1 30); do
-  remaining_children="$(ps -eo args= | awk -v root="$runtime_root" 'index($0, root) && (index($0, "wildbloomd") || index($0, "/tor")) { count += 1 } END { print count + 0 }')"
+  remaining_children="$(
+    ps -eo comm=,args= \
+      | awk -v root="$runtime_root" \
+        'index($0, root) && ($1 == "wildbloomd" || $1 == "tor") { count += 1 } END { print count + 0 }'
+  )"
   test "$remaining_children" = "0" && break
   sleep 1
 done
