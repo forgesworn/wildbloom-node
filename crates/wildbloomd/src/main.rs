@@ -106,7 +106,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Err("--public-url cannot override the managed Tor onion; use --no-tor".into());
         }
         (None, configured) => configured.unwrap_or_else(|| {
-            Url::parse(&format!("http://{local_address}")).expect("socket URL is valid")
+            Url::parse(&format!("http://localhost:{}", local_address.port()))
+                .expect("local URL is valid")
         }),
     };
     validate_public_url(&public_url)?;
@@ -158,11 +159,7 @@ fn validate_public_url(url: &Url) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn url_server_name(url: &Url) -> Result<String, Box<dyn std::error::Error>> {
-    let host = url.host_str().ok_or("public URL has no host")?;
-    Ok(match url.port() {
-        Some(port) => format!("{host}:{port}"),
-        None => host.to_owned(),
-    })
+    Ok(url.host_str().ok_or("public URL has no host")?.to_owned())
 }
 
 async fn shutdown_signal() {
@@ -186,5 +183,16 @@ async fn shutdown_signal() {
     tokio::select! {
         () = ctrl_c => {},
         () = terminate => {},
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bud_server_scope_uses_the_hostname_without_the_port() {
+        let url = Url::parse("http://localhost:3742/").unwrap();
+        assert_eq!(url_server_name(&url).unwrap(), "localhost");
     }
 }

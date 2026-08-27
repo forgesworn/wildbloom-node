@@ -4,7 +4,7 @@
 
 Environment: macOS, Rust 1.94.1 and Tor 0.4.9.5.
 
-- All 16 Rust unit and HTTP integration tests passed, including adversarial
+- All 18 Rust unit and HTTP integration tests passed, including adversarial
   BUD-11 scope/signature cases, quota reservation, deduplication, signed upload
   and byte-range retrieval.
 - `cargo clippy --workspace --all-targets -- -D warnings` passed.

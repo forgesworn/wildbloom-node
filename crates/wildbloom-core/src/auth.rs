@@ -106,7 +106,7 @@ impl AuthPolicy {
         }
 
         let raw: RawEvent = serde_json::from_slice(&bytes).map_err(|_| AuthError::InvalidEvent)?;
-        if raw.content.len() > MAX_CONTENT_BYTES {
+        if raw.content.len() > MAX_CONTENT_BYTES || raw.content.trim().is_empty() {
             return Err(AuthError::InvalidEvent);
         }
         let event: Event = serde_json::from_slice(&bytes).map_err(|_| AuthError::InvalidEvent)?;
@@ -217,12 +217,16 @@ mod tests {
     use nostr::prelude::{EventBuilder, FinalizeEvent, Keys, Kind, Tag, Timestamp};
 
     fn header(tags: Vec<Vec<String>>, created_at: u64) -> String {
+        header_with_content(tags, created_at, "Upload blob")
+    }
+
+    fn header_with_content(tags: Vec<Vec<String>>, created_at: u64, content: &str) -> String {
         let keys = Keys::parse(&format!("{:064x}", 1)).unwrap();
         let tags = tags
             .into_iter()
             .map(|tag| Tag::parse(tag).unwrap())
             .collect::<Vec<_>>();
-        let event = EventBuilder::new(Kind::Custom(BLOSSOM_AUTH_KIND), "Upload blob")
+        let event = EventBuilder::new(Kind::Custom(BLOSSOM_AUTH_KIND), content)
             .tags(tags)
             .custom_created_at(Timestamp::from(created_at))
             .finalize(&keys)
@@ -330,6 +334,16 @@ mod tests {
         assert_eq!(
             AuthPolicy::new(["node.example"]).verify_upload(Some(&tampered), &hash, 1_010),
             Err(AuthError::InvalidSignature)
+        );
+    }
+
+    #[test]
+    fn rejects_an_empty_human_readable_purpose() {
+        let hash = "a".repeat(64);
+        let auth = header_with_content(valid_tags(&hash, 1_120), 1_000, "   ");
+        assert_eq!(
+            AuthPolicy::new(["node.example"]).verify_upload(Some(&auth), &hash, 1_010),
+            Err(AuthError::InvalidEvent)
         );
     }
 }
