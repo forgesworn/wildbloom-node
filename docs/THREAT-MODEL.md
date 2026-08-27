@@ -14,6 +14,10 @@
   public-bind override.
 - The managed onion forwards only to that loopback listener.  Tor relay and exit
   operation are disabled.
+- The desktop starts Tor from the signature-verified bundled resource tree.  On
+  Linux it replaces Tor's child-process `LD_LIBRARY_PATH` with that exact bundle
+  directory, so the packaged `libevent` is found without inheriting an
+  operator-supplied library search path.
 - Uploads require a valid Nostr signature scoped to `upload`, the exact SHA-256,
   one accepted server name and an expiry no more than five minutes after event
   creation.

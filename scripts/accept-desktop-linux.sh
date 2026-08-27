@@ -47,10 +47,11 @@ if [ -z "$tor_binary" ] || [ ! -x "$tor_binary" ]; then
   echo "the installed package manifest does not contain an executable Tor runtime" >&2
   exit 1
 fi
-"$tor_binary" --version | grep -Eq '^Tor version [0-9]+\.'
-if ldd "$tor_binary" | grep -q 'not found'; then
+tor_library_dir="$(dirname "$tor_binary")"
+LD_LIBRARY_PATH="$tor_library_dir" "$tor_binary" --version | grep -Eq '^Tor version [0-9]+\.'
+if LD_LIBRARY_PATH="$tor_library_dir" ldd "$tor_binary" | grep -q 'not found'; then
   echo "the packaged Tor runtime has an unresolved shared library" >&2
-  ldd "$tor_binary" >&2
+  LD_LIBRARY_PATH="$tor_library_dir" ldd "$tor_binary" >&2
   exit 1
 fi
 

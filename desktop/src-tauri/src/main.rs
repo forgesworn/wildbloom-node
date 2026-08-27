@@ -241,7 +241,10 @@ async fn start_runtime(app: AppHandle, manager: Arc<NodeManager>) -> Result<(), 
         .map_err(|error| format!("could not locate the bundled Tor runtime: {error}"))?
         .join("tor-runtime");
     let tor_path = bundled_tor_path(&tor_runtime)?;
-    let tor_command = app.shell().command(tor_path).args([
+    let tor_command = app.shell().command(tor_path);
+    #[cfg(target_os = "linux")]
+    let tor_command = tor_command.env("LD_LIBRARY_PATH", tor_runtime.join("tor"));
+    let tor_command = tor_command.args([
         "-f".into(),
         torrc.into_os_string(),
         "--DataDirectory".into(),
