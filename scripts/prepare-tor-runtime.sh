@@ -49,8 +49,12 @@ if [ "$actual_fingerprint" != "$fingerprint" ]; then
   exit 66
 fi
 
-gpg --batch --no-default-keyring --keyring "$work_dir/tor-browser-keyring.gpg" \
-  --import "$work_dir/tor-browser-developers.asc" >/dev/null
+# GnuPG 2.5 enables keyboxd by default and ignores --keyring during imports.
+# gpgv accepts a dearmoured OpenPGP keyring directly, which also keeps this
+# verification isolated from the runner's user keyring.
+gpg --batch --yes --dearmor \
+  --output "$work_dir/tor-browser-keyring.gpg" \
+  "$work_dir/tor-browser-developers.asc"
 gpgv --keyring "$work_dir/tor-browser-keyring.gpg" \
   "$work_dir/$archive.asc" "$work_dir/$archive"
 
