@@ -20,6 +20,9 @@ tracing-subscriber.workspace = true
 url.workspace = true
 wildbloom-core = { path = "../wildbloom-core" }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+libc.workspace = true
+
 [dev-dependencies]
 base64.workspace = true
 hex.workspace = true

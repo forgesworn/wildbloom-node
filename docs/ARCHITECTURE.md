@@ -30,7 +30,10 @@ signature-verified Tor Expert Bundle from its resources, preserves the onion
 identity in the platform's per-user application-data directory, and launches
 the exact `wildbloomd` sidecar on loopback.  Its UI receives status through
 Tauri IPC.  It does not contain a second Blossom implementation and never asks
-for a Nostr private key.
+for a Nostr private key.  Linux Tor execution uses only the verified bundle's
+private shared-library directory rather than the ambient library search path.
+The Linux daemon also asks the kernel to deliver `SIGTERM` when its exact
+desktop parent dies, then verifies that the parent survived the setup race.
 
 ## Why Rust
 

@@ -2398,6 +2398,7 @@ dependencies = [
  "clap",
  "directories",
  "hex",
+ "libc",
  "nostr",
  "reqwest",
  "serde_json",

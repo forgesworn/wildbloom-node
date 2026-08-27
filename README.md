@@ -47,6 +47,9 @@ direct transport, but it is not yet part of the durability claim.
 - Native Rust and Tauri compile CI configured for macOS, Linux and Windows.
 - A native Tauri tray shell with platform data directories, start-at-login,
   storage status and no private-key input.
+- Installed `.deb` and NSIS preview acceptance on fresh hosted Linux and Windows
+  runners, including Tor bootstrap, Blossom health, single-instance behaviour,
+  child cleanup and uninstall.
 
 There is no proof-of-storage protocol, paid quota or automatic discovery of
 strangers willing to hold data.  Repair can restore a damaged local copy only

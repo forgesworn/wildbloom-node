@@ -241,7 +241,10 @@ async fn start_runtime(app: AppHandle, manager: Arc<NodeManager>) -> Result<(), 
         .map_err(|error| format!("could not locate the bundled Tor runtime: {error}"))?
         .join("tor-runtime");
     let tor_path = bundled_tor_path(&tor_runtime)?;
-    let tor_command = app.shell().command(tor_path).args([
+    let tor_command = app.shell().command(tor_path);
+    #[cfg(target_os = "linux")]
+    let tor_command = tor_command.env("LD_LIBRARY_PATH", tor_runtime.join("tor"));
+    let tor_command = tor_command.args([
         "-f".into(),
         torrc.into_os_string(),
         "--DataDirectory".into(),
@@ -279,6 +282,14 @@ async fn start_runtime(app: AppHandle, manager: Arc<NodeManager>) -> Result<(), 
         .lock()
         .map_err(|_| "child process lock failed")?
         .tor = Some(tor_child);
+    set_phase(
+        &manager,
+        generation,
+        "starting",
+        "The bundled Tor process is running and bootstrapping.",
+        None,
+        None,
+    );
 
     let event_app = app.clone();
     let event_manager = manager.clone();
@@ -288,7 +299,8 @@ async fn start_runtime(app: AppHandle, manager: Arc<NodeManager>) -> Result<(), 
             match event {
                 CommandEvent::Stdout(bytes) | CommandEvent::Stderr(bytes) => {
                     let line = String::from_utf8_lossy(&bytes);
-                    if !node_started && line.contains("Bootstrapped 100%") {
+                    let bootstrap = tor_bootstrap_percent(&line);
+                    if !node_started && bootstrap == Some(100) {
                         node_started = true;
                         if let Err(error) = start_node_sidecar(
                             &event_app,
@@ -303,6 +315,16 @@ async fn start_runtime(app: AppHandle, manager: Arc<NodeManager>) -> Result<(), 
                         {
                             set_error(&event_manager, generation, error);
                         }
+                    } else if !node_started && let Some(percent) = bootstrap {
+                        let detail = format!("The bundled Tor process is {percent}% bootstrapped.");
+                        set_phase(
+                            &event_manager,
+                            generation,
+                            "starting",
+                            &detail,
+                            None,
+                            None,
+                        );
                     }
                 }
                 CommandEvent::Error(error) => set_error(
@@ -382,6 +404,11 @@ async fn start_node_sidecar(
     if let Some(pubkey) = &settings.allowed_pubkey {
         arguments.push("--allow-pubkey".into());
         arguments.push(pubkey.into());
+    }
+    #[cfg(target_os = "linux")]
+    {
+        arguments.push("--parent-pid".into());
+        arguments.push(std::process::id().to_string().into());
     }
     let (mut events, node_child) = app
         .shell()
@@ -516,6 +543,7 @@ fn set_phase(
         status.detail = detail.into();
         status.onion_url = onion_url;
         status.local_port = local_port;
+        eprintln!("Wildbloom Node runtime phase: {phase}: {detail}");
     }
 }
 
@@ -617,6 +645,15 @@ fn valid_v3_onion(hostname: &str) -> bool {
                 .bytes()
                 .all(|byte| byte.is_ascii_lowercase() || matches!(byte, b'2'..=b'7'))
     })
+}
+
+fn tor_bootstrap_percent(line: &str) -> Option<u8> {
+    let remainder = line.split_once("Bootstrapped ")?.1;
+    let digits = remainder.split_once('%')?.0;
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse::<u8>().ok().filter(|percent| *percent <= 100)
 }
 
 fn bundled_tor_path(runtime: &Path) -> Result<PathBuf, String> {
@@ -766,5 +803,20 @@ mod tests {
         assert!(valid_v3_onion(&format!("{}.onion", "2".repeat(56))));
         assert!(!valid_v3_onion(&format!("{}.onion", "1".repeat(56))));
         assert!(!valid_v3_onion(&format!("{}.example", "a".repeat(56))));
+    }
+
+    #[test]
+    fn reads_only_bounded_tor_bootstrap_notices() {
+        assert_eq!(
+            tor_bootstrap_percent("Aug 27 10:00:00 [notice] Bootstrapped 5% (conn): Connecting"),
+            Some(5)
+        );
+        assert_eq!(
+            tor_bootstrap_percent("Aug 27 10:00:01 [notice] Bootstrapped 100% (done): Done"),
+            Some(100)
+        );
+        assert_eq!(tor_bootstrap_percent("Bootstrapped 101%"), None);
+        assert_eq!(tor_bootstrap_percent("Bootstrapped nope%"), None);
+        assert_eq!(tor_bootstrap_percent("unrelated output"), None);
     }
 }
