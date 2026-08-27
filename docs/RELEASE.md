@@ -13,6 +13,12 @@ keeps the result as a short-lived workflow artefact.  It does not create a
 GitHub release.  The artefact name says `unsigned-preview` because that is what
 it is.
 
+Linux releases are deliberately `.deb` and `.rpm` packages.  We don't publish
+an AppImage: the current Tauri bundler path is not dependable enough on its
+hosted Linux runner, and a nominally portable file which fails to start on
+current distributions is worse than two honest native packages.  The headless
+daemon remains an ordinary Linux binary for other package systems.
+
 Use preview builds to find packaging and clean-machine faults.  Don't link them
 from the marketing site and don't ask users to click through operating-system
 trust warnings.

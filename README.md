@@ -86,6 +86,8 @@ On Windows, both daemon paths end in `.exe`.  This produces an explicitly
 unsigned preview.  The verified Tor runtime is bundled as a complete resource,
 not fetched on first start.  Production signing and updater artefacts are made
 only by the fail-closed release workflow described in [the release process](docs/RELEASE.md).
+Linux desktop releases use native `.deb` and `.rpm` packages; the headless
+daemon can be built as an ordinary binary on other Linux distributions.
 
 ### Run the headless service
 

@@ -27,18 +27,22 @@ jobs:
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             tor: linux-x86_64
+            bundles: deb,rpm
           - label: macOS Apple Silicon
             os: macos-latest
             target: aarch64-apple-darwin
             tor: macos-aarch64
+            bundles: app,dmg
           - label: macOS Intel
             os: macos-15-intel
             target: x86_64-apple-darwin
             tor: macos-x86_64
+            bundles: app,dmg
           - label: Windows x64
             os: windows-latest
             target: x86_64-pc-windows-msvc
             tor: windows-x86_64
+            bundles: nsis,msi
     env:
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -160,7 +164,6 @@ jobs:
         run: scripts/sign-macos-tor-runtime.sh "$APPLE_SIGNING_IDENTITY" desktop/src-tauri/tor-runtime
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
-          APPIMAGE_EXTRACT_AND_RUN: 1
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: desktop/src-tauri
@@ -170,7 +173,7 @@ jobs:
           releaseDraft: true
           prerelease: false
           includeUpdaterJson: true
-          args: --target ${{ matrix.target }} --config tauri.production.conf.json
+          args: --verbose --bundles ${{ matrix.bundles }} --target ${{ matrix.target }} --config tauri.production.conf.json
       - name: Verify updater signatures were emitted
         shell: bash
         run: |
