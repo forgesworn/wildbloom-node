@@ -213,13 +213,12 @@ async fn set_private_permissions(path: &Path, directory: bool) -> Result<(), Tor
         fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).await?;
     }
     #[cfg(not(unix))]
-    let _ = directory;
+    let _ = (path, directory);
     Ok(())
 }
 
 #[cfg(windows)]
 fn configure_no_window(command: &mut Command) {
-    use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     command.creation_flags(CREATE_NO_WINDOW);
 }
