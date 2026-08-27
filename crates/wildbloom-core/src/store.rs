@@ -97,7 +97,7 @@ pub struct EvictionRecord {
 #[derive(Debug)]
 pub enum UploadStart {
     Existing(BlobMetadata),
-    Reserved(UploadReservation),
+    Reserved(Box<UploadReservation>),
 }
 
 #[derive(Debug)]
@@ -404,7 +404,7 @@ impl Store {
         transaction.commit()?;
         evictions.commit();
 
-        Ok(UploadStart::Reserved(UploadReservation {
+        Ok(UploadStart::Reserved(Box::new(UploadReservation {
             store: self.clone(),
             temp_path: self.config.root.join("tmp").join(format!("{id}.part")),
             id,
@@ -412,7 +412,7 @@ impl Store {
             expected_size,
             claim,
             completed: false,
-        }))
+        })))
     }
 
     pub fn check_upload(&self, expected_hash: &str, expected_size: u64) -> Result<(), StoreError> {
