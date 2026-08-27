@@ -48,10 +48,13 @@ jobs:
       - name: Install macOS signature verification tools
         if: runner.os == 'macOS'
         run: brew install gnupg
-      - name: Install Windows signature verification tools
+      - name: Use Windows runner signature verification tools
         if: runner.os == 'Windows'
-        shell: powershell
-        run: choco install gnupg --yes --no-progress
+        shell: bash
+        run: |
+          test -x /c/msys64/usr/bin/gpg.exe
+          test -x /c/msys64/usr/bin/gpgv.exe
+          printf '%s\n' 'C:\msys64\usr\bin' >> "$GITHUB_PATH"
       - name: Prepare signed upstream Tor runtime and daemon
         shell: bash
         run: |
