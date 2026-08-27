@@ -50,11 +50,13 @@ and its STUN/TURN machinery are unnecessary.
 
 ## Storage model
 
-Blobs live at `blobs/<first-two-hex>/<sha256>`.  The database records size, MIME
-type, creation time and authorised owner relationships.  An upload reserves its
-declared size in an immediate SQLite transaction before the body is streamed to
-a private temporary file.  The actual digest and byte count are checked before
-an atomic move into the CAS.
+Blobs live at `blobs/<first-two-hex>/<sha256>`.  The database records physical
+size once and keeps owner, friend and guest claims separately, including signer,
+declared type, grant and expiry.  An upload reserves its declared size and claim
+policy in an immediate SQLite transaction before the body is streamed to a
+private temporary file.  The actual digest and byte count are checked before an
+atomic move into the CAS.  Startup reconciles the file and database sides of an
+interrupted move.
 
 This is whole-blob replication today.  Chunk manifests, erasure coding and a
 native node-to-node lane can be added above the CAS and behind the fetcher
@@ -69,13 +71,13 @@ source is still reachable and returns the exact recorded length and hash.  This
 is local repair, not replica discovery or proof that another operator retains a
 copy.
 
-## Next storage boundary
+## Storage priority boundary
 
-The next core revision gives the operator's files, invited friends and
-best-effort guest mirrors distinct retention priorities without creating three
-stores.  Tier belongs to each signed claim over a deduplicated blob; it is not a
-single property of the blob and it is not the owner's desired replica count.
-The complete target policy and its acceptance boundary are in
+The core gives the operator's files, invited friends and best-effort guest
+mirrors distinct retention priorities without creating three stores.  Tier
+belongs to each signed claim over a deduplicated blob; it is not a single
+property of the blob and it is not the owner's desired replica count.  The
+complete policy and its remaining cross-platform acceptance boundary are in
 [`STORAGE-POLICY.md`](STORAGE-POLICY.md).
 
 The Axum router is already exposed without binding a listener, and BUD-04

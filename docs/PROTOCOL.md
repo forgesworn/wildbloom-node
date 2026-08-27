@@ -13,7 +13,8 @@ messages below are an experimental profile, not a new NIP.
 | `PUT /upload` | BUD-02 + BUD-11 | Authorised streaming upload |
 | `PUT /mirror` | BUD-04 + BUD-11 | Authorised onion-to-onion copy |
 | `HEAD /upload` | BUD-06 + BUD-11 | Authorised size, type and quota preflight |
-| `DELETE /<sha256>` | BUD-12 + BUD-11 | Remove the signer's ownership and, after the final owner, the blob |
+| `GET /list/<pubkey>` | BUD-12 + BUD-11 | Authenticated, cursor-paginated list of only the signer's active claims |
+| `DELETE /<sha256>` | BUD-12 + BUD-11 | Remove the signer's claim and, after the final active claim, the blob |
 | `GET /healthz` | Wildbloom | Process and storage counters, no private data |
 
 Authorisation is a signed kind `24242` event encoded as unpadded base64url JSON:
@@ -34,9 +35,10 @@ well-formed `x` and `server` tag whose set includes the current blob and node:
 
 The event signature and id must verify.  The event cannot be materially in the
 future, and its creation-to-expiry lifetime cannot exceed five minutes.
-The signer must also appear in the node's configured writer allowlist unless the
-operator explicitly enabled public writes.  A default installation is
-read-only.
+Direct upload signers must be a configured owner or hold an unexpired friend
+grant.  An operator may separately enable open shelter for unknown signed
+BUD-04 mirrors; that never authorises direct unknown uploads.  A default
+installation is read-only.
 
 `PUT /upload` additionally requires `Content-Length` and `X-SHA-256`.  The
 received length and independently calculated digest must match.  New blobs
@@ -54,9 +56,19 @@ or more nodes but must include the destination server.  The source must return
 received byte.  Every fetch and DNS lookup goes through the node's managed Tor
 process.
 
+Owner and friend mirror requests receive their configured retention tier.
+With open shelter enabled, any other valid signer receives a best-effort guest
+claim only when the predicted free space remains at or above the high
+watermark.  The request contains no tier field and cannot promote itself.
+
+`GET /list/<pubkey>` requires a short-lived `list` event signed by the exact
+path pubkey and scoped to this server.  Results are newest first, limited to
+100, and use the previous page's SHA-256 as the cursor.  There is no public
+inventory endpoint.
+
 `DELETE /<sha256>` requires the `delete` operation in its BUD-11 event.  It
-removes only the signing public key's ownership row.  The bytes disappear only
-when the final recorded owner deletes them.  This is a local deletion request,
+removes only the signing public key's claim.  The bytes disappear only when the
+final active claim is removed.  This is a local deletion request,
 not a promise that another replica or cache removed its copy.
 
 Primary specifications:
@@ -90,7 +102,7 @@ still signs each exact upload or mirror request and verifies the returned blob
 through an independent GET.  Offers should be sent through more than one Nostr
 relay where availability matters.
 
-RelaySwarm could later carry the same offer and blob stream directly using its
-Noise-authenticated HyperDHT path.  It must remain an optional transport: Tor
-and standard Blossom are the interoperable fallback, and no WebRTC/STUN/TURN
-layer is required.
+A future ForgeSworn-owned QUIC lane with an opaque WebSocket relay may carry the
+same blob stream behind `BlobFetcher`.  It must remain optional: Tor and
+standard Blossom are the interoperable fallback, and no WebRTC/STUN/TURN layer
+is required.

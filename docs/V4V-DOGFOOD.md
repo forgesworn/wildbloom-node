@@ -16,6 +16,13 @@ The staged integration is:
 6. Ask a second Wildbloom Node to BUD-04 mirror the first copy, then repeat the
    loss test.
 
+V4V's storage signer should be configured as an `owner`.  An invited artist may
+receive an expiring `friend` byte grant.  Unknown signed mirrors, if the
+operator deliberately enables open shelter, remain evictable `guest` data and
+must never be counted toward V4V's promised replica floor.  V4V retains the
+encryption keys, catalogue, payment and replica-count truth; the node retains
+bytes and local claim policy.
+
 That is evidence of independent replicas.  Merely listing two server URLs, or
 publishing a Nostr event which says they exist, is not.
 
@@ -23,3 +30,7 @@ V4V should keep encryption before Blossom upload and must not publish a private
 onion, real host, test identity or endpoint into its public repository.  The
 local acceptance fixture should receive those values from environment variables.
 
+Normal browsers do not fetch an onion URL without Tor.  Keep a conventional
+public Blossom origin for ordinary playback until the client deliberately runs
+through Tor; use the Wildbloom copy as an independent recovery replica and
+verify its exact ciphertext hash before decryption.

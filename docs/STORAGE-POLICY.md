@@ -1,9 +1,9 @@
 # Storage priority policy
 
-This document defines the next storage-policy boundary for Wildbloom Node.  It
-is a target contract, not a claim about the current `0.2` implementation.  The
-current node has one global quota, gives every allowed writer the same
-retention and performs no automatic eviction.
+This document defines the storage-policy boundary implemented in the unreleased
+Wildbloom core.  Its local adversarial tests pass; cross-platform CI and the
+independent V4V recovery journey remain release evidence before this revision
+is described as production-shipped.
 
 The intended operator promise is simple:
 
@@ -20,7 +20,7 @@ but they must not change their meaning.
 | Tier | Admission | Automatic eviction | Serving |
 | --- | --- | --- | --- |
 | `owner` | Exact operator-configured public keys | Never | A declared type may be served when trusted metadata is unambiguous |
-| `friend` | An unexpired operator-issued grant with a per-key byte ceiling | Not until another exact copy has been independently verified and the policy permits the move | Opaque attachment |
+| `friend` | An unexpired operator-configured grant with a per-key byte ceiling | Not until another exact copy has been independently verified and the policy permits the move | Opaque attachment |
 | `guest` | Signed mirror request accepted by explicit open-shelter policy | First, at any time | Opaque attachment |
 
 There is no anonymous tier.  A valid BUD-11 signature identifies a Nostr key;
@@ -68,8 +68,8 @@ not:
 
 ## Admission and reserve
 
-The pool has validated low and high free-space watermarks.  The initial target
-is ten and twenty per cent of configured capacity.  A deployment may tune them,
+The pool derives validated low and high free-space watermarks at ten and twenty
+per cent of configured capacity.  A later deployment control may tune them,
 but `0 <= low < high < quota` must always hold.
 
 - An `owner` reservation may evict `guest` blobs to make room.  It never evicts
@@ -113,8 +113,8 @@ friend's copy.
 
 ## Guest admission is mirror-only
 
-The current `--allow-public-writes` switch is deliberately labelled unsafe on a
-shared quota.  It must not become the guest-tier design.
+The old `--allow-public-writes` switch has been removed.  It was unsafe on a
+shared quota and is not the guest-tier design.
 
 Open shelter accepts guest bytes through BUD-04 mirroring after a valid signed
 claim and local admission decision.  Direct uploads from unknown public keys
@@ -137,11 +137,10 @@ takedown and an explicit operator policy remain necessary.
 
 ## Listing and deletion
 
-If the optional BUD-12 `GET /list/<pubkey>` endpoint is implemented, it must
-require a short-lived BUD-11 `list` event whose signer matches the path and
-whose `server` scope includes this node.  Responses are cursor-paginated and
-contain only that signer's active claims.  The node never exposes a public
-inventory of friends or guests.
+The optional BUD-12 `GET /list/<pubkey>` endpoint requires a short-lived BUD-11
+`list` event whose signer matches the path and whose `server` scope includes
+this node.  Responses are cursor-paginated and contain only that signer's active
+claims.  The node never exposes a public inventory of friends or guests.
 
 BUD-12 deletion removes only the signer's claim.  The physical blob disappears
 when no active claim remains, unless an operator tombstone requires immediate
@@ -187,5 +186,8 @@ scheme merely because two products use the same store.
 - SQLite migration and the unchanged default owner-only configuration pass on
   Windows, Linux and macOS.
 
-The present `0.2` node satisfies none of the tier or eviction claims above.
-Keep this document in future tense until those gates pass.
+Unit and in-process HTTP acceptance cover tier assignment, watermarks, eviction,
+friend ceilings across deduplication/restart/expiry, schema migration, policy
+demotion, opaque serving, self-only listing and interrupted file/database
+reconciliation.  The independent two-node V4V journey and the Windows, Linux
+and macOS CI matrix remain the named release gates.

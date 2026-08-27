@@ -63,37 +63,11 @@ impl TorService {
             SocketAddr::V4(address) => address.to_string(),
             SocketAddr::V6(address) => format!("[{}]:{}", address.ip(), address.port()),
         };
-        let mut command = Command::new(binary);
+        let mut command = managed_tor_command(binary, &torrc, &data_dir, &service_dir, &target);
         command
-            .arg("-f")
-            .arg(&torrc)
-            .arg("--DataDirectory")
-            .arg(&data_dir)
-            .arg("--SocksPort")
-            .arg("auto")
-            .arg("--ORPort")
-            .arg("0")
-            .arg("--ExitRelay")
-            .arg("0")
-            .arg("--ExitPolicy")
-            .arg("reject *:*")
-            .arg("--PublishServerDescriptor")
-            .arg("0")
-            .arg("--__OwningControllerProcess")
-            .arg(std::process::id().to_string())
-            .arg("--HiddenServiceDir")
-            .arg(&service_dir)
-            .arg("--HiddenServiceVersion")
-            .arg("3")
-            .arg("--HiddenServicePort")
-            .arg(format!("80 {target}"))
-            .arg("--Log")
-            .arg("notice stdout")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        configure_no_window(&mut command);
-
         let mut child = command.spawn()?;
         let stdout = child.stdout.take().ok_or(TorError::Exited)?;
         let stderr = child.stderr.take().ok_or(TorError::Exited)?;
@@ -157,6 +131,48 @@ impl TorService {
         }
         let _ = self.child.wait().await;
     }
+}
+
+fn managed_tor_command(
+    binary: &Path,
+    torrc: &Path,
+    data_dir: &Path,
+    service_dir: &Path,
+    target: &str,
+) -> Command {
+    let mut command = Command::new(binary);
+    command
+        .arg("-f")
+        .arg(torrc)
+        .arg("--DataDirectory")
+        .arg(data_dir)
+        .arg("--SocksPort")
+        .arg("auto")
+        .arg("--ORPort")
+        .arg("0")
+        .arg("--ExitRelay")
+        .arg("0")
+        .arg("--ExitPolicy")
+        .arg("reject *:*")
+        .arg("--PublishServerDescriptor")
+        .arg("0")
+        // Some directory caches deliver a valid consensus but no
+        // microdescriptors. Full relay descriptors are larger, but they
+        // let an onion-only home node build internal circuits reliably.
+        .arg("--UseMicrodescriptors")
+        .arg("0")
+        .arg("--__OwningControllerProcess")
+        .arg(std::process::id().to_string())
+        .arg("--HiddenServiceDir")
+        .arg(service_dir)
+        .arg("--HiddenServiceVersion")
+        .arg("3")
+        .arg("--HiddenServicePort")
+        .arg(format!("80 {target}"))
+        .arg("--Log")
+        .arg("notice stdout");
+    configure_no_window(&mut command);
+    command
 }
 
 async fn drain_tor_output<R>(
@@ -231,6 +247,7 @@ fn configure_no_window(_command: &mut Command) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsStr;
 
     #[test]
     fn validates_only_v3_onion_hostnames() {
@@ -239,5 +256,22 @@ mod tests {
         assert!(!valid_v3_onion(&format!("{}.onion", "1".repeat(56))));
         assert!(!valid_v3_onion(&format!("{}.onion", "a".repeat(16))));
         assert!(!valid_v3_onion(&format!("{}.example", "a".repeat(56))));
+    }
+
+    #[test]
+    fn managed_tor_uses_full_descriptors_for_onion_only_circuits() {
+        let command = managed_tor_command(
+            Path::new("tor"),
+            Path::new("torrc"),
+            Path::new("client"),
+            Path::new("onion-service"),
+            "127.0.0.1:3742",
+        );
+        let arguments = command.as_std().get_args().collect::<Vec<_>>();
+        assert!(
+            arguments
+                .windows(2)
+                .any(|pair| { pair == [OsStr::new("--UseMicrodescriptors"), OsStr::new("0")] })
+        );
     }
 }

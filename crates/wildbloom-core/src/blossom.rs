@@ -2,18 +2,19 @@ use crate::{
     auth::{AuthError, AuthPolicy},
     fetch::{BlobFetcher, FetchConfigError, FetchError, FetchRequest, FetchedBlob, TorHttpFetcher},
     store::{
-        BlobMetadata, DeleteOutcome, RepairCandidate, Store, StoreError, StoreStats, UploadStart,
+        BlobMetadata, ClaimMetadata, ClaimSpec, DeleteOutcome, RepairCandidate, RetentionTier,
+        Store, StoreError, StoreStats, UploadStart,
     },
 };
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Path as AxumPath, State, rejection::JsonRejection},
+    extract::{Path as AxumPath, Query, State, rejection::JsonRejection},
     http::{
         HeaderMap, HeaderName, HeaderValue, Method, StatusCode,
         header::{
-            ACCEPT_RANGES, AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE,
-            CONTENT_TYPE, ETAG, RANGE,
+            ACCEPT_RANGES, AUTHORIZATION, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH,
+            CONTENT_RANGE, CONTENT_TYPE, ETAG, RANGE,
         },
     },
     response::{IntoResponse, Response},
@@ -23,6 +24,7 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::{BTreeMap, BTreeSet},
     io::SeekFrom,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -41,6 +43,15 @@ static X_SHA_256: HeaderName = HeaderName::from_static("x-sha-256");
 static X_CONTENT_LENGTH: HeaderName = HeaderName::from_static("x-content-length");
 static X_CONTENT_TYPE: HeaderName = HeaderName::from_static("x-content-type");
 static X_REASON: HeaderName = HeaderName::from_static("x-reason");
+static X_CONTENT_TYPE_OPTIONS: HeaderName = HeaderName::from_static("x-content-type-options");
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FriendGrant {
+    pub pubkey: String,
+    pub byte_limit: u64,
+    pub expires_at: u64,
+    pub grant_id: String,
+}
 
 #[derive(Debug, Clone)]
 pub struct BlossomConfig {
@@ -48,8 +59,11 @@ pub struct BlossomConfig {
     pub accepted_server_names: Vec<String>,
     /// Nostr public keys permitted to upload, mirror and delete blobs.
     pub allowed_pubkeys: Vec<String>,
-    /// Explicitly opt into accepting writes from any valid Nostr public key.
-    pub allow_public_writes: bool,
+    /// Operator-issued, expiring byte grants for invited friends.
+    pub friend_grants: Vec<FriendGrant>,
+    /// Admit unknown signed BUD-04 mirrors as best-effort guest claims.
+    /// Direct uploads from unknown keys remain denied.
+    pub open_shelter: bool,
     /// Upper bound for simultaneous upload and mirror streams.
     pub max_concurrent_writes: usize,
     /// A loopback `socks5h://` proxy enables BUD-04 mirroring and repair
@@ -66,9 +80,18 @@ pub struct AppState {
 struct InnerState {
     store: Store,
     public_base_url: Url,
-    auth: AuthPolicy,
+    trusted_auth: AuthPolicy,
+    public_auth: AuthPolicy,
+    storage_policy: StoragePolicy,
     fetcher: Option<Arc<dyn BlobFetcher>>,
     write_slots: Arc<Semaphore>,
+}
+
+#[derive(Debug)]
+struct StoragePolicy {
+    owner_pubkeys: BTreeSet<String>,
+    friend_grants: BTreeMap<String, FriendGrant>,
+    open_shelter: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -77,10 +100,16 @@ pub enum BlossomConfigError {
     InvalidWriterPubkey,
     #[error("maximum concurrent writes must be greater than zero")]
     InvalidConcurrentWriteLimit,
+    #[error(
+        "friend grants must use a unique canonical pubkey, a positive byte limit, a valid expiry and a non-empty grant id"
+    )]
+    InvalidFriendGrant,
     #[error(transparent)]
     Fetcher(#[from] FetchConfigError),
     #[error("a mirror proxy and an explicit fetcher cannot both be configured")]
     ConflictingFetcher,
+    #[error(transparent)]
+    Storage(#[from] StoreError),
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -137,6 +166,13 @@ struct MirrorRequest {
     url: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ListQuery {
+    cursor: Option<String>,
+    limit: Option<usize>,
+}
+
 #[derive(Debug)]
 struct ApiError {
     status: StatusCode,
@@ -147,6 +183,55 @@ struct ApiError {
 #[derive(Debug, Serialize)]
 struct ErrorBody {
     error: &'static str,
+}
+
+impl StoragePolicy {
+    fn trusted_claim(
+        &self,
+        signer_pubkey: &str,
+        declared_type: &str,
+        now: u64,
+    ) -> Result<ClaimSpec, ApiError> {
+        if self.owner_pubkeys.contains(signer_pubkey) {
+            return Ok(ClaimSpec {
+                signer_pubkey: signer_pubkey.to_owned(),
+                retention_tier: RetentionTier::Owner,
+                declared_type: declared_type.to_owned(),
+                grant_id: None,
+                claim_expires_at: None,
+                byte_limit: None,
+            });
+        }
+        let grant = self
+            .friend_grants
+            .get(signer_pubkey)
+            .ok_or_else(|| ApiError::forbidden("the signing public key has no storage grant"))?;
+        if grant.expires_at <= now {
+            return Err(ApiError::forbidden("the friend storage grant has expired"));
+        }
+        Ok(ClaimSpec {
+            signer_pubkey: signer_pubkey.to_owned(),
+            retention_tier: RetentionTier::Friend,
+            declared_type: declared_type.to_owned(),
+            grant_id: Some(grant.grant_id.clone()),
+            claim_expires_at: Some(grant.expires_at),
+            byte_limit: Some(grant.byte_limit),
+        })
+    }
+
+    fn guest_claim(&self, signer_pubkey: &str, declared_type: &str) -> Result<ClaimSpec, ApiError> {
+        if !self.open_shelter {
+            return Err(ApiError::forbidden("open shelter is disabled"));
+        }
+        Ok(ClaimSpec {
+            signer_pubkey: signer_pubkey.to_owned(),
+            retention_tier: RetentionTier::Guest,
+            declared_type: declared_type.to_owned(),
+            grant_id: None,
+            claim_expires_at: None,
+            byte_limit: None,
+        })
+    }
 }
 
 impl AppState {
@@ -191,14 +276,47 @@ impl AppState {
         if config.max_concurrent_writes == 0 {
             return Err(BlossomConfigError::InvalidConcurrentWriteLimit);
         }
-        let auth = AuthPolicy::new(config.accepted_server_names)
-            .with_allowed_pubkeys(config.allowed_pubkeys)
-            .with_public_writes(config.allow_public_writes);
+        let owner_pubkeys = config.allowed_pubkeys.into_iter().collect::<BTreeSet<_>>();
+        let mut friend_grants = BTreeMap::new();
+        for grant in config.friend_grants {
+            if !is_canonical_hash(&grant.pubkey)
+                || grant.byte_limit == 0
+                || grant.expires_at > i64::MAX as u64
+                || grant.grant_id.is_empty()
+                || grant.grant_id.len() > 255
+                || owner_pubkeys.contains(&grant.pubkey)
+                || friend_grants.insert(grant.pubkey.clone(), grant).is_some()
+            {
+                return Err(BlossomConfigError::InvalidFriendGrant);
+            }
+        }
+        let trusted_pubkeys = owner_pubkeys
+            .iter()
+            .cloned()
+            .chain(friend_grants.keys().cloned())
+            .collect::<Vec<_>>();
+        let active_friend_grants = friend_grants
+            .values()
+            .map(|grant| (grant.pubkey.clone(), grant.grant_id.clone()))
+            .collect::<BTreeSet<_>>();
+        let demoted = store.reconcile_claim_policy(&owner_pubkeys, &active_friend_grants)?;
+        if demoted > 0 {
+            tracing::warn!(demoted, "demoted claims no longer covered by node policy");
+        }
+        let trusted_auth = AuthPolicy::new(config.accepted_server_names.clone())
+            .with_allowed_pubkeys(trusted_pubkeys);
+        let public_auth = AuthPolicy::new(config.accepted_server_names).with_public_writes(true);
         Ok(Self {
             inner: Arc::new(InnerState {
                 store,
                 public_base_url: config.public_base_url,
-                auth,
+                trusted_auth,
+                public_auth,
+                storage_policy: StoragePolicy {
+                    owner_pubkeys,
+                    friend_grants,
+                    open_shelter: config.open_shelter,
+                },
                 fetcher,
                 write_slots: Arc::new(Semaphore::new(config.max_concurrent_writes)),
             }),
@@ -351,6 +469,8 @@ pub fn router(state: AppState) -> Router {
             CONTENT_TYPE,
             ETAG,
             ACCEPT_RANGES,
+            CONTENT_DISPOSITION,
+            X_CONTENT_TYPE_OPTIONS.clone(),
             X_REASON.clone(),
         ]);
 
@@ -359,6 +479,7 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(health))
         .route("/upload", put(upload).head(upload_preflight))
         .route("/mirror", put(mirror))
+        .route("/list/{pubkey}", get(list_blobs))
         .route("/{blob}", get(get_blob).head(head_blob).delete(delete_blob))
         .layer(cors)
         .with_state(state)
@@ -409,9 +530,14 @@ async fn upload(
         .and_then(|value| value.to_str().ok());
     let verified = state
         .inner
-        .auth
+        .trusted_auth
         .verify_upload(authorization, &expected_hash, unix_time())
         .map_err(ApiError::from_auth)?;
+    let claim = state.inner.storage_policy.trusted_claim(
+        &verified.owner_pubkey,
+        &content_type,
+        unix_time(),
+    )?;
     let _write_permit = state
         .inner
         .write_slots
@@ -421,14 +547,11 @@ async fn upload(
 
     let store = state.inner.store.clone();
     let begin_hash = expected_hash.clone();
-    let owner = verified.owner_pubkey;
-    let begin_content_type = content_type.clone();
-    let started = spawn_blocking(move || {
-        store.begin_upload(&begin_hash, expected_size, &owner, &begin_content_type)
-    })
-    .await
-    .map_err(|_| ApiError::internal())?
-    .map_err(ApiError::from_store)?;
+    let started =
+        spawn_blocking(move || store.begin_claimed_upload(&begin_hash, expected_size, claim))
+            .await
+            .map_err(|_| ApiError::internal())?
+            .map_err(ApiError::from_store)?;
 
     match started {
         UploadStart::Existing(metadata) => {
@@ -505,14 +628,19 @@ async fn upload_preflight(
     let authorization = headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok());
-    state
+    let verified = state
         .inner
-        .auth
+        .trusted_auth
         .verify_upload(authorization, expected_hash, unix_time())
         .map_err(ApiError::from_auth)?;
+    let claim = state.inner.storage_policy.trusted_claim(
+        &verified.owner_pubkey,
+        content_type,
+        unix_time(),
+    )?;
     let store = state.inner.store.clone();
     let expected_hash = expected_hash.to_owned();
-    spawn_blocking(move || store.check_upload(&expected_hash, expected_size))
+    spawn_blocking(move || store.check_claimed_upload(&expected_hash, expected_size, &claim))
         .await
         .map_err(|_| ApiError::internal())?
         .map_err(ApiError::from_store)?;
@@ -545,11 +673,35 @@ async fn mirror(
     let authorization = headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok());
-    let verified = state
-        .inner
-        .auth
-        .verify_upload(authorization, &expected_hash, unix_time())
-        .map_err(ApiError::from_auth)?;
+    let now = unix_time();
+    let (verified, mut claim) =
+        match state
+            .inner
+            .trusted_auth
+            .verify_upload(authorization, &expected_hash, now)
+        {
+            Ok(verified) => {
+                let claim = state.inner.storage_policy.trusted_claim(
+                    &verified.owner_pubkey,
+                    "application/octet-stream",
+                    now,
+                )?;
+                (verified, claim)
+            }
+            Err(AuthError::PubkeyNotAllowed) if state.inner.storage_policy.open_shelter => {
+                let verified = state
+                    .inner
+                    .public_auth
+                    .verify_upload(authorization, &expected_hash, now)
+                    .map_err(ApiError::from_auth)?;
+                let claim = state
+                    .inner
+                    .storage_policy
+                    .guest_claim(&verified.owner_pubkey, "application/octet-stream")?;
+                (verified, claim)
+            }
+            Err(error) => return Err(ApiError::from_auth(error)),
+        };
     let _write_permit = state
         .inner
         .write_slots
@@ -576,17 +728,16 @@ async fn mirror(
         .filter(|value| !value.is_empty() && value.len() <= 255)
         .unwrap_or("application/octet-stream")
         .to_owned();
+    claim.declared_type = content_type;
 
     let store = state.inner.store.clone();
     let begin_hash = expected_hash.clone();
-    let owner = verified.owner_pubkey;
-    let begin_content_type = content_type.clone();
-    let started = spawn_blocking(move || {
-        store.begin_upload(&begin_hash, expected_size, &owner, &begin_content_type)
-    })
-    .await
-    .map_err(|_| ApiError::internal())?
-    .map_err(ApiError::from_store)?;
+    let _verified = verified;
+    let started =
+        spawn_blocking(move || store.begin_claimed_upload(&begin_hash, expected_size, claim))
+            .await
+            .map_err(|_| ApiError::internal())?
+            .map_err(ApiError::from_store)?;
 
     match started {
         UploadStart::Existing(metadata) => {
@@ -672,6 +823,39 @@ async fn get_blob(
     serve_blob(state, blob, headers, false).await
 }
 
+async fn list_blobs(
+    State(state): State<AppState>,
+    AxumPath(pubkey): AxumPath<String>,
+    Query(query): Query<ListQuery>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<BlobDescriptor>>, ApiError> {
+    if !is_canonical_hash(&pubkey) {
+        return Err(ApiError::bad_request("invalid listing public key"));
+    }
+    let authorization = headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok());
+    state
+        .inner
+        .public_auth
+        .verify_list(authorization, &pubkey, unix_time())
+        .map_err(ApiError::from_auth)?;
+    let limit = query.limit.unwrap_or(50);
+    let cursor = query.cursor;
+    let store = state.inner.store.clone();
+    let list_pubkey = pubkey;
+    let claims = spawn_blocking(move || store.list_claims(&list_pubkey, cursor.as_deref(), limit))
+        .await
+        .map_err(|_| ApiError::internal())?
+        .map_err(ApiError::from_store)?;
+    Ok(Json(
+        claims
+            .into_iter()
+            .map(|claim| descriptor_for_claim(&state, claim))
+            .collect(),
+    ))
+}
+
 async fn head_blob(
     State(state): State<AppState>,
     AxumPath(blob): AxumPath<String>,
@@ -693,12 +877,12 @@ async fn delete_blob(
         .and_then(|value| value.to_str().ok());
     let verified = state
         .inner
-        .auth
+        .public_auth
         .verify_delete(authorization, &hash, unix_time())
         .map_err(ApiError::from_auth)?;
     let store = state.inner.store.clone();
     let delete_hash = hash.clone();
-    let outcome = spawn_blocking(move || store.delete_owned(&delete_hash, &verified.owner_pubkey))
+    let outcome = spawn_blocking(move || store.delete_claim(&delete_hash, &verified.owner_pubkey))
         .await
         .map_err(|_| ApiError::internal())?
         .map_err(ApiError::from_store)?;
@@ -756,6 +940,7 @@ async fn serve_blob(
         Body::from_stream(ReaderStream::new(file.take(response_size)))
     };
 
+    let opaque = metadata.opaque;
     let mut response = Response::builder()
         .status(status)
         .header(CONTENT_TYPE, metadata.content_type)
@@ -763,6 +948,14 @@ async fn serve_blob(
         .header(ACCEPT_RANGES, "bytes")
         .header(CACHE_CONTROL, "public, max-age=31536000, immutable")
         .header(ETAG, format!("\"{}\"", metadata.sha256));
+    if opaque {
+        response = response
+            .header(
+                CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{}.bin\"", metadata.sha256),
+            )
+            .header(&X_CONTENT_TYPE_OPTIONS, "nosniff");
+    }
     if status == StatusCode::PARTIAL_CONTENT {
         response = response.header(
             CONTENT_RANGE,
@@ -829,6 +1022,23 @@ fn descriptor(state: &AppState, metadata: BlobMetadata) -> BlobDescriptor {
         size: metadata.size,
         content_type: metadata.content_type,
         uploaded: metadata.uploaded,
+    }
+}
+
+fn descriptor_for_claim(state: &AppState, claim: ClaimMetadata) -> BlobDescriptor {
+    let extension = extension_for(&claim.content_type);
+    let url = format!(
+        "{}/{}.{}",
+        state.inner.public_base_url.as_str().trim_end_matches('/'),
+        claim.sha256,
+        extension
+    );
+    BlobDescriptor {
+        url,
+        sha256: claim.sha256,
+        size: claim.size,
+        content_type: claim.content_type,
+        uploaded: claim.uploaded,
     }
 }
 
@@ -1038,12 +1248,20 @@ impl ApiError {
                 message: "storage quota is full",
                 range_size: None,
             },
+            StoreError::FriendLimitExceeded => Self {
+                status: StatusCode::INSUFFICIENT_STORAGE,
+                message: "friend storage grant is full or expired",
+                range_size: None,
+            },
+            StoreError::InvalidCursor | StoreError::InvalidListLimit => {
+                Self::bad_request("invalid listing pagination")
+            }
             StoreError::InvalidHash | StoreError::LengthMismatch | StoreError::HashMismatch => {
                 Self::bad_request("upload does not match its declared metadata")
             }
             StoreError::MissingBlob => Self::not_found("blob not found"),
-            StoreError::NotOwner => {
-                Self::forbidden("the signing public key does not own this blob")
+            StoreError::NotClaimant => {
+                Self::forbidden("the signing public key does not claim this blob")
             }
             error => {
                 tracing::error!(reason = %error, "Blossom storage operation failed");
@@ -1092,17 +1310,24 @@ mod tests {
     }
 
     fn operation_authorization(hash: &str, created_at: u64, operation: &str) -> String {
-        let keys = Keys::parse(&format!("{:064x}", 1)).unwrap();
-        let tags = [
-            vec!["t", operation],
-            vec!["x", hash],
-            vec!["server", "node.example"],
-        ]
-        .into_iter()
-        .map(|tag| Tag::parse(tag).unwrap())
-        .chain(std::iter::once(
-            Tag::parse(["expiration", &(created_at + 120).to_string()]).unwrap(),
-        ));
+        operation_authorization_for(1, Some(hash), created_at, operation)
+    }
+
+    fn operation_authorization_for(
+        secret: u64,
+        hash: Option<&str>,
+        created_at: u64,
+        operation: &str,
+    ) -> String {
+        let keys = Keys::parse(&format!("{secret:064x}")).unwrap();
+        let mut tags = vec![
+            Tag::parse(["t", operation]).unwrap(),
+            Tag::parse(["server", "node.example"]).unwrap(),
+        ];
+        if let Some(hash) = hash {
+            tags.push(Tag::parse(["x", hash]).unwrap());
+        }
+        tags.push(Tag::parse(["expiration", &(created_at + 120).to_string()]).unwrap());
         let event = EventBuilder::new(Kind::Custom(24_242), format!("Authorise {operation}"))
             .tags(tags)
             .custom_created_at(Timestamp::from(created_at))
@@ -1112,6 +1337,13 @@ mod tests {
             "Nostr {}",
             URL_SAFE_NO_PAD.encode(serde_json::to_vec(&event).unwrap())
         )
+    }
+
+    fn pubkey_for(secret: u64) -> String {
+        Keys::parse(&format!("{secret:064x}"))
+            .unwrap()
+            .public_key()
+            .to_hex()
     }
 
     #[test]
@@ -1180,8 +1412,11 @@ mod tests {
                 BlossomConfig {
                     public_base_url: Url::parse("http://node.example/").unwrap(),
                     accepted_server_names: vec!["node.example".into()],
-                    allowed_pubkeys: Vec::new(),
-                    allow_public_writes: true,
+                    allowed_pubkeys: vec![
+                        "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798".into(),
+                    ],
+                    friend_grants: Vec::new(),
+                    open_shelter: false,
                     max_concurrent_writes: 4,
                     mirror_proxy: None,
                 },
@@ -1364,19 +1599,29 @@ mod tests {
         BlossomConfig {
             public_base_url: Url::parse("http://node.example/").unwrap(),
             accepted_server_names: vec!["node.example".into()],
-            allowed_pubkeys: Vec::new(),
-            allow_public_writes: true,
+            allowed_pubkeys: vec![
+                "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798".into(),
+            ],
+            friend_grants: Vec::new(),
+            open_shelter: false,
             max_concurrent_writes: 4,
             mirror_proxy: None,
         }
     }
 
     fn mirror_request(hash: &str, now: u64) -> Request<Body> {
+        mirror_request_for(hash, now, 1)
+    }
+
+    fn mirror_request_for(hash: &str, now: u64, secret: u64) -> Request<Body> {
         Request::builder()
             .method(Method::PUT)
             .uri("/mirror")
             .header(CONTENT_TYPE, "application/json")
-            .header(AUTHORIZATION, upload_authorization(hash, now))
+            .header(
+                AUTHORIZATION,
+                operation_authorization_for(secret, Some(hash), now, "upload"),
+            )
             .body(Body::from(format!(
                 r#"{{"url":"https://origin.example/{hash}"}}"#
             )))
@@ -1572,6 +1817,145 @@ mod tests {
                 repaired: 0,
                 unrepaired: Vec::new(),
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn open_shelter_is_mirror_only_and_guest_reads_are_opaque() {
+        let directory = tempfile::tempdir().unwrap();
+        let bytes = b"signed guest bytes";
+        let hash = hex::encode(Sha256::digest(bytes));
+        let fetcher = FakeFetcher::with(FakeOutcome::Serve {
+            bytes: bytes.to_vec(),
+            declared_size: bytes.len() as u64,
+            content_type: Some("text/html"),
+        });
+        let mut config = test_config();
+        config.open_shelter = true;
+        let store = open_store(&directory);
+        let state = AppState::with_fetcher(store.clone(), config, fetcher).unwrap();
+        let app = router(state);
+        let now = unix_time();
+
+        let direct = Request::builder()
+            .method(Method::PUT)
+            .uri("/upload")
+            .header(CONTENT_TYPE, "text/html")
+            .header(CONTENT_LENGTH, bytes.len())
+            .header(&X_SHA_256, &hash)
+            .header(
+                AUTHORIZATION,
+                operation_authorization_for(2, Some(&hash), now, "upload"),
+            )
+            .body(Body::from(bytes.as_slice()))
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(direct).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+
+        let mirrored = app
+            .clone()
+            .oneshot(mirror_request_for(&hash, now, 2))
+            .await
+            .unwrap();
+        assert_eq!(mirrored.status(), StatusCode::CREATED);
+        let metadata = store.get(&hash).unwrap().unwrap();
+        assert_eq!(metadata.retention_tier, RetentionTier::Guest);
+        assert!(metadata.opaque);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/{hash}.html"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[CONTENT_TYPE], "application/octet-stream");
+        assert_eq!(response.headers()[&X_CONTENT_TYPE_OPTIONS], "nosniff");
+        assert_eq!(
+            response.headers()[CONTENT_DISPOSITION],
+            format!("attachment; filename=\"{hash}.bin\"")
+        );
+        assert_eq!(
+            response.into_body().collect().await.unwrap().to_bytes(),
+            bytes.as_slice()
+        );
+
+        let guest_pubkey = pubkey_for(2);
+        let listed = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/list/{guest_pubkey}?limit=1"))
+                    .header(
+                        AUTHORIZATION,
+                        operation_authorization_for(2, None, now, "list"),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(listed.status(), StatusCode::OK);
+        let listed: serde_json::Value =
+            serde_json::from_slice(&listed.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(listed.as_array().unwrap().len(), 1);
+        assert_eq!(listed[0]["sha256"], hash);
+        assert_eq!(listed[0]["type"], "application/octet-stream");
+
+        let cross_account = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/list/{guest_pubkey}"))
+                    .header(
+                        AUTHORIZATION,
+                        operation_authorization_for(1, None, now, "list"),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(cross_account.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn friend_direct_upload_respects_the_operator_grant_ceiling() {
+        let directory = tempfile::tempdir().unwrap();
+        let now = unix_time();
+        let mut config = test_config();
+        config.friend_grants.push(FriendGrant {
+            pubkey: pubkey_for(2),
+            byte_limit: 5,
+            expires_at: now + 3600,
+            grant_id: "test-friend".into(),
+        });
+        let app = router(AppState::new(open_store(&directory), config).unwrap());
+        let bytes = b"six!!!";
+        let hash = hex::encode(Sha256::digest(bytes));
+        let request = Request::builder()
+            .method(Method::PUT)
+            .uri("/upload")
+            .header(CONTENT_TYPE, "application/octet-stream")
+            .header(CONTENT_LENGTH, bytes.len())
+            .header(&X_SHA_256, &hash)
+            .header(
+                AUTHORIZATION,
+                operation_authorization_for(2, Some(&hash), now, "upload"),
+            )
+            .body(Body::from(bytes.as_slice()))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::INSUFFICIENT_STORAGE);
+        assert_eq!(
+            response.headers()[&X_REASON],
+            "friend storage grant is full or expired"
         );
     }
 

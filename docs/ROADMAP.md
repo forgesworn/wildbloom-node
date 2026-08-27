@@ -19,7 +19,10 @@
   across two fresh Tor clients on macOS;
 - a transport-neutral `BlobFetcher` interface for BUD-04 mirroring and repair,
   with Tor as the only shipped adapter and unchanged default behaviour when no
-  adapter is configured.
+  adapter is configured;
+- claim-aware owner, friend and guest retention with fixed watermarks,
+  mirror-only open shelter, oldest-guest-first eviction, opaque serving,
+  self-only BUD-12 listing and migration from the 0.2 owner schema.
 
 ## Next acceptance gates
 
@@ -33,9 +36,8 @@
   find missing copies, and repair restores the count;
 - retention, replica discovery, custody challenges and optional paid quota have
   explicit policy and tests;
-- owner, friend and guest retention tiers pass the admission, reserve, eviction,
-  opaque-serving and self-only listing gates in
-  [`STORAGE-POLICY.md`](STORAGE-POLICY.md);
+- owner, friend and guest retention, migration and interrupted-transaction
+  acceptance pass on the Windows, Linux and macOS CI matrix;
 - the existing unbound router and `BlobFetcher` interface move into a neutrally
   named, versioned Rust core without changing the current owner-only Wildbloom
   configuration;
