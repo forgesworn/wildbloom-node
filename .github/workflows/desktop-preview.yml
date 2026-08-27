@@ -48,7 +48,8 @@ jobs:
         if: runner.os == 'Linux'
         run: >-
           sudo apt-get update && sudo apt-get install --yes
-          gnupg libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+          dbus-x11 gnupg jq libwebkit2gtk-4.1-dev libayatana-appindicator3-dev
+          librsvg2-dev patchelf xvfb
       - name: Install macOS signature verification tools
         if: runner.os == 'macOS'
         run: brew install gnupg
@@ -85,6 +86,13 @@ jobs:
         with:
           projectPath: desktop/src-tauri
           args: --verbose --bundles ${{ matrix.bundles }} --target ${{ matrix.target }}
+      - name: Install and exercise the Linux package
+        if: runner.os == 'Linux'
+        run: scripts/accept-desktop-linux.sh "desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+      - name: Install and exercise the Windows package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: scripts/accept-desktop-windows.ps1 "desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
       - name: Upload unsigned preview installers
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
