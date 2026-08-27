@@ -30,6 +30,12 @@
   find missing copies, and repair restores the count;
 - retention, replica discovery, custody challenges and optional paid quota have
   explicit policy and tests;
+- owner, friend and guest retention tiers pass the admission, reserve, eviction,
+  opaque-serving and self-only listing gates in
+  [`STORAGE-POLICY.md`](STORAGE-POLICY.md);
+- the existing unbound router and a transport-neutral mirror fetch interface
+  move into a neutrally named, versioned Rust core without changing the current
+  owner-only Wildbloom configuration;
 - RelaySwarm direct transfer is measured against Tor on desktop and phone before
   it becomes an optional transport adapter.
 

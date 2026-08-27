@@ -60,3 +60,18 @@ corrupt copy can be downloaded again from those recorded sources, but only if a
 source is still reachable and returns the exact recorded length and hash.  This
 is local repair, not replica discovery or proof that another operator retains a
 copy.
+
+## Next storage boundary
+
+The next core revision gives the operator's files, invited friends and
+best-effort guest mirrors distinct retention priorities without creating three
+stores.  Tier belongs to each signed claim over a deduplicated blob; it is not a
+single property of the blob and it is not the owner's desired replica count.
+The complete target policy and its acceptance boundary are in
+[`STORAGE-POLICY.md`](STORAGE-POLICY.md).
+
+The Axum router is already exposed without binding a listener.  Before the core
+is extracted into a neutral reusable crate, the hard-coded mirror client must
+also become a transport-neutral fetch interface.  Tor, loopback and any future
+direct transport then remain adapters over one authenticated Blossom router and
+one CAS rather than separate daemons or stores.
