@@ -20,11 +20,14 @@ Tor v3 onion  ->  loopback-only wildbloomd
           SQLite metadata + disk CAS blobs
 ```
 
-`wildbloom-core` owns Nostr verification, Blossom behaviour, quota reservation,
-integrity checks, repair and persistent storage.  It fetches mirror and repair
-bytes through a transport-neutral `BlobFetcher` interface; the only shipped
-adapter is `TorHttpFetcher`, which speaks through the loopback SOCKS proxy the
-shell supplies.  A fetcher carries bytes and reports which path carried them.
+[`shelter-kit`](https://github.com/forgesworn/shelter-kit) owns Nostr
+verification, Blossom behaviour, quota reservation, integrity checks, repair
+and persistent storage.  Wildbloom pins its versioned public crate but supplies
+the `Wildbloom Node` BUD-01 identity from the daemon shell.  Shelter Kit fetches
+mirror and repair bytes through a transport-neutral `BlobFetcher` interface;
+the only shipped adapter is `TorHttpFetcher`, which speaks through the loopback
+SOCKS proxy the shell supplies.  A fetcher carries bytes and reports which path
+carried them.
 It never sees authorisation events, retention tiers or the owner's identity,
 and the core still checks exact length and SHA-256 on everything it delivers.
 `wildbloomd` owns process configuration, the local TCP listener, shutdown and

@@ -2,7 +2,9 @@ use clap::Parser;
 use std::{net::SocketAddr, path::PathBuf, str::FromStr};
 use tracing_subscriber::EnvFilter;
 use url::Url;
-use wildbloom_core::{AppState, BlossomConfig, FriendGrant, Store, StoreConfig, router};
+use wildbloom_core::{
+    AppState, BlossomConfig, FriendGrant, ServerMetadata, Store, StoreConfig, router,
+};
 
 mod tor;
 
@@ -219,6 +221,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState::new(
         store,
         BlossomConfig {
+            server_metadata: ServerMetadata {
+                name: "Wildbloom Node".into(),
+                software: "https://github.com/forgesworn/wildbloom-node".into(),
+            },
             public_base_url: public_url.clone(),
             accepted_server_names: server_names.clone(),
             allowed_pubkeys: cli.allowed_pubkeys,

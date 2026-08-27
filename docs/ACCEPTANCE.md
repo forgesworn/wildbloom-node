@@ -1,5 +1,24 @@
 # Acceptance evidence
 
+## 2026-08-27 neutral shared core v0.1.0
+
+Environment: macOS, Rust 1.94.1, `shelter-kit` v0.1.0 at commit
+`d3c89ddae6c077803aa9c95f16a56e796945b0fa`.
+
+- The router, store and transport boundary were released from the public,
+  MIT-licensed [`forgesworn/shelter-kit`](https://github.com/forgesworn/shelter-kit)
+  repository.  Its release CI passed the Ubuntu, macOS and Windows test matrix
+  plus RustSec audit.
+- Wildbloom removed its vendored core and pins the published `v0.1.0` Git tag.
+  The daemon supplies `Wildbloom Node` and its public source URL as the BUD-01
+  identity, keeping product identity outside the neutral core.
+- `cargo fmt --all -- --check`, strict workspace Clippy, daemon tests, locked
+  desktop tests and both dependency audits passed against the released crate.
+  The lockfile resolves `shelter-kit` to the exact commit above.
+- This proves Wildbloom consumes one released shared storage implementation.  It
+  does not claim that Bothy has adopted it yet, or that a native QUIC/relay lane
+  exists.
+
 ## 2026-08-27 native macOS prototype
 
 Environment: macOS, Rust 1.94.1 and Tor 0.4.9.5.

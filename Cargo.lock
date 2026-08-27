@@ -1785,6 +1785,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "shelter-kit"
+version = "0.1.0"
+source = "git+https://github.com/forgesworn/shelter-kit?tag=v0.1.0#d3c89ddae6c077803aa9c95f16a56e796945b0fa"
+dependencies = [
+ "axum",
+ "base64",
+ "bytes",
+ "fs2",
+ "futures-util",
+ "hex",
+ "http",
+ "nostr",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tower-http",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2058,7 +2085,6 @@ dependencies = [
  "tower",
  "tower-layer",
  "tower-service",
- "tracing",
  "url",
 ]
 
@@ -2362,35 +2388,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wildbloom-core"
-version = "0.2.0"
-dependencies = [
- "axum",
- "base64",
- "bytes",
- "fs2",
- "futures-util",
- "hex",
- "http",
- "http-body-util",
- "nostr",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror",
- "tokio",
- "tokio-util",
- "tower",
- "tower-http",
- "tracing",
- "url",
- "uuid",
-]
-
-[[package]]
 name = "wildbloomd"
 version = "0.2.0"
 dependencies = [
@@ -2404,13 +2401,13 @@ dependencies = [
  "reqwest",
  "serde_json",
  "sha2",
+ "shelter-kit",
  "tempfile",
  "thiserror",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "url",
- "wildbloom-core",
 ]
 
 [[package]]

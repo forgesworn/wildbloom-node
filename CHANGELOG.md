@@ -26,6 +26,8 @@
   blobs.
 - Startup recovery for interrupted CAS/database moves and migration from the
   0.2 owner schema.
+- The router, content-addressed store and fetch boundary are published as the
+  neutral MIT-licensed `shelter-kit` v0.1.0 crate.
 
 ### Changed
 
@@ -40,6 +42,8 @@
   directory fetches stall.
 - The unsafe public direct-write switch is replaced by explicit
   `--open-shelter`, which admits unknown signers only through BUD-04 mirroring.
+- `wildbloomd` now consumes the tagged `shelter-kit` crate and supplies its own
+  validated `Wildbloom Node` BUD-01 product identity.
 
 - Platform-native per-user data directories replace the working directory as
   the headless daemon default.

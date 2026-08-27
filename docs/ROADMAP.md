@@ -23,6 +23,9 @@
 - claim-aware owner, friend and guest retention with fixed watermarks,
   mirror-only open shelter, oldest-guest-first eviction, opaque serving,
   self-only BUD-12 listing and migration from the 0.2 owner schema.
+- the unbound router, store and `BlobFetcher` interface are published as the
+  neutral MIT-licensed `shelter-kit` v0.1.0 crate, while the daemon keeps the
+  `Wildbloom Node` BUD-01 product identity.
 
 ## Next acceptance gates
 
@@ -38,9 +41,6 @@
   explicit policy and tests;
 - owner, friend and guest retention, migration and interrupted-transaction
   acceptance pass on the Windows, Linux and macOS CI matrix;
-- the existing unbound router and `BlobFetcher` interface move into a neutrally
-  named, versioned Rust core without changing the current owner-only Wildbloom
-  configuration;
 - a ForgeSworn-owned native lane (standard QUIC direct path plus an opaque
   WebSocket relay) is spiked on two desktops and a physical Android phone across
   home NAT, carrier NAT, VPN egress and UDP-blocking networks, with direct,
