@@ -160,9 +160,9 @@ The reusable Rust core owns:
 - integrity, listing, mirror and repair semantics;
 - a transport-neutral fetch interface.
 
-It does not own a TCP listener, Tor process, iroh endpoint, bridge, desktop
-shell, Android service, relay selection or product branding.  Those are
-adapters and shells around the same router and store.
+It does not own a TCP listener, Tor process, native transport endpoint, relay,
+bridge, desktop shell, Android service, relay selection or product branding.
+Those are adapters and shells around the same router and store.
 
 The encrypted-envelope byte format and known-answer vectors should be a
 product-neutral specification consumed by clients in any language.  The node

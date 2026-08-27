@@ -13,8 +13,20 @@
   repair, source shutdown and onion-identity retention.
 - A pinned signed-updater feed, explicit update UI and fail-closed draft release
   workflow for Developer ID, notarisation and Windows Authenticode builds.
+- `AppState::with_fetcher` lets a shell supply an explicit transport adapter
+  and refuses to combine one with a mirror proxy.
 
 ### Changed
+
+- BUD-04 mirroring and integrity repair fetch through a transport-neutral
+  `BlobFetcher` interface (`wildbloom_core::fetch`).  `TorHttpFetcher` over the
+  loopback `socks5h` proxy is the only shipped adapter.  A node without one
+  still refuses `/mirror` and leaves repair candidates unrepaired, exactly as
+  before.  Successful mirrors and repairs log the path that carried the bytes.
+- The two-node Tor acceptance test retries the mirror while a freshly
+  published onion is still unreachable, and takes its Tor bootstrap budget
+  from `WILDBLOOM_TEST_TOR_TIMEOUT` (default 300 seconds) for days when
+  directory fetches stall.
 
 - Platform-native per-user data directories replace the working directory as
   the headless daemon default.

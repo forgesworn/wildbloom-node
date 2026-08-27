@@ -16,7 +16,10 @@
 - two independent macOS nodes mirroring through Tor and retaining the exact
   blob after the source node stops;
 - automated loss, repair, source shutdown and onion-identity restart acceptance
-  across two fresh Tor clients on macOS.
+  across two fresh Tor clients on macOS;
+- a transport-neutral `BlobFetcher` interface for BUD-04 mirroring and repair,
+  with Tor as the only shipped adapter and unchanged default behaviour when no
+  adapter is configured.
 
 ## Next acceptance gates
 
@@ -33,11 +36,15 @@
 - owner, friend and guest retention tiers pass the admission, reserve, eviction,
   opaque-serving and self-only listing gates in
   [`STORAGE-POLICY.md`](STORAGE-POLICY.md);
-- the existing unbound router and a transport-neutral mirror fetch interface
-  move into a neutrally named, versioned Rust core without changing the current
-  owner-only Wildbloom configuration;
-- RelaySwarm direct transfer is measured against Tor on desktop and phone before
-  it becomes an optional transport adapter.
+- the existing unbound router and `BlobFetcher` interface move into a neutrally
+  named, versioned Rust core without changing the current owner-only Wildbloom
+  configuration;
+- a ForgeSworn-owned native lane (standard QUIC direct path plus an opaque
+  WebSocket relay) is spiked on two desktops and a physical Android phone across
+  home NAT, carrier NAT, VPN egress and UDP-blocking networks, with direct,
+  relayed and failed outcomes recorded separately, before it becomes an
+  optional `BlobFetcher` adapter.  RelaySwarm's WebRTC session is not the
+  storage lane.
 
 None of these should be described as shipped until its own test has run on the
 named platform or independent nodes.

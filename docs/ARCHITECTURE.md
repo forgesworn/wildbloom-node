@@ -10,8 +10,8 @@ Tor v3 onion  ->  loopback-only wildbloomd
                          |
              +-----------+-----------+
              |                       |
-        Blossom HTTP            mirror fetcher
-        BUD-01/02/11          BUD-04 over Tor
+        Blossom HTTP           BUD-04 fetcher
+        BUD-01/02/11        (BlobFetcher: Tor today)
              |                       |
              +-----------+-----------+
                          |
@@ -21,9 +21,15 @@ Tor v3 onion  ->  loopback-only wildbloomd
 ```
 
 `wildbloom-core` owns Nostr verification, Blossom behaviour, quota reservation,
-integrity checks, repair and persistent storage.  `wildbloomd` owns process
-configuration, the local TCP listener, shutdown and either a managed Tor process
-or an explicitly supplied loopback Tor SOCKS proxy.
+integrity checks, repair and persistent storage.  It fetches mirror and repair
+bytes through a transport-neutral `BlobFetcher` interface; the only shipped
+adapter is `TorHttpFetcher`, which speaks through the loopback SOCKS proxy the
+shell supplies.  A fetcher carries bytes and reports which path carried them.
+It never sees authorisation events, retention tiers or the owner's identity,
+and the core still checks exact length and SHA-256 on everything it delivers.
+`wildbloomd` owns process configuration, the local TCP listener, shutdown and
+either a managed Tor process or an explicitly supplied loopback Tor SOCKS
+proxy.
 
 The Tauri tray application is a narrow process shell.  It starts the complete
 signature-verified Tor Expert Bundle from its resources, preserves the onion
@@ -50,9 +56,11 @@ declared size in an immediate SQLite transaction before the body is streamed to
 a private temporary file.  The actual digest and byte count are checked before
 an atomic move into the CAS.
 
-This is whole-blob replication today.  Chunk manifests, erasure coding and
-RelaySwarm transport can be added above the CAS, but a standard Blossom URL must
-remain available for clients that know nothing about those optimisations.
+This is whole-blob replication today.  Chunk manifests, erasure coding and a
+native node-to-node lane can be added above the CAS and behind the fetcher
+boundary, but a standard Blossom URL must remain available for clients that
+know nothing about those optimisations.  RelaySwarm's WebRTC session is browser
+live-video distribution and is not the storage lane.
 
 Each successful BUD-04 mirror records the exact verified source URL.  An
 integrity scan streams every locally indexed blob through SHA-256.  A missing or
@@ -70,8 +78,15 @@ single property of the blob and it is not the owner's desired replica count.
 The complete target policy and its acceptance boundary are in
 [`STORAGE-POLICY.md`](STORAGE-POLICY.md).
 
-The Axum router is already exposed without binding a listener.  Before the core
-is extracted into a neutral reusable crate, the hard-coded mirror client must
-also become a transport-neutral fetch interface.  Tor, loopback and any future
-direct transport then remain adapters over one authenticated Blossom router and
-one CAS rather than separate daemons or stores.
+The Axum router is already exposed without binding a listener, and BUD-04
+mirroring and repair already go through the transport-neutral `BlobFetcher`
+interface with Tor as the only shipped adapter.  Loopback shells and any future
+direct transport plug in as further adapters over one authenticated Blossom
+router and one CAS rather than separate daemons or stores.
+
+The candidate direct transport is a ForgeSworn-owned lane over standard QUIC
+(Quinn with rustls) with an opaque WebSocket relay as the universal fallback.
+It enters this repository only after a time-boxed spike on real home, carrier,
+VPN and UDP-blocking networks passes, it is always optional, and it never
+becomes a requirement for the default Tor node.  Its relay must not learn
+authorisation events, retention tiers, blob plaintext or the owner's identity.
