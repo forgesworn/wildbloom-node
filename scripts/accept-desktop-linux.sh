@@ -150,7 +150,7 @@ if ! kill -0 "$app_pid" 2>/dev/null; then
 fi
 echo "installed Linux desktop enforced one application instance"
 
-kill -TERM "$app_pid"
+kill -KILL "$app_pid"
 for _ in $(seq 1 30); do
   if ! kill -0 "$app_pid" 2>/dev/null; then
     break
@@ -158,7 +158,7 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 if kill -0 "$app_pid" 2>/dev/null; then
-  echo "the installed desktop process did not stop after SIGTERM" >&2
+  echo "the installed desktop process did not stop after SIGKILL" >&2
   exit 1
 fi
 wait "$app_pid" || true
@@ -173,7 +173,7 @@ if [ "$remaining_children" != "0" ]; then
   echo "a bundled Tor or Wildbloom child remained after the desktop stopped" >&2
   exit 1
 fi
-echo "installed Linux desktop stopped its bundled child processes"
+echo "installed Linux desktop stopped its bundled children after an abrupt parent death"
 
 sudo apt-get remove --purge --yes "$package_name"
 if dpkg-query --show "$package_name" >/dev/null 2>&1; then
@@ -185,4 +185,4 @@ if command -v wildbloom-desktop >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "installed Linux desktop reached Tor and Blossom readiness, enforced one instance, stopped its children and uninstalled"
+echo "installed Linux desktop reached Tor and Blossom readiness, enforced one instance, survived an abrupt parent death and uninstalled"
