@@ -143,5 +143,20 @@ Environment: macOS, Rust 1.94.1, stacked branch
 - Startup acceptance proves that an indexed tombstone is restored after an
   interrupted file transaction and an unindexed CAS file is removed.  The
   SQLite schema migration runs in one immediate transaction.
-- Cross-platform CI and the V4V two-node encrypted-media failure/recovery
-  journey remain required before this revision is called production-shipped.
+- The V4V field harness passed against two fresh managed-Tor nodes.  V4V created
+  and encrypted a valid WAV fixture, signed the BUD-11 upload, wrote 1,673
+  ciphertext bytes to the source, and asked the keeper to mirror the exact
+  hash from the source onion.  After the source process stopped, the keeper
+  returned SHA-256
+  `c2dc8d5b018c697fd2e372a4c6f583f6cd629eaee84b445f236472338c190f1d`;
+  V4V decrypted it byte-for-byte and validated the WAV container.  The bounded
+  result was `replicated:true`, `primaryStopped:true`, `realTor:true`.
+- Two earlier field attempts correctly failed closed when Tor directory caches
+  delivered a consensus but zero microdescriptors.  With full relay
+  descriptors, both fresh clients reached 100% and the complete journey
+  passed.  The first-start allowance is therefore fifteen minutes; warm starts
+  reuse each node's private directory cache.
+- This same-Mac run proves separate processes, stores and onion identities plus
+  real Tor transfer.  It does not prove separate operators, a Tor-capable
+  browser origin or production deployment.  Cross-platform CI remains required
+  before this revision is called production-shipped.

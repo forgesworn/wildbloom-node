@@ -119,7 +119,7 @@ struct Cli {
     tor_bin: PathBuf,
 
     /// Seconds allowed for Tor to bootstrap.
-    #[arg(long, env = "WILDBLOOM_TOR_TIMEOUT", default_value_t = 120)]
+    #[arg(long, env = "WILDBLOOM_TOR_TIMEOUT", default_value_t = 900)]
     tor_timeout: u64,
 
     /// Seconds between complete integrity scans and repair attempts. Zero disables repair.

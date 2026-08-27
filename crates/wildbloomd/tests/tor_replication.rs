@@ -13,14 +13,14 @@ use tokio::{
     time::{sleep, timeout},
 };
 
-/// Seconds each managed Tor may take to bootstrap.  Defaults to 300; raise it
+/// Seconds each managed Tor may take to bootstrap.  Defaults to 900; raise it
 /// with `WILDBLOOM_TEST_TOR_TIMEOUT` on days when directory fetches stall.
 fn tor_bootstrap_timeout() -> Duration {
     Duration::from_secs(
         std::env::var("WILDBLOOM_TEST_TOR_TIMEOUT")
             .ok()
             .and_then(|value| value.parse().ok())
-            .unwrap_or(300),
+            .unwrap_or(900),
     )
 }
 

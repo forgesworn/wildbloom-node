@@ -353,7 +353,7 @@ async fn start_runtime(app: AppHandle, manager: Arc<NodeManager>) -> Result<(), 
 
     let timeout_manager = manager.clone();
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(300)).await;
+        tokio::time::sleep(Duration::from_secs(900)).await;
         let still_starting = timeout_manager
             .status
             .read()
@@ -362,7 +362,7 @@ async fn start_runtime(app: AppHandle, manager: Arc<NodeManager>) -> Result<(), 
             set_error(
                 &timeout_manager,
                 generation,
-                "Tor did not finish bootstrapping within five minutes.".into(),
+                "Tor did not finish bootstrapping within fifteen minutes.".into(),
             );
             stop_children(&timeout_manager);
         }

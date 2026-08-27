@@ -121,8 +121,9 @@ cargo build --release
 ./target/release/wildbloomd --allow-pubkey <64-lower-case-hex-public-key>
 ```
 
-The first Tor bootstrap can take a few minutes.  Once ready, the log prints the
-stable `.onion` Blossom URL.  Add that URL to a Blossom-capable client.  The
+The first Tor bootstrap can take several minutes and has a fifteen-minute
+allowance; later starts reuse its private directory cache.  Once ready, the log
+prints the stable `.onion` Blossom URL.  Add that URL to a Blossom-capable client.  The
 node stores data in the operating system's per-user application-data directory
 unless `--data-dir` or `WILDBLOOM_DATA_DIR` says otherwise.  Without an owner,
 friend grant or explicit open-shelter policy it remains read-only.
