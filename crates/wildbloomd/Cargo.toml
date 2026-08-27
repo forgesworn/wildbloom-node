@@ -1,0 +1,19 @@
+[package]
+name = "wildbloomd"
+description = "Headless cross-platform Wildbloom Blossom node"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+axum.workspace = true
+clap.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+wildbloom-core = { path = "../wildbloom-core" }
