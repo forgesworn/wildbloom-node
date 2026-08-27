@@ -18,7 +18,7 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true
-wildbloom-core = { path = "../wildbloom-core" }
+wildbloom-core.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc.workspace = true
