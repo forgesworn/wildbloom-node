@@ -42,7 +42,7 @@ trap cleanup EXIT
 sudo apt-get install --yes "$package_path"
 executable="$(command -v wildbloom-desktop)"
 test -x "$executable"
-tor_binary="$(dpkg-query --listfiles "$package_name" | awk '/\/tor-runtime\/tor\/tor$/ { print; exit }')"
+tor_binary="$(dpkg-query --listfiles "$package_name" | awk '/\/tor-runtime\/tor\/tor$/ && !found { print; found = 1 }')"
 if [ -z "$tor_binary" ] || [ ! -x "$tor_binary" ]; then
   echo "the installed package manifest does not contain an executable Tor runtime" >&2
   exit 1
@@ -83,7 +83,8 @@ for _ in $(seq 1 360); do
   database_path="$(find "$XDG_DATA_HOME" -type f -name wildbloom.sqlite3 -print -quit 2>/dev/null || true)"
   node_port="$(
     ps -eo args= \
-      | awk -v root="$runtime_root" 'index($0, "wildbloomd") && index($0, root) { print; exit }' \
+      | awk -v root="$runtime_root" \
+        'index($0, "wildbloomd") && index($0, root) && !found { print; found = 1 }' \
       | sed -n 's/.*--bind 127\.0\.0\.1:\([0-9][0-9]*\).*/\1/p'
   )"
 
