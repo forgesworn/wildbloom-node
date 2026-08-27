@@ -14,6 +14,7 @@ if [ -z "$package_path" ]; then
   echo "the Linux bundle does not contain a deb package" >&2
   exit 1
 fi
+package_path="$(realpath "$package_path")"
 
 package_name="$(dpkg-deb --field "$package_path" Package)"
 runtime_root="$(mktemp -d "$RUNNER_TEMP/wildbloom-linux-runtime.XXXXXX")"
