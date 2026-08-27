@@ -87,7 +87,7 @@ jobs:
         if: runner.os == 'Linux'
         run: >-
           sudo apt-get update && sudo apt-get install --yes
-          gnupg libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+          gnupg minisign libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - name: Install macOS signature verification tools
         if: runner.os == 'macOS'
         run: brew install gnupg
@@ -156,7 +156,7 @@ jobs:
               '{bundle:{createUpdaterArtifacts:true,windows:{certificateThumbprint:$thumbprint,digestAlgorithm:"sha256",timestampUrl:$timestamp,tsp:false}}}' \
               > desktop/src-tauri/tauri.production.conf.json
           else
-            jq -n '{bundle:{createUpdaterArtifacts:true}}' \
+            jq -n '{bundle:{createUpdaterArtifacts:false}}' \
               > desktop/src-tauri/tauri.production.conf.json
           fi
       - name: Sign nested macOS Tor code with Developer ID
@@ -172,9 +172,27 @@ jobs:
           releaseBody: Signed release candidate.  Keep this release in draft until the clean-machine gate in docs/RELEASE.md is complete.
           releaseDraft: true
           prerelease: false
-          includeUpdaterJson: true
+          includeUpdaterJson: ${{ runner.os != 'Linux' }}
           args: --verbose --bundles ${{ matrix.bundles }} --target ${{ matrix.target }} --config tauri.production.conf.json
+      - name: Sign and verify Linux release packages
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          public_key="$RUNNER_TEMP/wildbloom-updater.pub"
+          jq -r '.plugins.updater.pubkey' desktop/src-tauri/tauri.conf.json | base64 --decode > "$public_key"
+          mapfile -d '' packages < <(
+            find "desktop/src-tauri/target/${{ matrix.target }}/release/bundle" -type f \
+              \( -name '*.deb' -o -name '*.rpm' \) -print0
+          )
+          test "${#packages[@]}" -eq 2
+          for package in "${packages[@]}"; do
+            cargo tauri signer sign "$package"
+            minisign -Vm "$package" -p "$public_key" -x "$package.sig"
+          done
+          gh release upload "v${{ inputs.version }}" "${packages[0]}.sig" "${packages[1]}.sig" --clobber
       - name: Verify updater signatures were emitted
+        if: runner.os != 'Linux'
         shell: bash
         run: |
           set -euo pipefail

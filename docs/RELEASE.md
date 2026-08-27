@@ -28,7 +28,7 @@ trust warnings.
 A production release needs three different authorities:
 
 - the Wildbloom updater private key, held as encrypted GitHub secrets, signs
-  every updater artefact;
+  every updater artefact and both standalone Linux packages;
 - a Developer ID Application certificate plus Apple notarisation credentials
   signs and notarises both macOS builds;
 - a trusted Windows code-signing certificate signs the Windows executable and
@@ -66,6 +66,9 @@ The signed release workflow refuses `workflow_dispatch` from any branch other
 than `main`, refuses version drift and stops before building when a required
 credential is absent.  Apple secrets are exposed only to macOS jobs and Windows
 certificate secrets only to Windows jobs.  It always creates a draft release.
+Linux `.deb` and `.rpm` files get detached minisign signatures made with the
+same separately held release key.  They are installed or replaced explicitly;
+we do not advertise Tauri's AppImage-only Linux auto-update path.
 
 ## Release gate
 
@@ -77,8 +80,8 @@ Before a draft can become public:
 3. Every platform build must use a signature-verified pinned Tor archive and
    the locked Rust dependencies.
 4. macOS signatures, notarisation and stapling must verify.  Windows
-   Authenticode status must be valid.  Updater signatures must verify on every
-   target.
+   Authenticode status must be valid.  Updater signatures must verify on macOS
+   and Windows; the detached signatures on both Linux packages must verify.
 5. Install, first start, onion bootstrap, write allowlist, restart, identity
    retention, update and uninstall must run on clean machines for every named
    target.
