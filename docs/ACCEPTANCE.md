@@ -54,8 +54,40 @@ Environment: macOS, Rust 1.94.1 and Tor 0.4.9.5.
   That bounded dogfood result explicitly records `realTor: false`; it does not
   replace the independent Tor test above.
 
+## 2026-08-27 installed desktop preview matrix
+
+Commit `bfc8c06a23466c4819cf89795d0e64118b9e88a8` ran in
+[desktop preview workflow 33070895932](https://github.com/forgesworn/wildbloom-node/actions/runs/33070895932).
+
+- On a fresh GitHub-hosted Linux runner, the generated `.deb` installed through
+  the operating-system package manager.  The installed Tor executable reported
+  a valid version and `ldd` found no unresolved bundled library.  The desktop
+  then created a valid v3 onion and SQLite store, started the packaged daemon,
+  returned the default empty, read-only 10 GiB storage status from `/healthz`,
+  and kept both the database and onion secret key at mode `0600`.
+- A second Linux launch exited while the original remained alive.  The harness
+  then sent `SIGKILL` to the desktop, bypassing its normal exit callback.  Tor
+  and `wildbloomd` both stopped, proving the Linux parent-death handling, and
+  the package uninstalled without leaving its executable on `PATH`.
+- On a fresh GitHub-hosted Windows runner, the NSIS installer installed the app
+  into an isolated directory.  The installed Tor executable reported a valid
+  version; the desktop created a valid v3 onion and SQLite store; and the
+  packaged daemon returned the same empty, read-only 10 GiB status.  A second
+  launch exited, the installed process tree stopped, and the silent uninstaller
+  removed the executable.
+- The same exact-head workflow also built Apple Silicon and Intel macOS `.app`
+  and `.dmg` previews after verifying and ad-hoc signing their bundled Tor code.
+  Runtime behaviour for macOS remains evidenced by the native run above, not by
+  those packaging jobs.
+
+These are short-lived, explicitly unsigned preview artefacts on hosted virtual
+machines.  They are not notarised or trusted public installers and do not prove
+the updater, reboot/start-at-login behaviour, physical retail hardware or
+long-term custody.
+
 The onion hostnames were disposable test identities and are intentionally not
 published.  These runs prove a real macOS Tor path, independent whole-blob
 replication, repair after local loss and onion identity retention after a clean
-restart.  They do not prove Windows/Linux runtime, long-term custody, automatic
-replica discovery, signed installers or V4V production use.
+restart, plus installed Linux and Windows preview startup on fresh hosted
+runners.  They do not prove long-term custody, automatic replica discovery,
+trusted signed installers or V4V production use.

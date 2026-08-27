@@ -10,6 +10,8 @@
 - full integrity scan and repair from a previously verified mirror source;
 - native daemon source and build/test matrix for macOS, Linux and Windows;
 - native Tauri tray shell with bundled, upstream-signature-verified Tor;
+- unsigned `.deb` and NSIS previews installed, started through Tor, checked for
+  single-instance and child cleanup, and uninstalled on fresh hosted runners;
 - live onion reachability evidence from an independent Tor client;
 - two independent macOS nodes mirroring through Tor and retaining the exact
   blob after the source node stops;
@@ -21,7 +23,7 @@
 - V4V uploads encrypted media to a Wildbloom Node and plays it from the remaining
   replica after another endpoint is unavailable;
 - production installers are signed, notarised where required, installed and
-  removed on clean Windows, Linux, Intel Mac and Apple Silicon Mac systems;
+  removed on clean retail Windows, Linux, Intel Mac and Apple Silicon systems;
 - the tray shell survives reboot and retains the same onion identity on all
   three operating systems;
 - signed pin manifests record desired replica count, independent observations

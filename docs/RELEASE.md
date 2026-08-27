@@ -11,7 +11,9 @@ x64, Windows x64, Intel macOS and Apple Silicon macOS.  It downloads the exact
 pinned Tor Expert Bundle for each target, verifies the detached signature and
 keeps the result as a short-lived workflow artefact.  It does not create a
 GitHub release.  The artefact name says `unsigned-preview` because that is what
-it is.
+it is.  On fresh hosted Linux and Windows runners it also installs the generated
+package, starts the installed app through Tor, checks the packaged Blossom
+service and single-instance behaviour, stops the process tree and uninstalls.
 
 Linux releases are deliberately `.deb` and `.rpm` packages.  We don't publish
 an AppImage: the current Tauri bundler path is not dependable enough on its
