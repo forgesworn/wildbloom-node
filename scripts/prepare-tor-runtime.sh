@@ -36,9 +36,14 @@ base_url="https://dist.torproject.org/torbrowser/${version}"
 mkdir -p "$destination" "$gnupg_home"
 chmod 700 "$gnupg_home"
 gpg_path() {
+  local native_path drive_letter
   case "$gpg_path_style" in
     posix) printf '%s\n' "$1" ;;
-    windows) cygpath -m "$1" ;;
+    windows)
+      native_path="$(cygpath -m "$1")"
+      drive_letter="$(printf '%s' "${native_path%%:*}" | tr '[:upper:]' '[:lower:]')"
+      printf '/%s%s\n' "$drive_letter" "${native_path#*:}"
+      ;;
     *)
       echo "unsupported GnuPG path style: $gpg_path_style" >&2
       exit 64
