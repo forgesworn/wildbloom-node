@@ -32,11 +32,13 @@ if (-not $application) {
     throw "the installed Wildbloom desktop executable is missing"
 }
 
-$torBinary = Join-Path $application.DirectoryName "tor-runtime\tor\tor.exe"
-if (-not (Test-Path $torBinary -PathType Leaf)) {
+$torBinary = Get-ChildItem -Path $installRoot -Recurse -File -Filter "tor.exe" |
+    Where-Object { $_.FullName -match "tor-runtime[\\/]tor[\\/]tor\.exe$" } |
+    Select-Object -First 1
+if (-not $torBinary) {
     throw "the installed Tor executable is missing"
 }
-$torVersion = & $torBinary --version
+$torVersion = & $torBinary.FullName --version
 $torVersionText = $torVersion -join "`n"
 if ($LASTEXITCODE -ne 0 -or $torVersionText -notmatch "^Tor version [0-9]+\.") {
     throw "the installed Tor executable did not report a valid version"

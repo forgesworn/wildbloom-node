@@ -42,8 +42,11 @@ trap cleanup EXIT
 sudo apt-get install --yes "$package_path"
 executable="$(command -v wildbloom-desktop)"
 test -x "$executable"
-tor_binary="/usr/lib/$(basename "$executable")/tor-runtime/tor/tor"
-test -x "$tor_binary"
+tor_binary="$(dpkg-query --listfiles "$package_name" | awk '/\/tor-runtime\/tor\/tor$/ { print; exit }')"
+if [ -z "$tor_binary" ] || [ ! -x "$tor_binary" ]; then
+  echo "the installed package manifest does not contain an executable Tor runtime" >&2
+  exit 1
+fi
 "$tor_binary" --version | grep -Eq '^Tor version [0-9]+\.'
 if ldd "$tor_binary" | grep -q 'not found'; then
   echo "the packaged Tor runtime has an unresolved shared library" >&2
