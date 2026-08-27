@@ -24,8 +24,8 @@ struct Cli {
     allow_public_bind: bool,
 
     /// Persistent data directory.
-    #[arg(long, env = "WILDBLOOM_DATA_DIR", default_value = "./data")]
-    data_dir: PathBuf,
+    #[arg(long, env = "WILDBLOOM_DATA_DIR")]
+    data_dir: Option<PathBuf>,
 
     /// Total bytes available for stored blobs.
     #[arg(
@@ -51,9 +51,37 @@ struct Cli {
     #[arg(long = "server-name", env = "WILDBLOOM_SERVER_NAME")]
     server_names: Vec<String>,
 
+    /// Nostr public key allowed to upload, mirror and delete (repeatable).
+    #[arg(
+        long = "allow-pubkey",
+        env = "WILDBLOOM_ALLOW_PUBKEYS",
+        value_delimiter = ','
+    )]
+    allowed_pubkeys: Vec<String>,
+
+    /// Accept writes from any valid Nostr public key. Unsafe on a shared quota.
+    #[arg(
+        long,
+        env = "WILDBLOOM_ALLOW_PUBLIC_WRITES",
+        conflicts_with = "allowed_pubkeys"
+    )]
+    allow_public_writes: bool,
+
+    /// Maximum simultaneous upload and mirror streams.
+    #[arg(long, env = "WILDBLOOM_MAX_CONCURRENT_WRITES", default_value_t = 4)]
+    max_concurrent_writes: usize,
+
+    /// Verify every stored blob and exit without starting the network service.
+    #[arg(long, env = "WILDBLOOM_VERIFY_STORAGE")]
+    verify_storage: bool,
+
     /// Run only on the local HTTP listener instead of starting Tor.
     #[arg(long, env = "WILDBLOOM_NO_TOR")]
     no_tor: bool,
+
+    /// Loopback socks5h proxy supplied by a desktop shell when --no-tor is set.
+    #[arg(long, env = "WILDBLOOM_MIRROR_PROXY", requires = "no_tor")]
+    mirror_proxy: Option<Url>,
 
     /// Tor executable used for the managed onion service.
     #[arg(long, env = "WILDBLOOM_TOR_BIN", default_value = "tor")]
@@ -62,6 +90,14 @@ struct Cli {
     /// Seconds allowed for Tor to bootstrap.
     #[arg(long, env = "WILDBLOOM_TOR_TIMEOUT", default_value_t = 120)]
     tor_timeout: u64,
+
+    /// Seconds between complete integrity scans and repair attempts. Zero disables repair.
+    #[arg(
+        long,
+        env = "WILDBLOOM_REPAIR_INTERVAL",
+        default_value_t = 60 * 60_u64
+    )]
+    repair_interval: u64,
 }
 
 #[tokio::main]
@@ -74,14 +110,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let cli = Cli::parse();
+    let data_dir = match cli.data_dir {
+        Some(path) => path,
+        None => default_data_dir()?,
+    };
     if !cli.bind.ip().is_loopback() && !cli.allow_public_bind {
         return Err("refusing a non-loopback bind without --allow-public-bind".into());
     }
     let store = Store::open(StoreConfig {
-        root: cli.data_dir.clone(),
+        root: data_dir.clone(),
         quota_bytes: cli.quota_bytes,
         max_blob_bytes: cli.max_blob_bytes,
     })?;
+    if cli.verify_storage {
+        let report = store.verify_integrity()?;
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        if !report.missing.is_empty() || !report.corrupted.is_empty() {
+            return Err("storage integrity verification failed".into());
+        }
+        return Ok(());
+    }
+    if cli.allowed_pubkeys.is_empty() && !cli.allow_public_writes {
+        tracing::warn!(
+            "no writer public keys are configured; the node is read-only until --allow-pubkey is supplied"
+        );
+    }
     let listener = tokio::net::TcpListener::bind(cli.bind).await?;
     let local_address = listener.local_addr()?;
     let tor = if cli.no_tor {
@@ -93,7 +146,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(
             TorService::start(
                 &cli.tor_bin,
-                &cli.data_dir.join("tor"),
+                &data_dir.join("tor"),
                 local_address,
                 std::time::Duration::from_secs(cli.tor_timeout),
             )
@@ -116,16 +169,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         cli.server_names
     };
-    let mirror_proxy = tor.as_ref().map(|service| {
-        Url::parse(&format!("socks5h://{}", service.socks_address()))
-            .expect("managed Tor SOCKS URL is valid")
-    });
+    let mirror_proxy = tor
+        .as_ref()
+        .map(|service| {
+            Url::parse(&format!("socks5h://{}", service.socks_address()))
+                .expect("managed Tor SOCKS URL is valid")
+        })
+        .or(cli.mirror_proxy);
+    let repair_enabled = mirror_proxy.is_some() && cli.repair_interval > 0;
 
     let state = AppState::new(
         store,
         BlossomConfig {
             public_base_url: public_url.clone(),
             accepted_server_names: server_names.clone(),
+            allowed_pubkeys: cli.allowed_pubkeys,
+            allow_public_writes: cli.allow_public_writes,
+            max_concurrent_writes: cli.max_concurrent_writes,
             mirror_proxy,
         },
     )?;
@@ -135,6 +195,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         server_names = ?server_names,
         "Wildbloom Node is ready"
     );
+    if repair_enabled {
+        tokio::spawn(repair_loop(
+            state.clone(),
+            std::time::Duration::from_secs(cli.repair_interval),
+        ));
+    }
     axum::serve(listener, router(state))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
@@ -142,6 +208,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tor.shutdown().await;
     }
     Ok(())
+}
+
+async fn repair_loop(state: AppState, interval: std::time::Duration) {
+    let mut timer = tokio::time::interval(interval);
+    timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        timer.tick().await;
+        match state.repair_once().await {
+            Ok(report) if report.candidates == 0 => {
+                tracing::debug!("storage integrity scan found no repair candidates");
+            }
+            Ok(report) => {
+                tracing::info!(
+                    candidates = report.candidates,
+                    repaired = report.repaired,
+                    unrepaired = report.unrepaired.len(),
+                    "storage integrity scan completed"
+                );
+            }
+            Err(error) => {
+                tracing::error!(reason = %error, "storage integrity scan failed");
+            }
+        }
+    }
 }
 
 fn validate_public_url(url: &Url) -> Result<(), Box<dyn std::error::Error>> {
@@ -160,6 +250,12 @@ fn validate_public_url(url: &Url) -> Result<(), Box<dyn std::error::Error>> {
 
 fn url_server_name(url: &Url) -> Result<String, Box<dyn std::error::Error>> {
     Ok(url.host_str().ok_or("public URL has no host")?.to_owned())
+}
+
+fn default_data_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    directories::ProjectDirs::from("dev", "ForgeSworn", "Wildbloom Node")
+        .map(|directories| directories.data_local_dir().to_owned())
+        .ok_or_else(|| "this platform does not expose a per-user application data directory".into())
 }
 
 async fn shutdown_signal() {

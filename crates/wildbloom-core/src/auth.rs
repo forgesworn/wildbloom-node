@@ -11,6 +11,8 @@ const MAX_CONTENT_BYTES: usize = 1024;
 #[derive(Debug, Clone)]
 pub struct AuthPolicy {
     accepted_servers: BTreeSet<String>,
+    allowed_pubkeys: BTreeSet<String>,
+    allow_public_writes: bool,
     max_event_lifetime: Duration,
     future_clock_skew: Duration,
 }
@@ -32,6 +34,8 @@ pub enum AuthError {
     InvalidEvent,
     #[error("invalid Nostr authorisation signature")]
     InvalidSignature,
+    #[error("the signing public key is not allowed to write to this node")]
+    PubkeyNotAllowed,
     #[error("authorisation event must be kind 24242")]
     WrongKind,
     #[error("authorisation event is from the future")]
@@ -75,9 +79,29 @@ impl AuthPolicy {
                 .map(Into::into)
                 .map(|server| server.to_ascii_lowercase())
                 .collect(),
+            allowed_pubkeys: BTreeSet::new(),
+            allow_public_writes: false,
             max_event_lifetime: Duration::from_secs(5 * 60),
             future_clock_skew: Duration::from_secs(30),
         }
+    }
+
+    pub fn with_allowed_pubkeys<I, S>(mut self, pubkeys: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.allowed_pubkeys = pubkeys
+            .into_iter()
+            .map(Into::into)
+            .map(|pubkey| pubkey.to_ascii_lowercase())
+            .collect();
+        self
+    }
+
+    pub fn with_public_writes(mut self, allowed: bool) -> Self {
+        self.allow_public_writes = allowed;
+        self
     }
 
     pub fn with_max_event_lifetime(mut self, lifetime: Duration) -> Self {
@@ -89,6 +113,25 @@ impl AuthPolicy {
         &self,
         authorization: Option<&str>,
         expected_hash: &str,
+        now: u64,
+    ) -> Result<VerifiedUpload, AuthError> {
+        self.verify_operation(authorization, expected_hash, "upload", now)
+    }
+
+    pub fn verify_delete(
+        &self,
+        authorization: Option<&str>,
+        expected_hash: &str,
+        now: u64,
+    ) -> Result<VerifiedUpload, AuthError> {
+        self.verify_operation(authorization, expected_hash, "delete", now)
+    }
+
+    fn verify_operation(
+        &self,
+        authorization: Option<&str>,
+        expected_hash: &str,
+        expected_verb: &str,
         now: u64,
     ) -> Result<VerifiedUpload, AuthError> {
         let authorization = authorization.ok_or(AuthError::Missing)?;
@@ -112,6 +155,10 @@ impl AuthPolicy {
         let event: Event = serde_json::from_slice(&bytes).map_err(|_| AuthError::InvalidEvent)?;
         event.verify().map_err(|_| AuthError::InvalidSignature)?;
 
+        if !self.allow_public_writes && !self.allowed_pubkeys.contains(&raw.pubkey) {
+            return Err(AuthError::PubkeyNotAllowed);
+        }
+
         if raw.kind != BLOSSOM_AUTH_KIND {
             return Err(AuthError::WrongKind);
         }
@@ -120,7 +167,7 @@ impl AuthPolicy {
         }
 
         let verb = unique_singleton_tag(&raw.tags, "t")?;
-        if verb != "upload" {
+        if verb != expected_verb {
             return Err(AuthError::WrongVerb);
         }
         let hashes = scoped_tags(&raw.tags, "x")?;
@@ -244,11 +291,15 @@ mod tests {
         ]
     }
 
+    fn public_policy() -> AuthPolicy {
+        AuthPolicy::new(["node.example"]).with_public_writes(true)
+    }
+
     #[test]
     fn accepts_a_valid_exactly_scoped_upload() {
         let hash = "a".repeat(64);
         let auth = header(valid_tags(&hash, 1_120), 1_000);
-        let verified = AuthPolicy::new(["node.example"])
+        let verified = public_policy()
             .verify_upload(Some(&auth), &hash, 1_010)
             .unwrap();
         assert_eq!(verified.expires_at, 1_120);
@@ -258,7 +309,7 @@ mod tests {
     #[test]
     fn rejects_wrong_hash_server_and_verb() {
         let hash = "a".repeat(64);
-        let policy = AuthPolicy::new(["node.example"]);
+        let policy = public_policy();
 
         let wrong_hash = header(valid_tags(&"b".repeat(64), 1_120), 1_000);
         assert_eq!(
@@ -284,7 +335,7 @@ mod tests {
     #[test]
     fn rejects_expired_long_lived_and_ambiguous_singleton_events() {
         let hash = "a".repeat(64);
-        let policy = AuthPolicy::new(["node.example"]);
+        let policy = public_policy();
 
         let expired = header(valid_tags(&hash, 1_009), 1_000);
         assert_eq!(
@@ -313,7 +364,7 @@ mod tests {
         tags.push(vec!["server".into(), "second.example".into()]);
         tags.push(vec!["x".into(), "b".repeat(64)]);
         assert!(
-            AuthPolicy::new(["node.example"])
+            public_policy()
                 .verify_upload(Some(&header(tags, 1_000)), &hash, 1_010)
                 .is_ok()
         );
@@ -332,7 +383,7 @@ mod tests {
             URL_SAFE_NO_PAD.encode(serde_json::to_vec(&event).unwrap())
         );
         assert_eq!(
-            AuthPolicy::new(["node.example"]).verify_upload(Some(&tampered), &hash, 1_010),
+            public_policy().verify_upload(Some(&tampered), &hash, 1_010),
             Err(AuthError::InvalidSignature)
         );
     }
@@ -342,8 +393,47 @@ mod tests {
         let hash = "a".repeat(64);
         let auth = header_with_content(valid_tags(&hash, 1_120), 1_000, "   ");
         assert_eq!(
-            AuthPolicy::new(["node.example"]).verify_upload(Some(&auth), &hash, 1_010),
+            public_policy().verify_upload(Some(&auth), &hash, 1_010),
             Err(AuthError::InvalidEvent)
+        );
+    }
+
+    #[test]
+    fn defaults_to_deny_and_accepts_only_configured_writers() {
+        let hash = "a".repeat(64);
+        let auth = header(valid_tags(&hash, 1_120), 1_000);
+        let encoded = auth.strip_prefix("Nostr ").unwrap();
+        let event: RawEvent =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(encoded).unwrap()).unwrap();
+
+        assert_eq!(
+            AuthPolicy::new(["node.example"]).verify_upload(Some(&auth), &hash, 1_010),
+            Err(AuthError::PubkeyNotAllowed)
+        );
+        assert!(
+            AuthPolicy::new(["node.example"])
+                .with_allowed_pubkeys([event.pubkey])
+                .verify_upload(Some(&auth), &hash, 1_010)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn delete_requires_the_delete_verb() {
+        let hash = "a".repeat(64);
+        let upload = header(valid_tags(&hash, 1_120), 1_000);
+        let mut delete_tags = valid_tags(&hash, 1_120);
+        delete_tags[0][1] = "delete".into();
+        let delete = header(delete_tags, 1_000);
+
+        assert_eq!(
+            public_policy().verify_delete(Some(&upload), &hash, 1_010),
+            Err(AuthError::WrongVerb)
+        );
+        assert!(
+            public_policy()
+                .verify_delete(Some(&delete), &hash, 1_010)
+                .is_ok()
         );
     }
 }

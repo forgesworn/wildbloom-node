@@ -31,8 +31,13 @@
   origin name resolution and transfer happens through Tor via a loopback-only
   `socks5h` listener, keeping private-network names away from the host resolver.
 - On Unix, node state, temporary files, database files and onion keys are mode
-  `0700` or `0600`.  Windows relies on the user's directory ACL; installer ACL
-  hardening remains work.
+  `0700` or `0600`.  Windows uses the current user's application-data directory
+  and its inherited ACL.  Clean-machine installer review remains a release gate.
+- A default node accepts no writes.  Operators must allow one or more exact
+  lower-case hexadecimal Nostr public keys or deliberately enable public writes.
+- Upload and mirror concurrency is bounded.  Complete integrity scans hash the
+  bytes on disk, and repair accepts only the exact length and SHA-256 from a
+  previously verified hash-addressed source.
 
 ## What this does not prove
 
@@ -46,8 +51,10 @@
   and retrieval do not depend on a relay once endpoints are known.
 - Server-side encryption is not supplied.  Applications such as Wildbloom must
   encrypt before upload when confidentiality matters.
-- There is not yet automatic replica counting, challenge/audit or repair after
-  a node disappears.
+- There is no automatic replica discovery, replica counting or remote custody
+  challenge.  Local repair works only while a previously recorded source is
+  reachable.  It cannot repair the last remaining copy after that source is
+  gone.
 
 ## Operator responsibilities
 

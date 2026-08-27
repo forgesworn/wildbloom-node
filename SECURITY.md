@@ -1,8 +1,8 @@
 # Security policy
 
-Wildbloom Node is alpha software and has not received an independent security
-audit.  Do not expose valuable unencrypted material until you have reviewed the
-current limitations.
+Wildbloom Node is a production candidate and has not received an independent
+security audit.  Do not expose valuable unencrypted material until you have
+reviewed the current limitations.
 
 Please report vulnerabilities through GitHub's private vulnerability reporting
 for `forgesworn/wildbloom-node`.  If that is unavailable, contact the maintainer
@@ -13,6 +13,5 @@ as soon as practical and coordinate disclosure after a fix is available.
 Never include real Nostr secret keys, Tor onion private keys, access tokens or
 private blobs in a report.
 
-Only the latest `main` revision is currently supported.  There are no stable
-release branches yet.
-
+Only the latest signed release and the latest `main` revision are supported.
+Unsigned preview installers are test artefacts, not supported releases.

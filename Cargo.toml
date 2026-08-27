@@ -3,7 +3,7 @@ members = ["crates/wildbloom-core", "crates/wildbloomd"]
 resolver = "3"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -14,6 +14,7 @@ repository = "https://github.com/forgesworn/wildbloom-node"
 axum = "0.8.9"
 base64 = "0.22.1"
 clap = { version = "4.5.51", features = ["derive", "env"] }
+directories = "6.0.0"
 futures-util = "0.3.31"
 fs2 = "0.4.3"
 hex = "0.4.3"

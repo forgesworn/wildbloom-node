@@ -1,0 +1,82 @@
+name: Desktop preview installers
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TOR_EXPERT_BUNDLE_VERSION: 15.0.20
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Linux x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            tor: linux-x86_64
+          - label: macOS Apple Silicon
+            os: macos-latest
+            target: aarch64-apple-darwin
+            tor: macos-aarch64
+          - label: macOS Intel
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            tor: macos-x86_64
+          - label: Windows x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            tor: windows-x86_64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: 1.94.1
+          targets: ${{ matrix.target }}
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: >-
+          sudo apt-get update && sudo apt-get install --yes
+          gnupg libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: Install macOS signature verification tools
+        if: runner.os == 'macOS'
+        run: brew install gnupg
+      - name: Install Windows signature verification tools
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: choco install gnupg --yes --no-progress
+      - name: Prepare signed upstream Tor runtime and daemon
+        shell: bash
+        run: |
+          set -euo pipefail
+          scripts/prepare-tor-runtime.sh "${{ matrix.tor }}" desktop/src-tauri/tor-runtime
+          cargo build --locked --release --target "${{ matrix.target }}" -p wildbloomd
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp "target/${{ matrix.target }}/release/wildbloomd.exe" \
+              "desktop/src-tauri/binaries/wildbloomd-${{ matrix.target }}.exe"
+          else
+            cp "target/${{ matrix.target }}/release/wildbloomd" \
+              "desktop/src-tauri/binaries/wildbloomd-${{ matrix.target }}"
+          fi
+      - name: Ad-hoc sign nested macOS Tor code for preview execution
+        if: runner.os == 'macOS'
+        run: scripts/sign-macos-tor-runtime.sh - desktop/src-tauri/tor-runtime
+      - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: desktop/src-tauri
+          args: --target ${{ matrix.target }}
+      - name: Upload unsigned preview installers
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: wildbloom-node-${{ matrix.target }}-unsigned-preview
+          path: desktop/src-tauri/target/${{ matrix.target }}/release/bundle
+          if-no-files-found: error

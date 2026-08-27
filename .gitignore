@@ -1,6 +1,6 @@
-/target/
+target/
+desktop/src-tauri/gen/
 /.idea/
 /.DS_Store
 /data/
 *.log
-

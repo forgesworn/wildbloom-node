@@ -4,5 +4,8 @@ pub mod auth;
 pub mod blossom;
 pub mod store;
 
-pub use blossom::{AppState, BlossomConfig, BlossomConfigError, router};
-pub use store::{BlobMetadata, Store, StoreConfig, StoreError};
+pub use blossom::{AppState, BlossomConfig, BlossomConfigError, RepairError, RepairReport, router};
+pub use store::{
+    BlobMetadata, DeleteOutcome, IntegrityReport, RepairCandidate, RepairReservation, Store,
+    StoreConfig, StoreError,
+};
