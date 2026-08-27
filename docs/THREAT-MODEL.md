@@ -18,6 +18,9 @@
   Linux it replaces Tor's child-process `LD_LIBRARY_PATH` with that exact bundle
   directory, so the packaged `libevent` is found without inheriting an
   operator-supplied library search path.
+- Linux gives the bundled daemon a kernel parent-death signal and checks the
+  parent PID immediately after registering it.  A killed desktop must not leave
+  a writable storage process running without its controlling UI.
 - Uploads require a valid Nostr signature scoped to `upload`, the exact SHA-256,
   one accepted server name and an expiry no more than five minutes after event
   creation.

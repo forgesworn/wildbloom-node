@@ -405,6 +405,11 @@ async fn start_node_sidecar(
         arguments.push("--allow-pubkey".into());
         arguments.push(pubkey.into());
     }
+    #[cfg(target_os = "linux")]
+    {
+        arguments.push("--parent-pid".into());
+        arguments.push(std::process::id().to_string().into());
+    }
     let (mut events, node_child) = app
         .shell()
         .sidecar("wildbloomd")

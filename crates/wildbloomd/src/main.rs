@@ -98,6 +98,11 @@ struct Cli {
         default_value_t = 60 * 60_u64
     )]
     repair_interval: u64,
+
+    /// Desktop parent whose termination must also stop this sidecar.
+    #[cfg(target_os = "linux")]
+    #[arg(long, hide = true)]
+    parent_pid: Option<u32>,
 }
 
 #[tokio::main]
@@ -110,6 +115,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let cli = Cli::parse();
+    #[cfg(target_os = "linux")]
+    configure_parent_death(cli.parent_pid)?;
     let data_dir = match cli.data_dir {
         Some(path) => path,
         None => default_data_dir()?,
@@ -210,6 +217,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+fn configure_parent_death(parent_pid: Option<u32>) -> std::io::Result<()> {
+    let Some(parent_pid) = parent_pid else {
+        return Ok(());
+    };
+
+    // SAFETY: PR_SET_PDEATHSIG only updates this process's kernel metadata and
+    // SIGTERM is a valid signal number. No pointer is passed to the kernel.
+    if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    // The parent can exit between exec and prctl. In that case the kernel could
+    // not deliver the signal retroactively, so fail closed after installing it.
+    // SAFETY: getppid has no preconditions and returns the caller's parent PID.
+    if unsafe { libc::getppid() } as u32 != parent_pid {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "the requested desktop parent is no longer running",
+        ));
+    }
+    Ok(())
+}
+
 async fn repair_loop(state: AppState, interval: std::time::Duration) {
     let mut timer = tokio::time::interval(interval);
     timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -290,5 +321,12 @@ mod tests {
     fn bud_server_scope_uses_the_hostname_without_the_port() {
         let url = Url::parse("http://localhost:3742/").unwrap();
         assert_eq!(url_server_name(&url).unwrap(), "localhost");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn parses_the_hidden_desktop_parent_contract() {
+        let cli = Cli::try_parse_from(["wildbloomd", "--parent-pid", "1234"]).unwrap();
+        assert_eq!(cli.parent_pid, Some(1234));
     }
 }
