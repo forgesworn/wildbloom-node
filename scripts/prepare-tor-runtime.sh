@@ -10,6 +10,9 @@ platform="$1"
 destination="$2"
 version="${TOR_EXPERT_BUNDLE_VERSION:-15.0.20}"
 fingerprint="EF6E286DDA85EA2A4BA7DE684E2C6E8793298290"
+gpg_bin="${WILDBLOOM_GPG_BIN:-gpg}"
+gpgv_bin="${WILDBLOOM_GPGV_BIN:-gpgv}"
+gpg_path_style="${WILDBLOOM_GPG_PATH_STYLE:-posix}"
 
 case "$platform" in
   linux-x86_64|macos-aarch64|macos-x86_64|windows-x86_64) ;;
@@ -26,10 +29,28 @@ fi
 
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/wildbloom-tor.XXXXXX")"
 trap 'rm -rf -- "$work_dir"' EXIT
+gnupg_home="$work_dir/gnupg"
 archive="tor-expert-bundle-${platform}-${version}.tar.gz"
 base_url="https://dist.torproject.org/torbrowser/${version}"
 
-mkdir -p "$destination"
+mkdir -p "$destination" "$gnupg_home"
+chmod 700 "$gnupg_home"
+gpg_path() {
+  local native_path drive_letter
+  case "$gpg_path_style" in
+    posix) printf '%s\n' "$1" ;;
+    windows)
+      native_path="$(cygpath -m "$1")"
+      drive_letter="$(printf '%s' "${native_path%%:*}" | tr '[:upper:]' '[:lower:]')"
+      printf '/%s%s\n' "$drive_letter" "${native_path#*:}"
+      ;;
+    *)
+      echo "unsupported GnuPG path style: $gpg_path_style" >&2
+      exit 64
+      ;;
+  esac
+}
+gpg_home_arg="$(gpg_path "$gnupg_home")"
 download() {
   curl --proto '=https' --tlsv1.2 --location --fail --silent --show-error \
     --retry 10 --retry-all-errors --retry-delay 2 "$1" --output "$2"
@@ -41,7 +62,8 @@ download "https://keys.openpgp.org/vks/v1/by-fingerprint/$fingerprint" \
   "$work_dir/tor-browser-developers.asc"
 
 actual_fingerprint="$(
-  gpg --batch --show-keys --with-colons "$work_dir/tor-browser-developers.asc" \
+  "$gpg_bin" --homedir "$gpg_home_arg" --batch --show-keys --with-colons \
+    "$(gpg_path "$work_dir/tor-browser-developers.asc")" \
     | awk -F: '$1 == "fpr" { print $10; exit }'
 )"
 if [ "$actual_fingerprint" != "$fingerprint" ]; then
@@ -49,10 +71,16 @@ if [ "$actual_fingerprint" != "$fingerprint" ]; then
   exit 66
 fi
 
-gpg --batch --no-default-keyring --keyring "$work_dir/tor-browser-keyring.gpg" \
-  --import "$work_dir/tor-browser-developers.asc" >/dev/null
-gpgv --keyring "$work_dir/tor-browser-keyring.gpg" \
-  "$work_dir/$archive.asc" "$work_dir/$archive"
+# GnuPG 2.5 enables keyboxd by default and ignores --keyring during imports.
+# gpgv accepts a dearmoured OpenPGP keyring directly, which also keeps this
+# verification isolated from the runner's user keyring.
+"$gpg_bin" --homedir "$gpg_home_arg" --batch --yes --dearmor \
+  --output "$(gpg_path "$work_dir/tor-browser-keyring.gpg")" \
+  "$(gpg_path "$work_dir/tor-browser-developers.asc")"
+"$gpgv_bin" --homedir "$gpg_home_arg" \
+  --keyring "$(gpg_path "$work_dir/tor-browser-keyring.gpg")" \
+  "$(gpg_path "$work_dir/$archive.asc")" \
+  "$(gpg_path "$work_dir/$archive")"
 
 tar -xzf "$work_dir/$archive" -C "$destination"
 test -f "$destination/data/geoip"

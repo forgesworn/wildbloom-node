@@ -27,18 +27,22 @@ jobs:
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             tor: linux-x86_64
+            bundles: deb,rpm
           - label: macOS Apple Silicon
             os: macos-latest
             target: aarch64-apple-darwin
             tor: macos-aarch64
+            bundles: app,dmg
           - label: macOS Intel
             os: macos-15-intel
             target: x86_64-apple-darwin
             tor: macos-x86_64
+            bundles: app,dmg
           - label: Windows x64
             os: windows-latest
             target: x86_64-pc-windows-msvc
             tor: windows-x86_64
+            bundles: nsis,msi
     env:
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -83,14 +87,21 @@ jobs:
         if: runner.os == 'Linux'
         run: >-
           sudo apt-get update && sudo apt-get install --yes
-          gnupg libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+          gnupg minisign libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - name: Install macOS signature verification tools
         if: runner.os == 'macOS'
         run: brew install gnupg
-      - name: Install Windows signature verification tools
+      - name: Use Windows runner signature verification tools
         if: runner.os == 'Windows'
-        shell: powershell
-        run: choco install gnupg --yes --no-progress
+        shell: bash
+        run: |
+          test -x /c/msys64/usr/bin/gpg.exe
+          test -x /c/msys64/usr/bin/gpgv.exe
+          printf '%s\n' \
+            'WILDBLOOM_GPG_BIN=/c/msys64/usr/bin/gpg.exe' \
+            'WILDBLOOM_GPGV_BIN=/c/msys64/usr/bin/gpgv.exe' \
+            'WILDBLOOM_GPG_PATH_STYLE=windows' \
+            >> "$GITHUB_ENV"
       - name: Import Developer ID certificate for nested macOS code
         if: runner.os == 'macOS'
         shell: bash
@@ -145,7 +156,7 @@ jobs:
               '{bundle:{createUpdaterArtifacts:true,windows:{certificateThumbprint:$thumbprint,digestAlgorithm:"sha256",timestampUrl:$timestamp,tsp:false}}}' \
               > desktop/src-tauri/tauri.production.conf.json
           else
-            jq -n '{bundle:{createUpdaterArtifacts:true}}' \
+            jq -n '{bundle:{createUpdaterArtifacts:false}}' \
               > desktop/src-tauri/tauri.production.conf.json
           fi
       - name: Sign nested macOS Tor code with Developer ID
@@ -161,9 +172,27 @@ jobs:
           releaseBody: Signed release candidate.  Keep this release in draft until the clean-machine gate in docs/RELEASE.md is complete.
           releaseDraft: true
           prerelease: false
-          includeUpdaterJson: true
-          args: --target ${{ matrix.target }} --config tauri.production.conf.json
+          includeUpdaterJson: ${{ runner.os != 'Linux' }}
+          args: --verbose --bundles ${{ matrix.bundles }} --target ${{ matrix.target }} --config tauri.production.conf.json
+      - name: Sign and verify Linux release packages
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          public_key="$RUNNER_TEMP/wildbloom-updater.pub"
+          jq -r '.plugins.updater.pubkey' desktop/src-tauri/tauri.conf.json | base64 --decode > "$public_key"
+          mapfile -d '' packages < <(
+            find "desktop/src-tauri/target/${{ matrix.target }}/release/bundle" -type f \
+              \( -name '*.deb' -o -name '*.rpm' \) -print0
+          )
+          test "${#packages[@]}" -eq 2
+          for package in "${packages[@]}"; do
+            cargo tauri signer sign "$package"
+            minisign -Vm "$package" -p "$public_key" -x "$package.sig"
+          done
+          gh release upload "v${{ inputs.version }}" "${packages[0]}.sig" "${packages[1]}.sig" --clobber
       - name: Verify updater signatures were emitted
+        if: runner.os != 'Linux'
         shell: bash
         run: |
           set -euo pipefail
