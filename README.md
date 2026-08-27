@@ -56,6 +56,11 @@ strangers willing to hold data.  Repair can restore a damaged local copy only
 when the node already recorded a verified source which is still online.  Those
 boundaries are documented in the [roadmap](docs/ROADMAP.md).
 
+The next storage revision will prefer the operator's files, then explicitly
+invited friends, while using spare capacity for signed guest mirrors with no
+retention promise.  That policy is specified, but not yet implemented, in the
+[storage priority contract](docs/STORAGE-POLICY.md).
+
 ## Install and run
 
 The desktop application is the intended consumer install.  Until signed
