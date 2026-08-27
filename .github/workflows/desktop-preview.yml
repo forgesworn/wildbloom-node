@@ -57,6 +57,7 @@ jobs:
           printf '%s\n' \
             'WILDBLOOM_GPG_BIN=/c/msys64/usr/bin/gpg.exe' \
             'WILDBLOOM_GPGV_BIN=/c/msys64/usr/bin/gpgv.exe' \
+            'WILDBLOOM_GPG_PATH_STYLE=windows' \
             >> "$GITHUB_ENV"
       - name: Prepare signed upstream Tor runtime and daemon
         shell: bash
