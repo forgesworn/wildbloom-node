@@ -93,7 +93,10 @@ jobs:
         run: |
           test -x /c/msys64/usr/bin/gpg.exe
           test -x /c/msys64/usr/bin/gpgv.exe
-          printf '%s\n' 'C:\msys64\usr\bin' >> "$GITHUB_PATH"
+          printf '%s\n' \
+            'WILDBLOOM_GPG_BIN=/c/msys64/usr/bin/gpg.exe' \
+            'WILDBLOOM_GPGV_BIN=/c/msys64/usr/bin/gpgv.exe' \
+            >> "$GITHUB_ENV"
       - name: Import Developer ID certificate for nested macOS code
         if: runner.os == 'macOS'
         shell: bash
