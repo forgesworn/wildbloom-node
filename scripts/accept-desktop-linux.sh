@@ -42,6 +42,14 @@ trap cleanup EXIT
 sudo apt-get install --yes "$package_path"
 executable="$(command -v wildbloom-desktop)"
 test -x "$executable"
+tor_binary="/usr/lib/$(basename "$executable")/tor-runtime/tor/tor"
+test -x "$tor_binary"
+"$tor_binary" --version | grep -Eq '^Tor version [0-9]+\.'
+if ldd "$tor_binary" | grep -q 'not found'; then
+  echo "the packaged Tor runtime has an unresolved shared library" >&2
+  ldd "$tor_binary" >&2
+  exit 1
+fi
 
 Xvfb :99 -screen 0 1280x800x24 -nolisten tcp >"$runtime_root/xvfb.log" 2>&1 &
 xvfb_pid="$!"
@@ -59,6 +67,7 @@ app_pid="$!"
 hostname_path=""
 database_path=""
 node_port=""
+ready=0
 for _ in $(seq 1 360); do
   if ! kill -0 "$app_pid" 2>/dev/null; then
     echo "the installed desktop process stopped before it became ready" >&2
@@ -80,11 +89,23 @@ for _ in $(seq 1 360); do
       && health="$(curl --fail --silent --max-time 2 "http://127.0.0.1:$node_port/healthz" 2>/dev/null)" \
       && jq -e '.storage.blobs == 0 and .storage.bytes == 0 and .storage.quota_bytes == 10737418240' \
         >/dev/null <<<"$health"; then
+      ready=1
       break
     fi
   fi
   sleep 1
 done
+
+if [ "$ready" != "1" ]; then
+  echo "the installed Linux desktop did not reach Tor and Blossom readiness" >&2
+  printf 'hostname-file=%s database-file=%s node-port=%s\n' \
+    "$([ -n "$hostname_path" ] && printf present || printf absent)" \
+    "$([ -n "$database_path" ] && printf present || printf absent)" \
+    "$([ -n "$node_port" ] && printf present || printf absent)" >&2
+  sed -n '1,200p' "$runtime_root/app.stdout.log" >&2
+  sed -n '1,200p' "$runtime_root/app.stderr.log" >&2
+  exit 1
+fi
 
 test -n "$hostname_path"
 test -n "$database_path"

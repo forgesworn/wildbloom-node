@@ -18,9 +18,7 @@ if (-not $installer) {
 
 $installRoot = Join-Path $env:RUNNER_TEMP "wildbloom-node-install"
 $runtimeRoot = Join-Path $env:RUNNER_TEMP "wildbloom-node-runtime"
-$runtimeLocal = Join-Path $runtimeRoot "local"
-$runtimeRoaming = Join-Path $runtimeRoot "roaming"
-New-Item -ItemType Directory -Force -Path $installRoot, $runtimeLocal, $runtimeRoaming | Out-Null
+New-Item -ItemType Directory -Force -Path $installRoot, $runtimeRoot | Out-Null
 
 $install = Start-Process -FilePath $installer.FullName -ArgumentList @("/S", "/D=$installRoot") -Wait -PassThru
 if ($install.ExitCode -ne 0) {
@@ -34,8 +32,17 @@ if (-not $application) {
     throw "the installed Wildbloom desktop executable is missing"
 }
 
-$env:LOCALAPPDATA = $runtimeLocal
-$env:APPDATA = $runtimeRoaming
+$torBinary = Join-Path $application.DirectoryName "tor-runtime\tor\tor.exe"
+if (-not (Test-Path $torBinary -PathType Leaf)) {
+    throw "the installed Tor executable is missing"
+}
+$torVersion = & $torBinary --version
+$torVersionText = $torVersion -join "`n"
+if ($LASTEXITCODE -ne 0 -or $torVersionText -notmatch "^Tor version [0-9]+\.") {
+    throw "the installed Tor executable did not report a valid version"
+}
+
+$applicationData = Join-Path $env:LOCALAPPDATA "dev.forgesworn.wildbloom-node"
 $stdout = Join-Path $runtimeRoot "app.stdout.log"
 $stderr = Join-Path $runtimeRoot "app.stderr.log"
 $applicationProcess = Start-Process -FilePath $application.FullName -PassThru `
@@ -55,13 +62,13 @@ try {
             throw "the installed desktop process stopped before readiness: $errorOutput"
         }
 
-        $hostnamePath = Get-ChildItem -Path $runtimeRoot -Recurse -File -Filter "hostname" -ErrorAction SilentlyContinue |
+        $hostnamePath = Get-ChildItem -Path $applicationData -Recurse -File -Filter "hostname" -ErrorAction SilentlyContinue |
             Where-Object { $_.FullName -match "tor[\\/]onion-service[\\/]hostname$" } |
             Select-Object -First 1
-        $databasePath = Get-ChildItem -Path $runtimeRoot -Recurse -File -Filter "wildbloom.sqlite3" -ErrorAction SilentlyContinue |
+        $databasePath = Get-ChildItem -Path $applicationData -Recurse -File -Filter "wildbloom.sqlite3" -ErrorAction SilentlyContinue |
             Select-Object -First 1
         $nodeProcess = Get-CimInstance Win32_Process -Filter "Name = 'wildbloomd.exe'" |
-            Where-Object { $_.CommandLine -and $_.CommandLine.Contains($runtimeRoot) } |
+            Where-Object { $_.ParentProcessId -eq $applicationProcess.Id } |
             Select-Object -First 1
 
         if ($nodeProcess -and $nodeProcess.CommandLine -match "--bind\s+127\.0\.0\.1:(\d+)") {
@@ -109,10 +116,7 @@ try {
     Start-Sleep -Seconds 3
 
     $remainingChildren = Get-CimInstance Win32_Process |
-        Where-Object {
-            $_.CommandLine -and $_.CommandLine.Contains($runtimeRoot) -and
-            ($_.Name -eq "wildbloomd.exe" -or $_.Name -eq "tor.exe")
-        }
+        Where-Object { $_.ParentProcessId -eq $applicationProcess.Id }
     if ($remainingChildren) {
         throw "a bundled Tor or Wildbloom child remained after the desktop process tree stopped"
     }
@@ -129,6 +133,17 @@ try {
     if (Test-Path $application.FullName) {
         throw "the desktop executable remained after uninstall"
     }
+}
+catch {
+    if (Test-Path $stdout) {
+        Get-Content -Path $stdout -ErrorAction SilentlyContinue | Select-Object -First 200 |
+            ForEach-Object { [Console]::Error.WriteLine($_) }
+    }
+    if (Test-Path $stderr) {
+        Get-Content -Path $stderr -ErrorAction SilentlyContinue | Select-Object -First 200 |
+            ForEach-Object { [Console]::Error.WriteLine($_) }
+    }
+    throw
 }
 finally {
     if (-not $applicationProcess.HasExited) {
