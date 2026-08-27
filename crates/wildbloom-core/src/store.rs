@@ -103,7 +103,7 @@ impl Store {
             .open(&lock_path)?;
         set_private_file_permissions(&lock_path)?;
         fs2::FileExt::try_lock_exclusive(&lock).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::WouldBlock {
+            if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() {
                 StoreError::AlreadyOpen
             } else {
                 StoreError::Io(error)
