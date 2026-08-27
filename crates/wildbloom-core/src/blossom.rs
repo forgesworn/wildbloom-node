@@ -1,5 +1,6 @@
 use crate::{
     auth::{AuthError, AuthPolicy},
+    fetch::{BlobFetcher, FetchConfigError, FetchError, FetchRequest, FetchedBlob, TorHttpFetcher},
     store::{
         BlobMetadata, DeleteOutcome, RepairCandidate, Store, StoreError, StoreStats, UploadStart,
     },
@@ -51,7 +52,9 @@ pub struct BlossomConfig {
     pub allow_public_writes: bool,
     /// Upper bound for simultaneous upload and mirror streams.
     pub max_concurrent_writes: usize,
-    /// A loopback `socks5h://` proxy enables onion-only BUD-04 mirroring.
+    /// A loopback `socks5h://` proxy enables BUD-04 mirroring and repair
+    /// through Tor.  `None` leaves mirroring disabled unless the shell
+    /// supplies another transport through [`AppState::with_fetcher`].
     pub mirror_proxy: Option<Url>,
 }
 
@@ -64,7 +67,7 @@ struct InnerState {
     store: Store,
     public_base_url: Url,
     auth: AuthPolicy,
-    mirror_client: Option<reqwest::Client>,
+    fetcher: Option<Arc<dyn BlobFetcher>>,
     write_slots: Arc<Semaphore>,
 }
 
@@ -74,10 +77,10 @@ pub enum BlossomConfigError {
     InvalidWriterPubkey,
     #[error("maximum concurrent writes must be greater than zero")]
     InvalidConcurrentWriteLimit,
-    #[error("mirror proxy must be a loopback socks5h URL")]
-    UnsafeMirrorProxy,
-    #[error("failed to configure the mirror client: {0}")]
-    MirrorClient(#[from] reqwest::Error),
+    #[error(transparent)]
+    Fetcher(#[from] FetchConfigError),
+    #[error("a mirror proxy and an explicit fetcher cannot both be configured")]
+    ConflictingFetcher,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -147,7 +150,37 @@ struct ErrorBody {
 }
 
 impl AppState {
+    /// Builds the default node: BUD-04 mirroring and repair travel through
+    /// Tor when `config.mirror_proxy` is set and are disabled otherwise.
     pub fn new(store: Store, config: BlossomConfig) -> Result<Self, BlossomConfigError> {
+        let fetcher = match config.mirror_proxy.clone() {
+            Some(proxy) => Some(Arc::new(TorHttpFetcher::new(proxy)?) as Arc<dyn BlobFetcher>),
+            None => None,
+        };
+        Self::build(store, config, fetcher)
+    }
+
+    /// Runs the same router and store over an explicit transport adapter.
+    ///
+    /// A node has exactly one fetch path, chosen by its shell, so
+    /// `config.mirror_proxy` must be `None` here.  The fetcher only carries
+    /// bytes: authorisation, hashing, quota and retention stay in this core.
+    pub fn with_fetcher(
+        store: Store,
+        config: BlossomConfig,
+        fetcher: Arc<dyn BlobFetcher>,
+    ) -> Result<Self, BlossomConfigError> {
+        if config.mirror_proxy.is_some() {
+            return Err(BlossomConfigError::ConflictingFetcher);
+        }
+        Self::build(store, config, Some(fetcher))
+    }
+
+    fn build(
+        store: Store,
+        config: BlossomConfig,
+        fetcher: Option<Arc<dyn BlobFetcher>>,
+    ) -> Result<Self, BlossomConfigError> {
         if config
             .allowed_pubkeys
             .iter()
@@ -161,13 +194,12 @@ impl AppState {
         let auth = AuthPolicy::new(config.accepted_server_names)
             .with_allowed_pubkeys(config.allowed_pubkeys)
             .with_public_writes(config.allow_public_writes);
-        let mirror_client = config.mirror_proxy.map(build_mirror_client).transpose()?;
         Ok(Self {
             inner: Arc::new(InnerState {
                 store,
                 public_base_url: config.public_base_url,
                 auth,
-                mirror_client,
+                fetcher,
                 write_slots: Arc::new(Semaphore::new(config.max_concurrent_writes)),
             }),
         })
@@ -175,6 +207,11 @@ impl AppState {
 
     pub fn store(&self) -> &Store {
         &self.inner.store
+    }
+
+    /// Whether this node has any transport for BUD-04 mirroring and repair.
+    pub fn can_fetch(&self) -> bool {
+        self.inner.fetcher.is_some()
     }
 
     pub async fn repair_once(&self) -> Result<RepairReport, RepairError> {
@@ -187,7 +224,7 @@ impl AppState {
             repaired: 0,
             unrepaired: Vec::new(),
         };
-        let Some(client) = self.inner.mirror_client.as_ref() else {
+        let Some(fetcher) = self.inner.fetcher.as_ref() else {
             report
                 .unrepaired
                 .extend(candidates.into_iter().map(|candidate| candidate.sha256));
@@ -196,7 +233,7 @@ impl AppState {
         for candidate in candidates {
             let mut repaired = false;
             for source in &candidate.sources {
-                if try_repair_candidate(self, client, &candidate, source).await? {
+                if try_repair_candidate(self, fetcher.as_ref(), &candidate, source).await? {
                     repaired = true;
                     report.repaired = report
                         .repaired
@@ -215,7 +252,7 @@ impl AppState {
 
 async fn try_repair_candidate(
     state: &AppState,
-    client: &reqwest::Client,
+    fetcher: &dyn BlobFetcher,
     candidate: &RepairCandidate,
     source: &str,
 ) -> Result<bool, RepairError> {
@@ -225,22 +262,23 @@ async fn try_repair_candidate(
     if mirror_hash_from_url(&source_url) != Some(candidate.sha256.as_str()) {
         return Ok(false);
     }
-    let response = match client.get(source_url).send().await {
-        Ok(response)
-            if response.status() == reqwest::StatusCode::OK
-                && response.content_length() == Some(candidate.size) =>
-        {
-            response
-        }
-        Ok(response) => {
-            tracing::debug!(status = %response.status(), hash = %candidate.sha256, "repair source returned an unusable response");
+    let request = FetchRequest {
+        source: source_url,
+        sha256: candidate.sha256.clone(),
+        expected_size: Some(candidate.size),
+    };
+    let fetched = match fetcher.fetch(request).await {
+        Ok(fetched) if fetched.size == candidate.size => fetched,
+        Ok(fetched) => {
+            tracing::debug!(declared = fetched.size, expected = candidate.size, hash = %candidate.sha256, "repair source declared the wrong size");
             return Ok(false);
         }
         Err(error) => {
-            tracing::debug!(reason = %error, hash = %candidate.sha256, "repair source could not be reached");
+            tracing::debug!(reason = %error, hash = %candidate.sha256, "repair source could not be used");
             return Ok(false);
         }
     };
+    let FetchedBlob { path, mut body, .. } = fetched;
     let store = state.inner.store.clone();
     let hash = candidate.sha256.clone();
     let repair = spawn_blocking(move || store.begin_repair(&hash))
@@ -251,7 +289,7 @@ async fn try_repair_candidate(
     #[cfg(unix)]
     options.mode(0o600);
     let mut file = options.open(repair.temp_path()).await?;
-    let mut stream = response.bytes_stream();
+    let stream = &mut body;
     let mut hasher = Sha256::new();
     let mut received = 0_u64;
     while let Some(chunk) = stream.next().await {
@@ -285,6 +323,7 @@ async fn try_repair_candidate(
     spawn_blocking(move || repair.commit(&actual_hash, received))
         .await
         .map_err(|_| RepairError::Task)??;
+    tracing::info!(hash = %candidate.sha256, %path, "repaired blob from a verified source");
     Ok(true)
 }
 
@@ -488,9 +527,9 @@ async fn mirror(
     headers: HeaderMap,
     payload: Result<Json<MirrorRequest>, JsonRejection>,
 ) -> Result<Response, ApiError> {
-    let client = state
+    let fetcher = state
         .inner
-        .mirror_client
+        .fetcher
         .as_ref()
         .ok_or_else(|| ApiError::forbidden("mirroring is disabled"))?;
     let Json(payload) = payload.map_err(|_| ApiError::bad_request("invalid mirror request"))?;
@@ -518,21 +557,22 @@ async fn mirror(
         .try_acquire_owned()
         .map_err(|_| ApiError::too_many_requests())?;
 
-    let response = client
-        .get(source)
-        .send()
+    let fetched = fetcher
+        .fetch(FetchRequest {
+            source,
+            sha256: expected_hash.clone(),
+            expected_size: None,
+        })
         .await
-        .map_err(|error| ApiError::bad_gateway(error, "mirror origin could not be reached"))?;
-    if response.status() != reqwest::StatusCode::OK {
-        return Err(ApiError::bad_gateway_status(response.status()));
-    }
-    let expected_size = response
-        .content_length()
-        .ok_or_else(|| ApiError::bad_gateway_message("mirror origin omitted Content-Length"))?;
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
+        .map_err(ApiError::from_fetch)?;
+    let FetchedBlob {
+        path,
+        size: expected_size,
+        content_type,
+        mut body,
+    } = fetched;
+    let content_type = content_type
+        .as_deref()
         .filter(|value| !value.is_empty() && value.len() <= 255)
         .unwrap_or("application/octet-stream")
         .to_owned();
@@ -563,7 +603,7 @@ async fn mirror(
                 .open(reservation.temp_path())
                 .await
                 .map_err(|_| ApiError::internal())?;
-            let mut stream = response.bytes_stream();
+            let stream = &mut body;
             let mut hasher = Sha256::new();
             let mut received = 0_u64;
 
@@ -603,6 +643,7 @@ async fn mirror(
                 .map_err(|_| ApiError::internal())?
                 .map_err(ApiError::from_store)?;
             record_repair_source(&state, &metadata.sha256, &source_url).await?;
+            tracing::info!(hash = %metadata.sha256, %path, "mirrored blob from a verified source");
             let descriptor = descriptor(&state, metadata);
             Ok((StatusCode::CREATED, Json(descriptor)).into_response())
         }
@@ -729,31 +770,6 @@ async fn serve_blob(
         );
     }
     response.body(body).map_err(|_| ApiError::internal())
-}
-
-fn build_mirror_client(proxy_url: Url) -> Result<reqwest::Client, BlossomConfigError> {
-    if proxy_url.scheme() != "socks5h"
-        || !proxy_url.username().is_empty()
-        || proxy_url.password().is_some()
-        || !matches!(proxy_url.path(), "" | "/")
-        || proxy_url.query().is_some()
-        || proxy_url.fragment().is_some()
-        || !proxy_url
-            .host_str()
-            .and_then(|host| host.parse::<std::net::IpAddr>().ok())
-            .is_some_and(|ip| ip.is_loopback())
-        || proxy_url.port().is_none()
-    {
-        return Err(BlossomConfigError::UnsafeMirrorProxy);
-    }
-    let proxy = reqwest::Proxy::all(proxy_url.as_str())?;
-    Ok(reqwest::Client::builder()
-        .proxy(proxy)
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(std::time::Duration::from_secs(30))
-        .timeout(std::time::Duration::from_secs(10 * 60))
-        .user_agent(concat!("wildbloom-node/", env!("CARGO_PKG_VERSION")))
-        .build()?)
 }
 
 fn mirror_hash_from_url(url: &Url) -> Option<&str> {
@@ -972,14 +988,29 @@ impl ApiError {
         }
     }
 
-    fn bad_gateway(error: reqwest::Error, message: &'static str) -> Self {
+    fn bad_gateway(error: impl std::fmt::Display, message: &'static str) -> Self {
         tracing::warn!(reason = %error, "failed to fetch Blossom mirror origin");
         Self::bad_gateway_message(message)
     }
 
-    fn bad_gateway_status(status: reqwest::StatusCode) -> Self {
-        tracing::debug!(%status, "Blossom mirror origin returned an unusable status");
-        Self::bad_gateway_message("mirror origin returned an unusable response")
+    fn from_fetch(error: FetchError) -> Self {
+        match error {
+            FetchError::UnusableStatus(status) => {
+                tracing::debug!(status, "Blossom mirror origin returned an unusable status");
+                Self::bad_gateway_message("mirror origin returned an unusable response")
+            }
+            FetchError::MissingLength => {
+                Self::bad_gateway_message("mirror origin omitted Content-Length")
+            }
+            FetchError::Unreachable(_) => {
+                Self::bad_gateway(error, "mirror origin could not be reached")
+            }
+            FetchError::Stream(_) => Self::bad_gateway(error, "mirror origin stream failed"),
+            FetchError::UnsupportedSource => Self::bad_gateway(
+                error,
+                "mirror source is not supported by the configured transport",
+            ),
+        }
     }
 
     fn bad_gateway_message(message: &'static str) -> Self {
@@ -1046,10 +1077,14 @@ impl IntoResponse for ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fetch::FetchPath;
     use axum::http::Request;
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use bytes::Bytes;
+    use futures_util::future::BoxFuture;
     use http_body_util::BodyExt;
     use nostr::prelude::{EventBuilder, FinalizeEvent, Keys, Kind, Tag, Timestamp};
+    use std::sync::Mutex;
     use tower::ServiceExt;
 
     fn upload_authorization(hash: &str, created_at: u64) -> String {
@@ -1128,23 +1163,6 @@ mod tests {
             )
             .is_none()
         );
-    }
-
-    #[test]
-    fn mirror_proxy_must_be_loopback_socks5h() {
-        let loopback = Url::parse("socks5h://127.0.0.1:39050").unwrap();
-        assert!(
-            build_mirror_client(loopback.clone()).is_ok(),
-            "rejected {loopback:?}"
-        );
-        assert!(matches!(
-            build_mirror_client(Url::parse("http://127.0.0.1:39050").unwrap()),
-            Err(BlossomConfigError::UnsafeMirrorProxy)
-        ));
-        assert!(matches!(
-            build_mirror_client(Url::parse("socks5h://192.0.2.1:39050").unwrap()),
-            Err(BlossomConfigError::UnsafeMirrorProxy)
-        ));
     }
 
     #[tokio::test]
@@ -1261,5 +1279,317 @@ mod tests {
             app.oneshot(missing).await.unwrap().status(),
             StatusCode::NOT_FOUND
         );
+    }
+
+    /// What a synthetic transport does when the router asks it for bytes.
+    #[derive(Debug, Clone)]
+    enum FakeOutcome {
+        Serve {
+            bytes: Vec<u8>,
+            declared_size: u64,
+            content_type: Option<&'static str>,
+        },
+        Unreachable,
+    }
+
+    /// An in-memory [`BlobFetcher`] that records every request it receives.
+    struct FakeFetcher {
+        outcome: FakeOutcome,
+        requests: Mutex<Vec<FetchRequest>>,
+    }
+
+    impl FakeFetcher {
+        fn serving(bytes: &[u8]) -> Arc<Self> {
+            Self::with(FakeOutcome::Serve {
+                bytes: bytes.to_vec(),
+                declared_size: bytes.len() as u64,
+                content_type: Some("text/plain"),
+            })
+        }
+
+        fn with(outcome: FakeOutcome) -> Arc<Self> {
+            Arc::new(Self {
+                outcome,
+                requests: Mutex::new(Vec::new()),
+            })
+        }
+
+        fn requests(&self) -> Vec<FetchRequest> {
+            self.requests.lock().unwrap().clone()
+        }
+    }
+
+    impl BlobFetcher for FakeFetcher {
+        fn fetch(&self, request: FetchRequest) -> BoxFuture<'_, Result<FetchedBlob, FetchError>> {
+            self.requests.lock().unwrap().push(request);
+            let outcome = self.outcome.clone();
+            Box::pin(async move {
+                match outcome {
+                    FakeOutcome::Unreachable => {
+                        Err(FetchError::Unreachable("synthetic outage".into()))
+                    }
+                    FakeOutcome::Serve {
+                        bytes,
+                        declared_size,
+                        content_type,
+                    } => {
+                        // Two chunks, so the router's streaming path is exercised.
+                        let split = bytes.len() / 2;
+                        let chunks = vec![
+                            Ok(Bytes::copy_from_slice(&bytes[..split])),
+                            Ok(Bytes::copy_from_slice(&bytes[split..])),
+                        ];
+                        Ok(FetchedBlob {
+                            path: FetchPath::Loopback,
+                            size: declared_size,
+                            content_type: content_type.map(str::to_owned),
+                            body: futures_util::stream::iter(chunks).boxed(),
+                        })
+                    }
+                }
+            })
+        }
+    }
+
+    fn open_store(directory: &tempfile::TempDir) -> Store {
+        Store::open(crate::store::StoreConfig {
+            root: directory.path().join("data"),
+            quota_bytes: 1024,
+            max_blob_bytes: 1024,
+        })
+        .unwrap()
+    }
+
+    fn test_config() -> BlossomConfig {
+        BlossomConfig {
+            public_base_url: Url::parse("http://node.example/").unwrap(),
+            accepted_server_names: vec!["node.example".into()],
+            allowed_pubkeys: Vec::new(),
+            allow_public_writes: true,
+            max_concurrent_writes: 4,
+            mirror_proxy: None,
+        }
+    }
+
+    fn mirror_request(hash: &str, now: u64) -> Request<Body> {
+        Request::builder()
+            .method(Method::PUT)
+            .uri("/mirror")
+            .header(CONTENT_TYPE, "application/json")
+            .header(AUTHORIZATION, upload_authorization(hash, now))
+            .body(Body::from(format!(
+                r#"{{"url":"https://origin.example/{hash}"}}"#
+            )))
+            .unwrap()
+    }
+
+    async fn stored_blobs(app: &Router) -> (u64, u64) {
+        let health = Request::builder()
+            .uri("/healthz")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(health).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        (
+            body["storage"]["blobs"].as_u64().unwrap(),
+            body["storage"]["reserved_bytes"].as_u64().unwrap(),
+        )
+    }
+
+    async fn download(app: &Router, hash: &str) -> (StatusCode, Bytes) {
+        let request = Request::builder()
+            .uri(format!("/{hash}"))
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        let status = response.status();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        (status, body)
+    }
+
+    #[tokio::test]
+    async fn mirror_and_repair_stream_through_the_configured_fetcher() {
+        let directory = tempfile::tempdir().unwrap();
+        let bytes = b"bytes carried by an explicit transport adapter";
+        let hash = hex::encode(Sha256::digest(bytes));
+        let fetcher = FakeFetcher::serving(bytes);
+        let state =
+            AppState::with_fetcher(open_store(&directory), test_config(), fetcher.clone()).unwrap();
+        assert!(state.can_fetch());
+        let app = router(state.clone());
+        let now = unix_time();
+
+        let response = app
+            .clone()
+            .oneshot(mirror_request(&hash, now))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let descriptor: serde_json::Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(descriptor["sha256"], hash);
+        assert_eq!(descriptor["size"], bytes.len() as u64);
+        assert_eq!(descriptor["type"], "text/plain");
+        assert_eq!(
+            download(&app, &hash).await,
+            (StatusCode::OK, Bytes::copy_from_slice(bytes))
+        );
+
+        let requests = fetcher.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].sha256, hash);
+        assert_eq!(
+            requests[0].source.as_str(),
+            format!("https://origin.example/{hash}")
+        );
+        assert_eq!(requests[0].expected_size, None);
+
+        // Deliberate local loss, then repair from the recorded source through
+        // the same adapter.  The router knows the exact size this time.
+        std::fs::remove_file(state.store().blob_path(&hash)).unwrap();
+        assert_eq!(download(&app, &hash).await.0, StatusCode::NOT_FOUND);
+        let report = state.repair_once().await.unwrap();
+        assert_eq!(
+            report,
+            RepairReport {
+                candidates: 1,
+                repaired: 1,
+                unrepaired: Vec::new(),
+            }
+        );
+        let requests = fetcher.requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[1].sha256, hash);
+        assert_eq!(requests[1].expected_size, Some(bytes.len() as u64));
+        let integrity = state.store().verify_integrity().unwrap();
+        assert!(integrity.missing.is_empty() && integrity.corrupted.is_empty());
+        assert_eq!(
+            download(&app, &hash).await,
+            (StatusCode::OK, Bytes::copy_from_slice(bytes))
+        );
+    }
+
+    #[tokio::test]
+    async fn mirror_rejects_bytes_that_do_not_match_the_requested_hash() {
+        let directory = tempfile::tempdir().unwrap();
+        let expected = b"the bytes the signer authorised";
+        let hash = hex::encode(Sha256::digest(expected));
+        // Same length, one bit flipped: only the digest can tell them apart.
+        let mut delivered = expected.to_vec();
+        delivered[0] ^= 0x01;
+        let fetcher = FakeFetcher::with(FakeOutcome::Serve {
+            bytes: delivered,
+            declared_size: expected.len() as u64,
+            content_type: None,
+        });
+        let state = AppState::with_fetcher(open_store(&directory), test_config(), fetcher).unwrap();
+        let app = router(state);
+
+        let response = app
+            .clone()
+            .oneshot(mirror_request(&hash, unix_time()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            response.headers()[&X_REASON],
+            "mirror origin returned the wrong blob"
+        );
+        assert_eq!(stored_blobs(&app).await, (0, 0));
+        assert_eq!(download(&app, &hash).await.0, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn mirror_rejects_a_stream_shorter_than_its_declared_size() {
+        let directory = tempfile::tempdir().unwrap();
+        let bytes = b"a stream that stops early";
+        let hash = hex::encode(Sha256::digest(bytes));
+        let fetcher = FakeFetcher::with(FakeOutcome::Serve {
+            bytes: bytes.to_vec(),
+            declared_size: bytes.len() as u64 + 1,
+            content_type: None,
+        });
+        let state = AppState::with_fetcher(open_store(&directory), test_config(), fetcher).unwrap();
+        let app = router(state);
+
+        let response = app
+            .clone()
+            .oneshot(mirror_request(&hash, unix_time()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            response.headers()[&X_REASON],
+            "mirror origin did not match Content-Length"
+        );
+        assert_eq!(stored_blobs(&app).await, (0, 0));
+    }
+
+    #[tokio::test]
+    async fn mirror_reports_an_unreachable_source_as_bad_gateway() {
+        let directory = tempfile::tempdir().unwrap();
+        let hash = hex::encode(Sha256::digest(b"never delivered"));
+        let fetcher = FakeFetcher::with(FakeOutcome::Unreachable);
+        let state = AppState::with_fetcher(open_store(&directory), test_config(), fetcher).unwrap();
+        let app = router(state);
+
+        let response = app
+            .clone()
+            .oneshot(mirror_request(&hash, unix_time()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            response.headers()[&X_REASON],
+            "mirror origin could not be reached"
+        );
+        assert_eq!(stored_blobs(&app).await, (0, 0));
+    }
+
+    #[tokio::test]
+    async fn mirroring_stays_disabled_without_a_transport() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::new(open_store(&directory), test_config()).unwrap();
+        assert!(!state.can_fetch());
+        let app = router(state.clone());
+        let hash = hex::encode(Sha256::digest(b"unreachable by design"));
+
+        let response = app
+            .clone()
+            .oneshot(mirror_request(&hash, unix_time()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.headers()[&X_REASON], "mirroring is disabled");
+        assert_eq!(
+            state.repair_once().await.unwrap(),
+            RepairReport {
+                candidates: 0,
+                repaired: 0,
+                unrepaired: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn explicit_fetcher_and_mirror_proxy_cannot_both_be_configured() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = BlossomConfig {
+            mirror_proxy: Some(Url::parse("socks5h://127.0.0.1:39050").unwrap()),
+            ..test_config()
+        };
+        let result = AppState::with_fetcher(
+            open_store(&directory),
+            config,
+            FakeFetcher::with(FakeOutcome::Unreachable),
+        );
+        assert!(matches!(
+            result,
+            Err(BlossomConfigError::ConflictingFetcher)
+        ));
     }
 }

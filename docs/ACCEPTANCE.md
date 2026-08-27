@@ -91,3 +91,35 @@ replication, repair after local loss and onion identity retention after a clean
 restart, plus installed Linux and Windows preview startup on fresh hosted
 runners.  They do not prove long-term custody, automatic replica discovery,
 trusted signed installers or V4V production use.
+
+## 2026-08-27 transport-neutral fetch interface
+
+Environment: macOS, Rust 1.94.1, Homebrew Tor 0.4.9.5, branch
+`feat/transport-neutral-fetch`.
+
+- BUD-04 mirroring and integrity repair moved behind the `BlobFetcher`
+  interface with `TorHttpFetcher` as the only adapter.  All 31 unit and HTTP
+  integration tests passed, including new fake-adapter cases: exact mirror then
+  deliberate loss and repair through the adapter, wrong bytes rejected with 409
+  and nothing stored or reserved, a stream shorter than its declared length
+  rejected with 502, an unreachable source reported as 502, mirroring refused
+  with 403 when no adapter is configured, and an explicit adapter refused
+  alongside a mirror proxy.
+- `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+  the desktop `cargo check` and `scripts/audit-dependencies.sh` passed.
+- The two-node Tor acceptance test was run four times on the same afternoon.
+  Runs 1 and 2 failed before any changed code executed: both managed Tor
+  processes exceeded the fixed 300-second bootstrap budget.  A standalone Tor
+  with the daemon's exact configuration bootstrapped in 143 seconds with a
+  two-minute stall at "loading relay descriptors", so the budget was the
+  problem, not the daemon.  Run 3, with a 900-second budget, bootstrapped both
+  nodes but failed the first mirror with 502 because node B could not yet
+  reach node A's freshly published onion; the refused attempt reserved nothing.
+  The test now retries the mirror while the origin is unreachable and reads
+  its bootstrap budget from `WILDBLOOM_TEST_TOR_TIMEOUT`.
+- Run 4 passed in 140 seconds.  Node B mirrored the 37-byte blob from node A's
+  onion through the new adapter, logged `path=tor`, had its local copy removed,
+  repaired it from the recorded source, again logged `path=tor`, retained the
+  exact bytes after node A stopped, and kept its onion identity across a
+  restart.  The transport in that record is what the adapter reported, not an
+  inference from the fact that retrieval succeeded.
