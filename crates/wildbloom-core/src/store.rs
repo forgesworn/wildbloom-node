@@ -427,6 +427,8 @@ fn set_private_file_permissions(path: &Path) -> Result<(), StoreError> {
             fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
         }
     }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 
