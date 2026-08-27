@@ -1,0 +1,66 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Wildbloom Node",
+  "version": "0.2.0",
+  "identifier": "dev.forgesworn.wildbloom-node",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "security": {
+      "csp": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'"
+    },
+    "windows": [
+      {
+        "label": "main",
+        "title": "Wildbloom Node",
+        "width": 820,
+        "height": 760,
+        "minWidth": 420,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true
+      }
+    ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDEwQUMxRDZERUI0NjkyQzcKUldUSGtrYnJiUjJzRU03dVJhbFowMUZrb2lkdGpkY091bWQyQklXVE5lclBzOWFWSmRJYjBmZDYK",
+      "endpoints": [
+        "https://github.com/forgesworn/wildbloom-node/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "category": "Utility",
+    "shortDescription": "Private home storage for Blossom",
+    "longDescription": "A self-hosted Blossom storage and replication node reached through a private Tor onion service.",
+    "copyright": "Copyright ForgeSworn contributors",
+    "externalBin": [
+      "binaries/wildbloomd"
+    ],
+    "resources": {
+      "tor-runtime/": "tor-runtime/",
+      "../../LICENSE": "LICENSE",
+      "../../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "targets": "all",
+    "createUpdaterArtifacts": false,
+    "macOS": {
+      "signingIdentity": "-"
+    }
+  }
+}

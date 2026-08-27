@@ -1,7 +1,9 @@
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File},
+    io::Read,
     path::{Path, PathBuf},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -50,12 +52,42 @@ pub struct UploadReservation {
     completed: bool,
 }
 
+#[derive(Debug)]
+pub struct RepairReservation {
+    store: Store,
+    expected_hash: String,
+    expected_size: u64,
+    temp_path: PathBuf,
+    completed: bool,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct StoreStats {
     pub blobs: u64,
     pub bytes: u64,
     pub reserved_bytes: u64,
     pub quota_bytes: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeleteOutcome {
+    OwnerRemoved,
+    BlobDeleted,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct IntegrityReport {
+    pub checked: u64,
+    pub healthy: u64,
+    pub missing: Vec<String>,
+    pub corrupted: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RepairCandidate {
+    pub sha256: String,
+    pub size: u64,
+    pub sources: Vec<String>,
 }
 
 #[derive(Debug, Error)]
@@ -74,6 +106,8 @@ pub enum StoreError {
     MissingReservation,
     #[error("stored blob is missing from disk")]
     MissingBlob,
+    #[error("the signing public key does not own this blob")]
+    NotOwner,
     #[error("another Wildbloom process is already using this data directory")]
     AlreadyOpen,
     #[error("integer is outside the supported storage range")]
@@ -187,6 +221,37 @@ impl Store {
         }))
     }
 
+    pub fn check_upload(&self, expected_hash: &str, expected_size: u64) -> Result<(), StoreError> {
+        validate_hash(expected_hash)?;
+        if expected_size > self.config.max_blob_bytes {
+            return Err(StoreError::BlobTooLarge {
+                size: expected_size,
+                limit: self.config.max_blob_bytes,
+            });
+        }
+        let expected_size_i64 =
+            i64::try_from(expected_size).map_err(|_| StoreError::IntegerRange)?;
+        let connection = self.connection()?;
+        if let Some(metadata) = query_blob(&connection, expected_hash)? {
+            return if metadata.size == expected_size {
+                Ok(())
+            } else {
+                Err(StoreError::LengthMismatch)
+            };
+        }
+        let used: i64 = connection.query_row(
+            "SELECT COALESCE((SELECT SUM(size) FROM blobs), 0) + \
+                    COALESCE((SELECT SUM(size) FROM reservations), 0)",
+            [],
+            |row| row.get(0),
+        )?;
+        let quota = i64::try_from(self.config.quota_bytes).map_err(|_| StoreError::IntegerRange)?;
+        if used > quota.saturating_sub(expected_size_i64) {
+            return Err(StoreError::QuotaExceeded);
+        }
+        Ok(())
+    }
+
     pub fn get(&self, hash: &str) -> Result<Option<BlobMetadata>, StoreError> {
         validate_hash(hash)?;
         let connection = self.connection()?;
@@ -221,6 +286,171 @@ impl Store {
         })
     }
 
+    pub fn delete_owned(
+        &self,
+        hash: &str,
+        owner_pubkey: &str,
+    ) -> Result<DeleteOutcome, StoreError> {
+        validate_hash(hash)?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if query_blob(&transaction, hash)?.is_none() {
+            return Err(StoreError::MissingBlob);
+        }
+        let owns_blob = transaction
+            .query_row(
+                "SELECT 1 FROM owners WHERE owner_pubkey = ?1 AND hash = ?2",
+                params![owner_pubkey, hash],
+                |_| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false);
+        if !owns_blob {
+            return Err(StoreError::NotOwner);
+        }
+
+        transaction.execute(
+            "DELETE FROM owners WHERE owner_pubkey = ?1 AND hash = ?2",
+            params![owner_pubkey, hash],
+        )?;
+        let remaining_owners: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM owners WHERE hash = ?1",
+            [hash],
+            |row| row.get(0),
+        )?;
+        if remaining_owners > 0 {
+            transaction.commit()?;
+            return Ok(DeleteOutcome::OwnerRemoved);
+        }
+
+        let blob_path = self.blob_path(hash);
+        if !blob_path.is_file() {
+            return Err(StoreError::MissingBlob);
+        }
+        let tombstone = self
+            .config
+            .root
+            .join("tmp")
+            .join(format!("{}.delete", Uuid::new_v4().simple()));
+        fs::rename(&blob_path, &tombstone)?;
+        transaction.execute("DELETE FROM blobs WHERE hash = ?1", [hash])?;
+        if let Err(error) = transaction.commit() {
+            fs::rename(&tombstone, &blob_path)?;
+            return Err(StoreError::Database(error));
+        }
+        if let Err(error) = fs::remove_file(&tombstone) {
+            tracing::warn!(reason = %error, path = %tombstone.display(), "left a deleted blob tombstone for startup cleanup");
+        }
+        Ok(DeleteOutcome::BlobDeleted)
+    }
+
+    pub fn verify_integrity(&self) -> Result<IntegrityReport, StoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare("SELECT hash, size FROM blobs ORDER BY hash")?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        let mut checked = 0_u64;
+        let mut healthy = 0_u64;
+        let mut missing = Vec::new();
+        let mut corrupted = Vec::new();
+        for row in rows {
+            let (hash, expected_size) = row?;
+            checked = checked.checked_add(1).ok_or(StoreError::IntegerRange)?;
+            let path = self.blob_path(&hash);
+            let mut file = match File::open(&path) {
+                Ok(file) => file,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    missing.push(hash);
+                    continue;
+                }
+                Err(error) => return Err(StoreError::Io(error)),
+            };
+            let metadata = file.metadata()?;
+            if i64::try_from(metadata.len()).map_err(|_| StoreError::IntegerRange)? != expected_size
+            {
+                corrupted.push(hash);
+                continue;
+            }
+            let mut hasher = Sha256::new();
+            let mut buffer = [0_u8; 64 * 1024];
+            loop {
+                let read = file.read(&mut buffer)?;
+                if read == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..read]);
+            }
+            if hex::encode(hasher.finalize()) == hash {
+                healthy = healthy.checked_add(1).ok_or(StoreError::IntegerRange)?;
+            } else {
+                corrupted.push(hash);
+            }
+        }
+        Ok(IntegrityReport {
+            checked,
+            healthy,
+            missing,
+            corrupted,
+        })
+    }
+
+    pub fn record_repair_source(&self, hash: &str, source_url: &str) -> Result<(), StoreError> {
+        validate_hash(hash)?;
+        let connection = self.connection()?;
+        if query_blob(&connection, hash)?.is_none() {
+            return Err(StoreError::MissingBlob);
+        }
+        connection.execute(
+            "INSERT OR IGNORE INTO repair_sources (hash, source_url, created_at) VALUES (?1, ?2, ?3)",
+            params![hash, source_url, unix_time()?],
+        )?;
+        Ok(())
+    }
+
+    pub fn repair_candidates(&self) -> Result<Vec<RepairCandidate>, StoreError> {
+        let integrity = self.verify_integrity()?;
+        let broken = integrity
+            .missing
+            .into_iter()
+            .chain(integrity.corrupted)
+            .collect::<Vec<_>>();
+        let connection = self.connection()?;
+        let mut candidates = Vec::with_capacity(broken.len());
+        for hash in broken {
+            let size: i64 =
+                connection.query_row("SELECT size FROM blobs WHERE hash = ?1", [&hash], |row| {
+                    row.get(0)
+                })?;
+            let mut statement = connection.prepare(
+                "SELECT source_url FROM repair_sources WHERE hash = ?1 ORDER BY created_at DESC",
+            )?;
+            let sources = statement
+                .query_map([&hash], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            candidates.push(RepairCandidate {
+                sha256: hash,
+                size: u64::try_from(size).map_err(|_| StoreError::IntegerRange)?,
+                sources,
+            });
+        }
+        Ok(candidates)
+    }
+
+    pub fn begin_repair(&self, hash: &str) -> Result<RepairReservation, StoreError> {
+        validate_hash(hash)?;
+        let connection = self.connection()?;
+        let metadata = query_blob(&connection, hash)?.ok_or(StoreError::MissingBlob)?;
+        let id = Uuid::new_v4().simple().to_string();
+        Ok(RepairReservation {
+            store: self.clone(),
+            expected_hash: hash.to_owned(),
+            expected_size: metadata.size,
+            temp_path: self.config.root.join("tmp").join(format!("{id}.repair")),
+            completed: false,
+        })
+    }
+
     fn connection(&self) -> Result<Connection, StoreError> {
         let connection = Connection::open(&self.database_path)?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
@@ -248,6 +478,12 @@ impl Store {
                 hash TEXT NOT NULL,
                 size INTEGER NOT NULL CHECK (size >= 0),
                 created_at INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS repair_sources (
+                hash TEXT NOT NULL REFERENCES blobs(hash) ON DELETE CASCADE,
+                source_url TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (hash, source_url)
              );",
         )?;
         set_private_file_permissions(&self.database_path)?;
@@ -264,6 +500,77 @@ impl Store {
             }
         }
         Ok(())
+    }
+}
+
+impl RepairReservation {
+    pub fn temp_path(&self) -> &Path {
+        &self.temp_path
+    }
+
+    pub fn expected_size(&self) -> u64 {
+        self.expected_size
+    }
+
+    pub fn commit(mut self, actual_hash: &str, actual_size: u64) -> Result<(), StoreError> {
+        if actual_hash != self.expected_hash {
+            return Err(StoreError::HashMismatch);
+        }
+        if actual_size != self.expected_size {
+            return Err(StoreError::LengthMismatch);
+        }
+        let mut connection = self.store.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let metadata =
+            query_blob(&transaction, &self.expected_hash)?.ok_or(StoreError::MissingBlob)?;
+        if metadata.size != self.expected_size {
+            return Err(StoreError::LengthMismatch);
+        }
+
+        let destination = self.store.blob_path(&self.expected_hash);
+        let backup = self
+            .store
+            .config
+            .root
+            .join("tmp")
+            .join(format!("{}.corrupt", Uuid::new_v4().simple()));
+        let had_destination = destination.exists();
+        if had_destination {
+            fs::rename(&destination, &backup)?;
+        }
+        if let Err(error) = fs::rename(&self.temp_path, &destination) {
+            if had_destination {
+                let _ = fs::rename(&backup, &destination);
+            }
+            return Err(StoreError::Io(error));
+        }
+        if let Err(error) = set_private_file_permissions(&destination) {
+            let _ = fs::remove_file(&destination);
+            if had_destination {
+                let _ = fs::rename(&backup, &destination);
+            }
+            return Err(error);
+        }
+        if let Err(error) = transaction.commit() {
+            let _ = fs::remove_file(&destination);
+            if had_destination {
+                let _ = fs::rename(&backup, &destination);
+            }
+            return Err(StoreError::Database(error));
+        }
+        if had_destination {
+            let _ = fs::remove_file(backup);
+        }
+        self.completed = true;
+        Ok(())
+    }
+}
+
+impl Drop for RepairReservation {
+    fn drop(&mut self) {
+        if !self.completed {
+            let _ = fs::remove_file(&self.temp_path);
+        }
     }
 }
 
@@ -521,5 +828,120 @@ mod tests {
         let (_directory, store) = test_store(100, 100);
         let second = Store::open(store.config().clone());
         assert!(matches!(second, Err(StoreError::AlreadyOpen)));
+    }
+
+    #[test]
+    fn deletion_removes_only_the_signers_ownership_until_the_last_owner() {
+        let (_directory, store) = test_store(100, 100);
+        let hash = "a".repeat(64);
+        let UploadStart::Reserved(reservation) =
+            store.begin_upload(&hash, 5, "01", "text/plain").unwrap()
+        else {
+            panic!("first upload must reserve space");
+        };
+        fs::File::create(reservation.temp_path())
+            .unwrap()
+            .write_all(b"hello")
+            .unwrap();
+        reservation.commit(&hash, 5).unwrap();
+        assert!(matches!(
+            store.begin_upload(&hash, 5, "02", "text/plain").unwrap(),
+            UploadStart::Existing(_)
+        ));
+
+        assert!(matches!(
+            store.delete_owned(&hash, "03"),
+            Err(StoreError::NotOwner)
+        ));
+        assert_eq!(
+            store.delete_owned(&hash, "01").unwrap(),
+            DeleteOutcome::OwnerRemoved
+        );
+        assert!(store.blob_path(&hash).is_file());
+        assert_eq!(
+            store.delete_owned(&hash, "02").unwrap(),
+            DeleteOutcome::BlobDeleted
+        );
+        assert!(!store.blob_path(&hash).exists());
+        assert_eq!(store.stats().unwrap().blobs, 0);
+    }
+
+    #[test]
+    fn integrity_scan_distinguishes_healthy_missing_and_corrupt_blobs() {
+        let (_directory, store) = test_store(100, 100);
+        for (byte, owner) in [(b'a', "01"), (b'b', "02"), (b'c', "03")] {
+            let bytes = [byte; 5];
+            let hash = hex::encode(Sha256::digest(bytes));
+            let UploadStart::Reserved(reservation) = store
+                .begin_upload(&hash, bytes.len() as u64, owner, "application/octet-stream")
+                .unwrap()
+            else {
+                panic!("new blob must reserve space");
+            };
+            fs::File::create(reservation.temp_path())
+                .unwrap()
+                .write_all(&bytes)
+                .unwrap();
+            reservation.commit(&hash, bytes.len() as u64).unwrap();
+        }
+        let missing_hash = hex::encode(Sha256::digest([b'b'; 5]));
+        store
+            .record_repair_source(&missing_hash, "https://one.example/blob")
+            .unwrap();
+        fs::remove_file(store.blob_path(&missing_hash)).unwrap();
+        let corrupt_hash = hex::encode(Sha256::digest([b'c'; 5]));
+        store
+            .record_repair_source(&corrupt_hash, "https://two.example/blob")
+            .unwrap();
+        fs::write(store.blob_path(&corrupt_hash), [b'x'; 5]).unwrap();
+
+        let report = store.verify_integrity().unwrap();
+        assert_eq!(report.checked, 3);
+        assert_eq!(report.healthy, 1);
+        assert_eq!(report.missing, vec![missing_hash.clone()]);
+        assert_eq!(report.corrupted, vec![corrupt_hash.clone()]);
+
+        let candidates = store.repair_candidates().unwrap();
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].sources, vec!["https://one.example/blob"]);
+        assert_eq!(candidates[1].sources, vec!["https://two.example/blob"]);
+
+        for (hash, byte) in [(&corrupt_hash, b'c'), (&missing_hash, b'b')] {
+            let repair = store.begin_repair(hash).unwrap();
+            fs::write(repair.temp_path(), [byte; 5]).unwrap();
+            repair.commit(hash, 5).unwrap();
+        }
+        let repaired = store.verify_integrity().unwrap();
+        assert_eq!(repaired.checked, 3);
+        assert_eq!(repaired.healthy, 3);
+        assert!(repaired.missing.is_empty());
+        assert!(repaired.corrupted.is_empty());
+    }
+
+    #[test]
+    fn deletion_wins_if_it_finishes_before_a_repair_commit() {
+        let (_directory, store) = test_store(100, 100);
+        let bytes = b"hello";
+        let hash = hex::encode(Sha256::digest(bytes));
+        let UploadStart::Reserved(upload) = store
+            .begin_upload(&hash, bytes.len() as u64, "01", "text/plain")
+            .unwrap()
+        else {
+            panic!("new blob must reserve space");
+        };
+        fs::write(upload.temp_path(), bytes).unwrap();
+        upload.commit(&hash, bytes.len() as u64).unwrap();
+
+        let repair = store.begin_repair(&hash).unwrap();
+        fs::write(repair.temp_path(), bytes).unwrap();
+        assert_eq!(
+            store.delete_owned(&hash, "01").unwrap(),
+            DeleteOutcome::BlobDeleted
+        );
+        assert!(matches!(
+            repair.commit(&hash, bytes.len() as u64),
+            Err(StoreError::MissingBlob)
+        ));
+        assert!(!store.blob_path(&hash).exists());
     }
 }

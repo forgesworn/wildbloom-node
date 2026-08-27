@@ -9,7 +9,8 @@ All changes must preserve the boundaries in [AGENTS.md](AGENTS.md) and pass:
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-cargo audit
+cargo check --manifest-path desktop/src-tauri/Cargo.toml
+scripts/audit-dependencies.sh
 ```
 
 Use synthetic keys, domains and blob contents in tests.  A passing unit test is
@@ -17,4 +18,3 @@ not evidence of cross-device durability, Tor reachability or repair after loss;
 state exactly which boundary was exercised.
 
 By contributing, you agree that your contribution is licensed under MIT.
-

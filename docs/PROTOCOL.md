@@ -12,6 +12,8 @@ messages below are an experimental profile, not a new NIP.
 | `HEAD /<sha256>[.<ext>]` | BUD-01 | Same headers without a body |
 | `PUT /upload` | BUD-02 + BUD-11 | Authorised streaming upload |
 | `PUT /mirror` | BUD-04 + BUD-11 | Authorised onion-to-onion copy |
+| `HEAD /upload` | BUD-06 + BUD-11 | Authorised size, type and quota preflight |
+| `DELETE /<sha256>` | BUD-12 + BUD-11 | Remove the signer's ownership and, after the final owner, the blob |
 | `GET /healthz` | Wildbloom | Process and storage counters, no private data |
 
 Authorisation is a signed kind `24242` event encoded as unpadded base64url JSON:
@@ -32,10 +34,18 @@ well-formed `x` and `server` tag whose set includes the current blob and node:
 
 The event signature and id must verify.  The event cannot be materially in the
 future, and its creation-to-expiry lifetime cannot exceed five minutes.
+The signer must also appear in the node's configured writer allowlist unless the
+operator explicitly enabled public writes.  A default installation is
+read-only.
 
 `PUT /upload` additionally requires `Content-Length` and `X-SHA-256`.  The
 received length and independently calculated digest must match.  New blobs
 return `201`; deduplicated blobs return `200`.
+
+`HEAD /upload` uses `X-SHA-256`, `X-Content-Length` and `X-Content-Type` and
+checks the same signature, maximum blob size and current quota before any body
+is sent.  It does not reserve capacity.  A later upload can therefore still
+lose a race for the remaining quota.
 
 `PUT /mirror` takes `{"url":"http://<source>.onion/<sha256>.<ext>"}` or a
 hash-addressed public HTTPS URL.  The destination authorisation can cover one
@@ -44,11 +54,18 @@ or more nodes but must include the destination server.  The source must return
 received byte.  Every fetch and DNS lookup goes through the node's managed Tor
 process.
 
+`DELETE /<sha256>` requires the `delete` operation in its BUD-11 event.  It
+removes only the signing public key's ownership row.  The bytes disappear only
+when the final recorded owner deletes them.  This is a local deletion request,
+not a promise that another replica or cache removed its copy.
+
 Primary specifications:
 [BUD-01](https://github.com/hzrd149/blossom/blob/master/buds/01.md),
 [BUD-02](https://github.com/hzrd149/blossom/blob/master/buds/02.md),
-[BUD-04](https://github.com/hzrd149/blossom/blob/master/buds/04.md), and
-[BUD-11](https://github.com/hzrd149/blossom/blob/master/buds/11.md).
+[BUD-04](https://github.com/hzrd149/blossom/blob/master/buds/04.md),
+[BUD-06](https://github.com/hzrd149/blossom/blob/master/buds/06.md),
+[BUD-11](https://github.com/hzrd149/blossom/blob/master/buds/11.md), and
+[BUD-12](https://github.com/hzrd149/blossom/blob/master/buds/12.md).
 
 ## Experimental private storage offer
 
@@ -61,7 +78,7 @@ identifies who made the offer.
   "type": "wildbloom.storage-offer",
   "version": 1,
   "node": "http://exampleexampleexampleexampleexampleexampleexampleexample.onion/",
-  "buds": [1, 2, 4, 11],
+  "buds": [1, 2, 4, 6, 11, 12],
   "availableBytes": 10737418240,
   "maxBlobBytes": 1073741824,
   "expires": 1787800000

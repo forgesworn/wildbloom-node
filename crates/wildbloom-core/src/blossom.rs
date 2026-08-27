@@ -1,6 +1,8 @@
 use crate::{
     auth::{AuthError, AuthPolicy},
-    store::{BlobMetadata, Store, StoreError, StoreStats, UploadStart},
+    store::{
+        BlobMetadata, DeleteOutcome, RepairCandidate, Store, StoreError, StoreStats, UploadStart,
+    },
 };
 use axum::{
     Json, Router,
@@ -27,6 +29,7 @@ use std::{
 use tokio::{
     fs::{File, OpenOptions},
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
+    sync::Semaphore,
     task::spawn_blocking,
 };
 use tokio_util::io::ReaderStream;
@@ -34,11 +37,20 @@ use tower_http::cors::{Any, CorsLayer};
 use url::Url;
 
 static X_SHA_256: HeaderName = HeaderName::from_static("x-sha-256");
+static X_CONTENT_LENGTH: HeaderName = HeaderName::from_static("x-content-length");
+static X_CONTENT_TYPE: HeaderName = HeaderName::from_static("x-content-type");
+static X_REASON: HeaderName = HeaderName::from_static("x-reason");
 
 #[derive(Debug, Clone)]
 pub struct BlossomConfig {
     pub public_base_url: Url,
     pub accepted_server_names: Vec<String>,
+    /// Nostr public keys permitted to upload, mirror and delete blobs.
+    pub allowed_pubkeys: Vec<String>,
+    /// Explicitly opt into accepting writes from any valid Nostr public key.
+    pub allow_public_writes: bool,
+    /// Upper bound for simultaneous upload and mirror streams.
+    pub max_concurrent_writes: usize,
     /// A loopback `socks5h://` proxy enables onion-only BUD-04 mirroring.
     pub mirror_proxy: Option<Url>,
 }
@@ -53,14 +65,36 @@ struct InnerState {
     public_base_url: Url,
     auth: AuthPolicy,
     mirror_client: Option<reqwest::Client>,
+    write_slots: Arc<Semaphore>,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum BlossomConfigError {
+    #[error("allowed writer public keys must be 64 lower-case hexadecimal characters")]
+    InvalidWriterPubkey,
+    #[error("maximum concurrent writes must be greater than zero")]
+    InvalidConcurrentWriteLimit,
     #[error("mirror proxy must be a loopback socks5h URL")]
     UnsafeMirrorProxy,
     #[error("failed to configure the mirror client: {0}")]
     MirrorClient(#[from] reqwest::Error),
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct RepairReport {
+    pub candidates: u64,
+    pub repaired: u64,
+    pub unrepaired: Vec<String>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RepairError {
+    #[error("storage repair task failed")]
+    Task,
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    #[error("storage repair I/O failed: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 #[derive(Debug, Serialize)]
@@ -68,7 +102,7 @@ struct ServerInfo {
     name: &'static str,
     software: &'static str,
     version: &'static str,
-    blossom: [&'static str; 4],
+    blossom: [&'static str; 6],
 }
 
 #[derive(Debug, Serialize)]
@@ -85,6 +119,13 @@ struct BlobDescriptor {
     #[serde(rename = "type")]
     content_type: String,
     uploaded: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteResponse {
+    sha256: String,
+    blob_deleted: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -107,7 +148,19 @@ struct ErrorBody {
 
 impl AppState {
     pub fn new(store: Store, config: BlossomConfig) -> Result<Self, BlossomConfigError> {
-        let auth = AuthPolicy::new(config.accepted_server_names);
+        if config
+            .allowed_pubkeys
+            .iter()
+            .any(|pubkey| !is_canonical_hash(pubkey))
+        {
+            return Err(BlossomConfigError::InvalidWriterPubkey);
+        }
+        if config.max_concurrent_writes == 0 {
+            return Err(BlossomConfigError::InvalidConcurrentWriteLimit);
+        }
+        let auth = AuthPolicy::new(config.accepted_server_names)
+            .with_allowed_pubkeys(config.allowed_pubkeys)
+            .with_public_writes(config.allow_public_writes);
         let mirror_client = config.mirror_proxy.map(build_mirror_client).transpose()?;
         Ok(Self {
             inner: Arc::new(InnerState {
@@ -115,6 +168,7 @@ impl AppState {
                 public_base_url: config.public_base_url,
                 auth,
                 mirror_client,
+                write_slots: Arc::new(Semaphore::new(config.max_concurrent_writes)),
             }),
         })
     }
@@ -122,17 +176,135 @@ impl AppState {
     pub fn store(&self) -> &Store {
         &self.inner.store
     }
+
+    pub async fn repair_once(&self) -> Result<RepairReport, RepairError> {
+        let store = self.inner.store.clone();
+        let candidates = spawn_blocking(move || store.repair_candidates())
+            .await
+            .map_err(|_| RepairError::Task)??;
+        let mut report = RepairReport {
+            candidates: u64::try_from(candidates.len()).map_err(|_| StoreError::IntegerRange)?,
+            repaired: 0,
+            unrepaired: Vec::new(),
+        };
+        let Some(client) = self.inner.mirror_client.as_ref() else {
+            report
+                .unrepaired
+                .extend(candidates.into_iter().map(|candidate| candidate.sha256));
+            return Ok(report);
+        };
+        for candidate in candidates {
+            let mut repaired = false;
+            for source in &candidate.sources {
+                if try_repair_candidate(self, client, &candidate, source).await? {
+                    repaired = true;
+                    report.repaired = report
+                        .repaired
+                        .checked_add(1)
+                        .ok_or(StoreError::IntegerRange)?;
+                    break;
+                }
+            }
+            if !repaired {
+                report.unrepaired.push(candidate.sha256);
+            }
+        }
+        Ok(report)
+    }
+}
+
+async fn try_repair_candidate(
+    state: &AppState,
+    client: &reqwest::Client,
+    candidate: &RepairCandidate,
+    source: &str,
+) -> Result<bool, RepairError> {
+    let Ok(source_url) = Url::parse(source) else {
+        return Ok(false);
+    };
+    if mirror_hash_from_url(&source_url) != Some(candidate.sha256.as_str()) {
+        return Ok(false);
+    }
+    let response = match client.get(source_url).send().await {
+        Ok(response)
+            if response.status() == reqwest::StatusCode::OK
+                && response.content_length() == Some(candidate.size) =>
+        {
+            response
+        }
+        Ok(response) => {
+            tracing::debug!(status = %response.status(), hash = %candidate.sha256, "repair source returned an unusable response");
+            return Ok(false);
+        }
+        Err(error) => {
+            tracing::debug!(reason = %error, hash = %candidate.sha256, "repair source could not be reached");
+            return Ok(false);
+        }
+    };
+    let store = state.inner.store.clone();
+    let hash = candidate.sha256.clone();
+    let repair = spawn_blocking(move || store.begin_repair(&hash))
+        .await
+        .map_err(|_| RepairError::Task)??;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(repair.temp_path()).await?;
+    let mut stream = response.bytes_stream();
+    let mut hasher = Sha256::new();
+    let mut received = 0_u64;
+    while let Some(chunk) = stream.next().await {
+        let Ok(chunk) = chunk else {
+            return Ok(false);
+        };
+        let chunk_len = match u64::try_from(chunk.len()) {
+            Ok(length) => length,
+            Err(_) => return Ok(false),
+        };
+        let Some(total) = received.checked_add(chunk_len) else {
+            return Ok(false);
+        };
+        received = total;
+        if received > repair.expected_size() {
+            return Ok(false);
+        }
+        hasher.update(&chunk);
+        file.write_all(&chunk).await?;
+    }
+    if received != repair.expected_size() {
+        return Ok(false);
+    }
+    file.flush().await?;
+    file.sync_all().await?;
+    drop(file);
+    let actual_hash = hex::encode(hasher.finalize());
+    if actual_hash != candidate.sha256 {
+        return Ok(false);
+    }
+    spawn_blocking(move || repair.commit(&actual_hash, received))
+        .await
+        .map_err(|_| RepairError::Task)??;
+    Ok(true)
 }
 
 pub fn router(state: AppState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
-        .allow_methods([Method::GET, Method::HEAD, Method::PUT, Method::OPTIONS])
+        .allow_methods([
+            Method::GET,
+            Method::HEAD,
+            Method::PUT,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
         .allow_headers([
             AUTHORIZATION,
             CONTENT_TYPE,
             CONTENT_LENGTH,
             X_SHA_256.clone(),
+            X_CONTENT_LENGTH.clone(),
+            X_CONTENT_TYPE.clone(),
         ])
         .expose_headers([
             CONTENT_LENGTH,
@@ -140,14 +312,15 @@ pub fn router(state: AppState) -> Router {
             CONTENT_TYPE,
             ETAG,
             ACCEPT_RANGES,
+            X_REASON.clone(),
         ]);
 
     Router::new()
         .route("/", get(server_info))
         .route("/healthz", get(health))
-        .route("/upload", put(upload))
+        .route("/upload", put(upload).head(upload_preflight))
         .route("/mirror", put(mirror))
-        .route("/{blob}", get(get_blob).head(head_blob))
+        .route("/{blob}", get(get_blob).head(head_blob).delete(delete_blob))
         .layer(cors)
         .with_state(state)
 }
@@ -157,7 +330,7 @@ async fn server_info() -> Json<ServerInfo> {
         name: "Wildbloom Node",
         software: "https://github.com/forgesworn/wildbloom-node",
         version: env!("CARGO_PKG_VERSION"),
-        blossom: ["BUD-01", "BUD-02", "BUD-04", "BUD-11"],
+        blossom: ["BUD-01", "BUD-02", "BUD-04", "BUD-06", "BUD-11", "BUD-12"],
     })
 }
 
@@ -200,6 +373,12 @@ async fn upload(
         .auth
         .verify_upload(authorization, &expected_hash, unix_time())
         .map_err(ApiError::from_auth)?;
+    let _write_permit = state
+        .inner
+        .write_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| ApiError::too_many_requests())?;
 
     let store = state.inner.store.clone();
     let begin_hash = expected_hash.clone();
@@ -265,6 +444,45 @@ async fn upload(
     }
 }
 
+async fn upload_preflight(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let expected_hash = header_str(&headers, &X_SHA_256, "missing X-SHA-256 header")?;
+    if !is_canonical_hash(expected_hash) {
+        return Err(ApiError::bad_request("invalid X-SHA-256 header"));
+    }
+    let expected_size = headers
+        .get(&X_CONTENT_LENGTH)
+        .ok_or_else(|| ApiError::length_required("missing X-Content-Length header"))?
+        .to_str()
+        .map_err(|_| ApiError::bad_request("invalid X-Content-Length header"))?
+        .parse::<u64>()
+        .map_err(|_| ApiError::bad_request("invalid X-Content-Length header"))?;
+    let content_type = header_str(&headers, &X_CONTENT_TYPE, "missing X-Content-Type header")?;
+    if content_type.is_empty() || content_type.len() > 255 {
+        return Err(ApiError::bad_request("invalid X-Content-Type header"));
+    }
+    let authorization = headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok());
+    state
+        .inner
+        .auth
+        .verify_upload(authorization, expected_hash, unix_time())
+        .map_err(ApiError::from_auth)?;
+    let store = state.inner.store.clone();
+    let expected_hash = expected_hash.to_owned();
+    spawn_blocking(move || store.check_upload(&expected_hash, expected_size))
+        .await
+        .map_err(|_| ApiError::internal())?
+        .map_err(ApiError::from_store)?;
+    Response::builder()
+        .status(StatusCode::OK)
+        .body(Body::empty())
+        .map_err(|_| ApiError::internal())
+}
+
 async fn mirror(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -284,6 +502,7 @@ async fn mirror(
     let expected_hash = mirror_hash_from_url(&source)
         .ok_or_else(|| ApiError::forbidden("mirror source is not permitted"))?
         .to_owned();
+    let source_url = source.to_string();
     let authorization = headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok());
@@ -292,6 +511,12 @@ async fn mirror(
         .auth
         .verify_upload(authorization, &expected_hash, unix_time())
         .map_err(ApiError::from_auth)?;
+    let _write_permit = state
+        .inner
+        .write_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| ApiError::too_many_requests())?;
 
     let response = client
         .get(source)
@@ -325,6 +550,7 @@ async fn mirror(
 
     match started {
         UploadStart::Existing(metadata) => {
+            record_repair_source(&state, &metadata.sha256, &source_url).await?;
             let descriptor = descriptor(&state, metadata);
             Ok((StatusCode::OK, Json(descriptor)).into_response())
         }
@@ -376,10 +602,25 @@ async fn mirror(
                 .await
                 .map_err(|_| ApiError::internal())?
                 .map_err(ApiError::from_store)?;
+            record_repair_source(&state, &metadata.sha256, &source_url).await?;
             let descriptor = descriptor(&state, metadata);
             Ok((StatusCode::CREATED, Json(descriptor)).into_response())
         }
     }
+}
+
+async fn record_repair_source(
+    state: &AppState,
+    hash: &str,
+    source_url: &str,
+) -> Result<(), ApiError> {
+    let store = state.inner.store.clone();
+    let hash = hash.to_owned();
+    let source_url = source_url.to_owned();
+    spawn_blocking(move || store.record_repair_source(&hash, &source_url))
+        .await
+        .map_err(|_| ApiError::internal())?
+        .map_err(ApiError::from_store)
 }
 
 async fn get_blob(
@@ -396,6 +637,34 @@ async fn head_blob(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     serve_blob(state, blob, headers, true).await
+}
+
+async fn delete_blob(
+    State(state): State<AppState>,
+    AxumPath(blob): AxumPath<String>,
+    headers: HeaderMap,
+) -> Result<Json<DeleteResponse>, ApiError> {
+    let hash = hash_from_path(&blob)
+        .ok_or_else(|| ApiError::not_found("blob not found"))?
+        .to_owned();
+    let authorization = headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok());
+    let verified = state
+        .inner
+        .auth
+        .verify_delete(authorization, &hash, unix_time())
+        .map_err(ApiError::from_auth)?;
+    let store = state.inner.store.clone();
+    let delete_hash = hash.clone();
+    let outcome = spawn_blocking(move || store.delete_owned(&delete_hash, &verified.owner_pubkey))
+        .await
+        .map_err(|_| ApiError::internal())?
+        .map_err(ApiError::from_store)?;
+    Ok(Json(DeleteResponse {
+        sha256: hash,
+        blob_deleted: outcome == DeleteOutcome::BlobDeleted,
+    }))
 }
 
 async fn serve_blob(
@@ -646,6 +915,14 @@ impl ApiError {
         }
     }
 
+    fn length_required(message: &'static str) -> Self {
+        Self {
+            status: StatusCode::LENGTH_REQUIRED,
+            message,
+            range_size: None,
+        }
+    }
+
     fn forbidden(message: &'static str) -> Self {
         Self {
             status: StatusCode::FORBIDDEN,
@@ -666,6 +943,14 @@ impl ApiError {
         Self {
             status: StatusCode::PAYLOAD_TOO_LARGE,
             message: "upload is too large",
+            range_size: None,
+        }
+    }
+
+    fn too_many_requests() -> Self {
+        Self {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            message: "too many concurrent writes",
             range_size: None,
         }
     }
@@ -726,6 +1011,9 @@ impl ApiError {
                 Self::bad_request("upload does not match its declared metadata")
             }
             StoreError::MissingBlob => Self::not_found("blob not found"),
+            StoreError::NotOwner => {
+                Self::forbidden("the signing public key does not own this blob")
+            }
             error => {
                 tracing::error!(reason = %error, "Blossom storage operation failed");
                 Self::internal()
@@ -748,6 +1036,9 @@ impl IntoResponse for ApiError {
         {
             response.headers_mut().insert(CONTENT_RANGE, value);
         }
+        if let Ok(reason) = HeaderValue::from_str(self.message) {
+            response.headers_mut().insert(X_REASON.clone(), reason);
+        }
         response
     }
 }
@@ -762,9 +1053,13 @@ mod tests {
     use tower::ServiceExt;
 
     fn upload_authorization(hash: &str, created_at: u64) -> String {
+        operation_authorization(hash, created_at, "upload")
+    }
+
+    fn operation_authorization(hash: &str, created_at: u64, operation: &str) -> String {
         let keys = Keys::parse(&format!("{:064x}", 1)).unwrap();
         let tags = [
-            vec!["t", "upload"],
+            vec!["t", operation],
             vec!["x", hash],
             vec!["server", "node.example"],
         ]
@@ -773,7 +1068,7 @@ mod tests {
         .chain(std::iter::once(
             Tag::parse(["expiration", &(created_at + 120).to_string()]).unwrap(),
         ));
-        let event = EventBuilder::new(Kind::Custom(24_242), "Upload blob")
+        let event = EventBuilder::new(Kind::Custom(24_242), format!("Authorise {operation}"))
             .tags(tags)
             .custom_created_at(Timestamp::from(created_at))
             .finalize(&keys)
@@ -867,6 +1162,9 @@ mod tests {
                 BlossomConfig {
                     public_base_url: Url::parse("http://node.example/").unwrap(),
                     accepted_server_names: vec!["node.example".into()],
+                    allowed_pubkeys: Vec::new(),
+                    allow_public_writes: true,
+                    max_concurrent_writes: 4,
                     mirror_proxy: None,
                 },
             )
@@ -875,6 +1173,42 @@ mod tests {
         let bytes = b"hello wildbloom";
         let hash = hex::encode(Sha256::digest(bytes));
         let now = unix_time();
+        let preflight = Request::builder()
+            .method(Method::HEAD)
+            .uri("/upload")
+            .header(&X_CONTENT_TYPE, "text/plain")
+            .header(&X_CONTENT_LENGTH, bytes.len())
+            .header(&X_SHA_256, &hash)
+            .header(AUTHORIZATION, upload_authorization(&hash, now))
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(preflight).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            response
+                .into_body()
+                .collect()
+                .await
+                .unwrap()
+                .to_bytes()
+                .is_empty()
+        );
+
+        let missing_length = Request::builder()
+            .method(Method::HEAD)
+            .uri("/upload")
+            .header(&X_CONTENT_TYPE, "text/plain")
+            .header(&X_SHA_256, &hash)
+            .header(AUTHORIZATION, upload_authorization(&hash, now))
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(missing_length).await.unwrap();
+        assert_eq!(response.status(), StatusCode::LENGTH_REQUIRED);
+        assert_eq!(
+            response.headers()[&X_REASON],
+            "missing X-Content-Length header"
+        );
+
         let upload = Request::builder()
             .method(Method::PUT)
             .uri("/upload")
@@ -897,12 +1231,35 @@ mod tests {
             .header(RANGE, "bytes=6-14")
             .body(Body::empty())
             .unwrap();
-        let response = app.oneshot(download).await.unwrap();
+        let response = app.clone().oneshot(download).await.unwrap();
         assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
         assert_eq!(response.headers()[CONTENT_RANGE], "bytes 6-14/15");
         assert_eq!(
             response.into_body().collect().await.unwrap().to_bytes(),
             &bytes[6..15]
+        );
+
+        let delete = Request::builder()
+            .method(Method::DELETE)
+            .uri(format!("/{hash}"))
+            .header(AUTHORIZATION, operation_authorization(&hash, now, "delete"))
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(delete).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let deleted: serde_json::Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(deleted["sha256"], hash);
+        assert_eq!(deleted["blobDeleted"], true);
+
+        let missing = Request::builder()
+            .uri(format!("/{hash}"))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(missing).await.unwrap().status(),
+            StatusCode::NOT_FOUND
         );
     }
 }

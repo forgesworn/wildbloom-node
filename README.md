@@ -7,11 +7,12 @@ your disk by SHA-256, accepts only tightly scoped Nostr authorisation, and makes
 the server reachable through a persistent Tor v3 onion.  It does not use
 WebRTC, STUN or TURN.
 
-This is an alpha prototype.  The headless node targets macOS, Linux and Windows,
-but installation is still from source and Tor must already be installed.  The
-real Tor and two-node replication acceptance has run on macOS; Windows and Linux
-runtime evidence is still open.  A friendly desktop installer and unattended
-repair are next.
+This is a production candidate, not a durability promise.  The headless node
+targets macOS, Linux and Windows.  The native tray application bundles a
+signature-verified Tor Expert Bundle, creates the onion service and starts the
+node without asking the user to open a router port.  Unsigned preview installers
+are built separately from production releases; we will not label them as trusted
+downloads until the platform signing and clean-machine acceptance gates pass.
 
 ## Why this exists
 
@@ -32,39 +33,83 @@ direct transport, but it is not yet part of the durability claim.
 - BUD-02 streaming `PUT /upload` with `Content-Length` and `X-SHA-256`.
 - BUD-04 `PUT /mirror` from hash-addressed onion or public HTTPS origins through
   the node's private Tor SOCKS listener.
+- BUD-06 authorised upload preflight with quota and per-blob checks.
 - Strict BUD-11 kind `24242` signature, operation, hash, server and expiry
   checks.
+- BUD-12 owner-aware deletion.  One signer cannot delete another signer's
+  retained ownership.
 - Persistent SQLite metadata and a disk content-addressed store.
 - Pre-stream global quota reservation, per-blob limits, deduplication and
   interrupted-upload cleanup.
+- Deny-by-default writes, bounded concurrent streams, complete integrity scans
+  and repair from previously verified mirror sources.
 - Loopback-only binding by default and a persistent Tor v3 onion identity.
-- Native Rust build/test CI configured for macOS, Linux and Windows.
+- Native Rust and Tauri compile CI configured for macOS, Linux and Windows.
+- A native Tauri tray shell with platform data directories, start-at-login,
+  storage status and no private-key input.
 
-There is no deletion API, paid quota, automatic replica repair or desktop GUI
-yet.  Those omissions are deliberate and documented in the [roadmap](docs/ROADMAP.md).
+There is no proof-of-storage protocol, paid quota or automatic discovery of
+strangers willing to hold data.  Repair can restore a damaged local copy only
+when the node already recorded a verified source which is still online.  Those
+boundaries are documented in the [roadmap](docs/ROADMAP.md).
 
 ## Install and run
 
-You need [Rust](https://www.rust-lang.org/tools/install) 1.94.1 or later and a
-current [Tor Expert Bundle](https://www.torproject.org/download/tor/), with the
-`tor` executable on `PATH`.
+The desktop application is the intended consumer install.  Until signed
+installers are published, build it only from a revision you have reviewed.
+
+### Build the desktop preview from source
+
+Install Rust 1.94.1, the platform's normal Tauri 2 build prerequisites, GnuPG
+and the Tauri CLI.  Choose the matching target and Tor bundle name:
+
+| System | Rust target | Tor bundle name |
+| --- | --- | --- |
+| Windows x64 | `x86_64-pc-windows-msvc` | `windows-x86_64` |
+| Linux x64 | `x86_64-unknown-linux-gnu` | `linux-x86_64` |
+| macOS Apple Silicon | `aarch64-apple-darwin` | `macos-aarch64` |
+| macOS Intel | `x86_64-apple-darwin` | `macos-x86_64` |
+
+From a fresh clone, replace the two values below with that row:
+
+```sh
+cargo install tauri-cli --version 2.11.4 --locked
+scripts/prepare-tor-runtime.sh <tor-bundle-name> desktop/src-tauri/tor-runtime
+cargo build --locked --release --target <rust-target> -p wildbloomd
+cp target/<rust-target>/release/wildbloomd desktop/src-tauri/binaries/wildbloomd-<rust-target>
+# On macOS only: scripts/sign-macos-tor-runtime.sh - desktop/src-tauri/tor-runtime
+cd desktop/src-tauri
+cargo tauri build --target <rust-target>
+```
+
+On Windows, both daemon paths end in `.exe`.  This produces an explicitly
+unsigned preview.  The verified Tor runtime is bundled as a complete resource,
+not fetched on first start.  Production signing and updater artefacts are made
+only by the fail-closed release workflow described in [the release process](docs/RELEASE.md).
+
+### Run the headless service
+
+The headless path needs [Rust](https://www.rust-lang.org/tools/install) 1.94.1
+or later and a current [Tor Expert Bundle](https://www.torproject.org/download/tor/),
+with the `tor` executable on `PATH`.
 
 ```sh
 git clone https://github.com/forgesworn/wildbloom-node.git
 cd wildbloom-node
 cargo build --release
-./target/release/wildbloomd
+./target/release/wildbloomd --allow-pubkey <64-lower-case-hex-public-key>
 ```
 
-The first Tor bootstrap can take a minute or two.  Once ready, the log prints
-the stable `.onion` Blossom URL.  Add that URL to a Blossom-capable client.  The
-node stores data under `./data` unless `--data-dir` or
-`WILDBLOOM_DATA_DIR` says otherwise.
+The first Tor bootstrap can take a few minutes.  Once ready, the log prints the
+stable `.onion` Blossom URL.  Add that URL to a Blossom-capable client.  The
+node stores data in the operating system's per-user application-data directory
+unless `--data-dir` or `WILDBLOOM_DATA_DIR` says otherwise.  Without an allowed
+public key it remains read-only.
 
-For local development without Tor:
+For local development without Tor and with deliberately public writes:
 
 ```sh
-cargo run -p wildbloomd -- --no-tor
+cargo run -p wildbloomd -- --no-tor --allow-public-writes
 ```
 
 Useful controls:
@@ -72,9 +117,13 @@ Useful controls:
 ```text
 --quota-bytes <BYTES>          total stored blob quota, default 10 GiB
 --max-blob-bytes <BYTES>       maximum single blob, default 1 GiB
+--allow-pubkey <HEX>           permitted writer public key, repeatable
+--max-concurrent-writes <N>    concurrent upload/mirror limit, default 4
+--repair-interval <SECONDS>    integrity and repair interval, default 3600
+--verify-storage               verify every stored byte and exit
 --bind <IP:PORT>               local listener, default 127.0.0.1:3742
 --tor-bin <PATH>               Tor executable, default tor
---no-tor                      local-only development mode
+--no-tor                       local-only development mode
 ```
 
 Do not put the local listener on the public internet merely because the flag
@@ -104,11 +153,13 @@ and the [V4V dogfood path](docs/V4V-DOGFOOD.md).
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-cargo audit
+scripts/audit-dependencies.sh
 ```
 
 Security issues should follow [SECURITY.md](SECURITY.md).  Contributions are
-welcome under the [MIT licence](LICENSE).
+welcome under the [MIT licence](LICENSE).  Desktop packages also retain the
+exact upstream licences for their signature-verified Tor runtime; see
+[third-party notices](THIRD_PARTY_NOTICES.md).
 
 ## Support ForgeSworn
 

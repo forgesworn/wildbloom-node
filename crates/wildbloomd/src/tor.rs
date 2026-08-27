@@ -79,6 +79,8 @@ impl TorService {
             .arg("reject *:*")
             .arg("--PublishServerDescriptor")
             .arg("0")
+            .arg("--__OwningControllerProcess")
+            .arg(std::process::id().to_string())
             .arg("--HiddenServiceDir")
             .arg(&service_dir)
             .arg("--HiddenServiceVersion")
