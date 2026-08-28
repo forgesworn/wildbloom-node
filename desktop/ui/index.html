@@ -21,11 +21,11 @@
       <section class="status-card" aria-labelledby="status-heading">
         <div>
           <p class="label" id="status-heading">Node status</p>
-          <p class="status" role="status"><span id="status-dot" aria-hidden="true"></span><strong id="phase">Starting</strong></p>
-          <p id="detail" aria-live="polite">Preparing the private Tor service.</p>
+          <p class="status" role="status"><span id="status-dot" aria-hidden="true"></span><strong id="phase">Setup required</strong></p>
+          <p id="detail" aria-live="polite">Choose Tor or direct mode, then save to start the node.</p>
         </div>
         <div class="status-actions">
-          <button id="restart" class="secondary" type="button">Restart node</button>
+          <button id="restart" class="secondary" type="button" disabled>Restart node</button>
           <button id="check-update" class="secondary" type="button">Check for updates</button>
           <output id="update-status" aria-live="polite"></output>
         </div>
@@ -33,8 +33,8 @@
 
       <section aria-labelledby="address-heading">
         <p class="label" id="address-heading">Blossom address</p>
-        <output id="onion">Waiting for Tor…</output>
-        <p class="hint">Give this address to Wildbloom or another Blossom client.  Your home IP and router remain out of the protocol.</p>
+        <output id="node-address">Starting…</output>
+        <p id="address-hint" class="hint">Give this address to Wildbloom or another Blossom client.</p>
       </section>
 
       <section class="stats" aria-label="Storage statistics">
@@ -46,6 +46,26 @@
       <section aria-labelledby="access-heading">
         <p class="label" id="access-heading">Who may write</p>
         <form id="settings-form">
+          <label>
+            Network transport
+            <select id="transport">
+              <option value="tor">Tor onion</option>
+              <option value="direct">Direct / your HTTPS proxy</option>
+            </select>
+            <small>Tor avoids router setup and hides the home address.  Direct mode does not start Tor.</small>
+          </label>
+          <div id="direct-fields" class="nested-fields" hidden>
+            <label>
+              Local listener port
+              <input id="direct-port" type="number" min="1" max="65535" step="1" value="3742" />
+              <small>The desktop still binds only to 127.0.0.1.  Point your own HTTPS reverse proxy at this port for remote access.</small>
+            </label>
+            <label>
+              Public Blossom URL <small>optional</small>
+              <input id="direct-public-url" type="url" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://blossom.example" />
+              <small>Leave blank for local-only use.  Remote URLs must use HTTPS and will expose the node's network address to clients.</small>
+            </label>
+          </div>
           <label>
             Owner Nostr public key
             <input id="pubkey" type="text" maxlength="64" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="64 lower-case hexadecimal characters" />
@@ -72,10 +92,10 @@
 
       <aside>
         <strong>What this protects</strong>
-        <p>Direct uploads need a short-lived Nostr signature from the owner or an unexpired friend.  Open shelter accepts unknown keys only through signed mirrors and gives them no retention promise.  Encrypt sensitive files before upload.  Tor hides the node’s home address, not file size, timing or public Nostr identity.</p>
+        <p>Direct uploads need a short-lived Nostr signature from the owner or an unexpired friend.  Open shelter accepts unknown keys only through signed mirrors and gives them no retention promise.  Encrypt sensitive files before upload.  Tor is optional: it hides the node’s home address, not file size, timing or public Nostr identity.  Direct mode exposes ordinary network metadata.</p>
       </aside>
 
-      <footer>Closing this window leaves the node running in the tray.  Quit from the tray menu to stop both Wildbloom and Tor.</footer>
+      <footer>Closing this window leaves the node running in the tray.  Quit from the tray menu to stop Wildbloom and Tor when Tor is enabled.</footer>
     </main>
     <script src="app.js"></script>
   </body>

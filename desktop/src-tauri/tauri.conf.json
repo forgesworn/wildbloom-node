@@ -40,7 +40,7 @@
     "active": true,
     "category": "Utility",
     "shortDescription": "Private home storage for Blossom",
-    "longDescription": "A self-hosted Blossom storage and replication node reached through a private Tor onion service.",
+    "longDescription": "A self-hosted Blossom storage and replication node with optional Tor or operator-managed HTTPS reachability.",
     "copyright": "Copyright ForgeSworn contributors",
     "externalBin": [
       "binaries/wildbloomd"

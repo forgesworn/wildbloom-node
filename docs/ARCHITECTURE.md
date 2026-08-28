@@ -6,12 +6,14 @@ Wildbloom separates storage semantics from the shell that runs them.
 Wildbloom / V4V client
   |  signed BUD-11 request
   v
-Tor v3 onion  ->  loopback-only wildbloomd
+Tor v3 onion ---------+
+                      +-> loopback-only wildbloomd
+Operator HTTPS proxy -+          |
                          |
              +-----------+-----------+
              |                       |
         Blossom HTTP           BUD-04 fetcher
-        BUD-01/02/11        (BlobFetcher: Tor today)
+        BUD-01/02/11        (Tor or direct HTTPS)
              |                       |
              +-----------+-----------+
                          |
@@ -25,18 +27,21 @@ verification, Blossom behaviour, quota reservation, integrity checks, repair
 and persistent storage.  Wildbloom pins its versioned public crate but supplies
 the `Wildbloom Node` BUD-01 identity from the daemon shell.  Shelter Kit fetches
 mirror and repair bytes through a transport-neutral `BlobFetcher` interface;
-the only shipped adapter is `TorHttpFetcher`, which speaks through the loopback
-SOCKS proxy the shell supplies.  A fetcher carries bytes and reports which path
+the shipped adapters are `TorHttpFetcher`, which speaks through the loopback
+SOCKS proxy the shell supplies, and `DirectHttpsFetcher`, which reaches only
+public HTTPS origins.  A fetcher carries bytes and reports which path
 carried them.
 It never sees authorisation events, retention tiers or the owner's identity,
 and the core still checks exact length and SHA-256 on everything it delivers.
 `wildbloomd` owns process configuration, the local TCP listener, shutdown and
-either a managed Tor process or an explicitly supplied loopback Tor SOCKS
-proxy.
+the operator's explicit choice of managed Tor, supplied Tor SOCKS proxy,
+direct public HTTPS or local-only operation.
 
-The Tauri tray application is a narrow process shell.  It starts the complete
-signature-verified Tor Expert Bundle from its resources, preserves the onion
-identity in the platform's per-user application-data directory, and launches
+The Tauri tray application is a narrow process shell.  In Tor mode it starts
+the complete signature-verified Tor Expert Bundle from its resources and
+preserves the onion identity in the platform's per-user application-data
+directory.  In direct mode it does not start Tor and expects the operator to
+provide HTTPS reachability when remote access is wanted.  Both modes launch
 the exact `wildbloomd` sidecar on loopback.  Its UI receives status through
 Tauri IPC.  It does not contain a second Blossom implementation and never asks
 for a Nostr private key.  Linux Tor execution uses only the verified bundle's
@@ -85,9 +90,9 @@ complete policy and its remaining cross-platform acceptance boundary are in
 
 The Axum router is already exposed without binding a listener, and BUD-04
 mirroring and repair already go through the transport-neutral `BlobFetcher`
-interface with Tor as the only shipped adapter.  Loopback shells and any future
-direct transport plug in as further adapters over one authenticated Blossom
-router and one CAS rather than separate daemons or stores.
+interface.  Tor and direct public HTTPS are shipped adapters over one
+authenticated Blossom router and one CAS rather than separate daemons or
+stores.
 
 The candidate direct transport is a ForgeSworn-owned lane over standard QUIC
 (Quinn with rustls) with an opaque WebSocket relay as the universal fallback.

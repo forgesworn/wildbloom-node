@@ -1,9 +1,10 @@
 use clap::Parser;
-use std::{net::SocketAddr, path::PathBuf, str::FromStr};
+use std::{net::SocketAddr, path::PathBuf, str::FromStr, sync::Arc};
 use tracing_subscriber::EnvFilter;
 use url::Url;
 use wildbloom_core::{
-    AppState, BlossomConfig, FriendGrant, ServerMetadata, Store, StoreConfig, router,
+    AppState, BlossomConfig, DirectHttpsFetcher, FriendGrant, ServerMetadata, Store, StoreConfig,
+    router,
 };
 
 mod tor;
@@ -108,9 +109,18 @@ struct Cli {
     #[arg(long, env = "WILDBLOOM_VERIFY_STORAGE")]
     verify_storage: bool,
 
-    /// Run only on the local HTTP listener instead of starting Tor.
+    /// Run without a managed Tor service.  The listener remains loopback-only by default.
     #[arg(long, env = "WILDBLOOM_NO_TOR")]
     no_tor: bool,
+
+    /// Fetch public HTTPS mirror and repair sources directly instead of through Tor.
+    #[arg(
+        long,
+        env = "WILDBLOOM_DIRECT_HTTPS_MIRRORS",
+        requires = "no_tor",
+        conflicts_with = "mirror_proxy"
+    )]
+    direct_https_mirrors: bool,
 
     /// Loopback socks5h proxy supplied by a desktop shell when --no-tor is set.
     #[arg(long, env = "WILDBLOOM_MIRROR_PROXY", requires = "no_tor")]
@@ -216,28 +226,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .expect("managed Tor SOCKS URL is valid")
         })
         .or(cli.mirror_proxy);
-    let repair_enabled = mirror_proxy.is_some() && cli.repair_interval > 0;
-
-    let state = AppState::new(
-        store,
-        BlossomConfig {
-            server_metadata: ServerMetadata {
-                name: "Wildbloom Node".into(),
-                software: "https://github.com/forgesworn/wildbloom-node".into(),
-            },
-            public_base_url: public_url.clone(),
-            accepted_server_names: server_names.clone(),
-            allowed_pubkeys: cli.allowed_pubkeys,
-            friend_grants: cli.friend_grants.into_iter().map(|grant| grant.0).collect(),
-            open_shelter: cli.open_shelter,
-            max_concurrent_writes: cli.max_concurrent_writes,
-            mirror_proxy,
+    let repair_enabled =
+        (mirror_proxy.is_some() || cli.direct_https_mirrors) && cli.repair_interval > 0;
+    let config = BlossomConfig {
+        server_metadata: ServerMetadata {
+            name: "Wildbloom Node".into(),
+            software: "https://github.com/forgesworn/wildbloom-node".into(),
         },
-    )?;
+        public_base_url: public_url.clone(),
+        accepted_server_names: server_names.clone(),
+        allowed_pubkeys: cli.allowed_pubkeys,
+        friend_grants: cli.friend_grants.into_iter().map(|grant| grant.0).collect(),
+        open_shelter: cli.open_shelter,
+        max_concurrent_writes: cli.max_concurrent_writes,
+        mirror_proxy,
+    };
+    let state = if cli.direct_https_mirrors {
+        AppState::with_fetcher(store, config, Arc::new(DirectHttpsFetcher::new()?))?
+    } else {
+        AppState::new(store, config)?
+    };
+    let transport = if tor.is_some() {
+        "tor"
+    } else if cli.direct_https_mirrors {
+        "direct-https"
+    } else {
+        "local-only"
+    };
     tracing::info!(
         address = %local_address,
         public_url = %public_url,
         server_names = ?server_names,
+        transport,
         "Wildbloom Node is ready"
     );
     if repair_enabled {
@@ -314,6 +334,23 @@ fn validate_public_url(url: &Url) -> Result<(), Box<dyn std::error::Error>> {
     {
         return Err("--public-url must be an HTTP(S) origin without credentials or a path".into());
     }
+    if url.scheme() == "http"
+        && !url
+            .host_str()
+            .is_some_and(|host| host == "localhost" || host.ends_with(".onion"))
+        && !url
+            .host()
+            .and_then(|host| match host {
+                url::Host::Ipv4(address) => Some(address.is_loopback()),
+                url::Host::Ipv6(address) => Some(address.is_loopback()),
+                url::Host::Domain(_) => None,
+            })
+            .unwrap_or(false)
+    {
+        return Err(
+            "--public-url requires HTTPS except for localhost, loopback or onion origins".into(),
+        );
+    }
     Ok(())
 }
 
@@ -376,6 +413,47 @@ mod tests {
         assert_eq!(cli.friend_grants[0].0.pubkey, pubkey);
         assert_eq!(cli.friend_grants[0].0.byte_limit, 1_048_576);
         assert_eq!(cli.friend_grants[0].0.expires_at, 2_000_000_000);
+    }
+
+    #[test]
+    fn direct_https_mirroring_requires_no_tor_and_conflicts_with_a_proxy() {
+        assert!(Cli::try_parse_from(["wildbloomd", "--direct-https-mirrors"]).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "wildbloomd",
+                "--no-tor",
+                "--direct-https-mirrors",
+                "--mirror-proxy",
+                "socks5h://127.0.0.1:9050",
+            ])
+            .is_err()
+        );
+        let cli =
+            Cli::try_parse_from(["wildbloomd", "--no-tor", "--direct-https-mirrors"]).unwrap();
+        assert!(cli.no_tor);
+        assert!(cli.direct_https_mirrors);
+    }
+
+    #[test]
+    fn public_url_requires_https_except_for_local_and_onion_origins() {
+        for accepted in [
+            "https://blossom.example/",
+            "http://localhost:3742/",
+            "http://127.0.0.1:3742/",
+            "http://[::1]:3742/",
+            &format!("http://{}.onion/", "a".repeat(56)),
+        ] {
+            assert!(
+                validate_public_url(&Url::parse(accepted).unwrap()).is_ok(),
+                "{accepted}"
+            );
+        }
+        for rejected in ["http://blossom.example/", "ftp://blossom.example/"] {
+            assert!(
+                validate_public_url(&Url::parse(rejected).unwrap()).is_err(),
+                "{rejected}"
+            );
+        }
     }
 
     #[cfg(target_os = "linux")]

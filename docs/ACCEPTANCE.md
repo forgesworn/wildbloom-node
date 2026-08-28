@@ -179,3 +179,26 @@ Environment: macOS, Rust 1.94.1, stacked branch
   real Tor transfer.  It does not prove separate operators, a Tor-capable
   browser origin or production deployment.  Cross-platform CI remains required
   before this revision is called production-shipped.
+
+## 2026-08-28 optional Tor and direct HTTPS
+
+Environment: macOS, Rust 1.94.1, branch `feat/optional-tor`.
+
+- `shelter-kit` v0.1.1 passed 43 tests, strict clippy, packaging, RustSec audit
+  and its Linux, macOS and Windows CI matrix.  The new direct fetch adapter
+  accepts only public HTTPS, disables redirects and ambient proxies, and
+  filters DNS answers in private, loopback, link-local, documentation and
+  other non-public ranges.
+- The daemon passed six tests including direct-mode CLI conflicts and refusal
+  of plaintext public origins.  The desktop passed six tests including
+  backward-compatible Tor defaults and direct URL validation.  A fresh desktop
+  has a separate setup phase and starts neither child until a transport is
+  saved; installed-preview automation now records its Tor choice explicitly.
+- A real `wildbloomd` process started with `--no-tor` and
+  `--direct-https-mirrors`, reported `transport="direct-https"`, bound only to
+  `127.0.0.1:39442` and returned the exact empty 10 GiB store from `/healthz`.
+  No Tor process was started.
+
+This proves the local direct runtime and the adapter's bounded policy.  It does
+not prove an operator's external DNS, certificate, reverse proxy, firewall or
+internet reachability; those remain deployment evidence for that operator.

@@ -2,7 +2,7 @@ use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
-    net::TcpListener,
+    net::{IpAddr, TcpListener},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, RwLock},
     time::Duration,
@@ -27,6 +27,23 @@ struct Settings {
     open_shelter: bool,
     quota_gib: u64,
     start_at_login: bool,
+    transport: Transport,
+    direct_port: u16,
+    direct_public_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum Transport {
+    #[default]
+    Tor,
+    Direct,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum MirrorTransport {
+    TorProxy(u16),
+    DirectHttps,
 }
 
 impl Default for Settings {
@@ -37,6 +54,9 @@ impl Default for Settings {
             open_shelter: false,
             quota_gib: 10,
             start_at_login: false,
+            transport: Transport::Tor,
+            direct_port: 3742,
+            direct_public_url: None,
         }
     }
 }
@@ -46,7 +66,7 @@ struct RuntimeStatus {
     generation: u64,
     phase: &'static str,
     detail: String,
-    onion_url: Option<String>,
+    public_url: Option<String>,
     local_port: Option<u16>,
 }
 
@@ -54,9 +74,9 @@ impl Default for RuntimeStatus {
     fn default() -> Self {
         Self {
             generation: 0,
-            phase: "starting",
-            detail: "Preparing the private Tor service.".into(),
-            onion_url: None,
+            phase: "setup",
+            detail: "Choose Tor or direct mode, then save to start the node.".into(),
+            public_url: None,
             local_port: None,
         }
     }
@@ -111,7 +131,7 @@ struct NodeStatus {
     phase: &'static str,
     phase_label: &'static str,
     detail: String,
-    onion_url: Option<String>,
+    public_url: Option<String>,
     storage: Option<StorageStatus>,
     settings: Settings,
 }
@@ -146,7 +166,7 @@ async fn node_status(
         phase: current.phase,
         phase_label: phase_label(current.phase),
         detail: current.detail,
-        onion_url: current.onion_url,
+        public_url: current.public_url,
         storage,
         settings,
     })
@@ -217,11 +237,43 @@ async fn start_runtime(app: AppHandle, manager: Arc<NodeManager>) -> Result<(), 
             .map_err(|_| "node status lock failed")?;
         status.generation = status.generation.saturating_add(1);
         status.phase = "starting";
-        status.detail = "Bootstrapping a private Tor service.".into();
-        status.onion_url = None;
+        status.detail = match settings.transport {
+            Transport::Tor => "Bootstrapping the optional private Tor service.",
+            Transport::Direct => "Starting the direct Wildbloom service.",
+        }
+        .into();
+        status.public_url = None;
         status.local_port = None;
         status.generation
     };
+    match settings.transport {
+        Transport::Tor => start_tor_runtime(app, manager.clone(), settings, generation).await,
+        Transport::Direct => {
+            let node_port = settings.direct_port;
+            let public_url = settings
+                .direct_public_url
+                .clone()
+                .unwrap_or_else(|| format!("http://localhost:{node_port}/"));
+            start_node_sidecar(
+                &app,
+                manager.clone(),
+                &settings,
+                generation,
+                node_port,
+                public_url,
+                MirrorTransport::DirectHttps,
+            )
+            .await
+        }
+    }
+}
+
+async fn start_tor_runtime(
+    app: AppHandle,
+    manager: Arc<NodeManager>,
+    settings: Settings,
+    generation: u64,
+) -> Result<(), String> {
     let data_dir = node_data_dir(&app)?;
     let tor_root = data_dir.join("tor");
     let tor_data = tor_root.join("client");
@@ -306,29 +358,27 @@ async fn start_runtime(app: AppHandle, manager: Arc<NodeManager>) -> Result<(), 
                     let bootstrap = tor_bootstrap_percent(&line);
                     if !node_started && bootstrap == Some(100) {
                         node_started = true;
-                        if let Err(error) = start_node_sidecar(
-                            &event_app,
-                            event_manager.clone(),
-                            &settings,
-                            generation,
-                            node_port,
-                            socks_port,
-                            &onion_dir,
-                        )
-                        .await
-                        {
-                            set_error(&event_manager, generation, error);
+                        match wait_for_onion_hostname(&onion_dir).await {
+                            Ok(hostname) => {
+                                if let Err(error) = start_node_sidecar(
+                                    &event_app,
+                                    event_manager.clone(),
+                                    &settings,
+                                    generation,
+                                    node_port,
+                                    format!("http://{hostname}/"),
+                                    MirrorTransport::TorProxy(socks_port),
+                                )
+                                .await
+                                {
+                                    set_error(&event_manager, generation, error);
+                                }
+                            }
+                            Err(error) => set_error(&event_manager, generation, error),
                         }
                     } else if !node_started && let Some(percent) = bootstrap {
                         let detail = format!("The bundled Tor process is {percent}% bootstrapped.");
-                        set_phase(
-                            &event_manager,
-                            generation,
-                            "starting",
-                            &detail,
-                            None,
-                            None,
-                        );
+                        set_phase(&event_manager, generation, "starting", &detail, None, None);
                     }
                 }
                 CommandEvent::Error(error) => set_error(
@@ -376,13 +426,18 @@ async fn start_node_sidecar(
     settings: &Settings,
     generation: u64,
     node_port: u16,
-    socks_port: u16,
-    onion_dir: &Path,
+    public_url: String,
+    mirror_transport: MirrorTransport,
 ) -> Result<(), String> {
     if !generation_is_current(&manager, generation) {
         return Ok(());
     }
-    let hostname = wait_for_onion_hostname(onion_dir).await?;
+    let public_origin = reqwest::Url::parse(&public_url)
+        .map_err(|_| "the configured public Blossom URL is invalid")?;
+    let hostname = public_origin
+        .host_str()
+        .ok_or("the configured public Blossom URL has no hostname")?
+        .to_owned();
     let data_dir = node_data_dir(app)?;
     let quota_bytes = settings
         .quota_gib
@@ -396,15 +451,20 @@ async fn start_node_sidecar(
         "--quota-bytes".into(),
         quota_bytes.to_string().into(),
         "--public-url".into(),
-        format!("http://{hostname}/").into(),
+        public_url.clone().into(),
         "--server-name".into(),
-        hostname.clone().into(),
+        hostname.into(),
         "--no-tor".into(),
-        "--mirror-proxy".into(),
-        format!("socks5h://127.0.0.1:{socks_port}").into(),
         "--repair-interval".into(),
         "3600".into(),
     ];
+    match mirror_transport {
+        MirrorTransport::TorProxy(socks_port) => {
+            arguments.push("--mirror-proxy".into());
+            arguments.push(format!("socks5h://127.0.0.1:{socks_port}").into());
+        }
+        MirrorTransport::DirectHttps => arguments.push("--direct-https-mirrors".into()),
+    }
     if let Some(pubkey) = &settings.allowed_pubkey {
         arguments.push("--allow-pubkey".into());
         arguments.push(pubkey.into());
@@ -433,12 +493,16 @@ async fn start_node_sidecar(
         .lock()
         .map_err(|_| "child process lock failed")?
         .node = Some(node_child);
+    let starting_detail = match mirror_transport {
+        MirrorTransport::TorProxy(_) => "Tor is ready.  Starting the Blossom service.",
+        MirrorTransport::DirectHttps => "Starting the direct Blossom service on loopback.",
+    };
     set_phase(
         &manager,
         generation,
         "starting",
-        "Tor is ready.  Starting the Blossom service.",
-        Some(format!("http://{hostname}/")),
+        starting_detail,
+        Some(public_url.clone()),
         Some(node_port),
     );
 
@@ -449,12 +513,20 @@ async fn start_node_sidecar(
                 CommandEvent::Stdout(bytes) | CommandEvent::Stderr(bytes) => {
                     let line = String::from_utf8_lossy(&bytes);
                     if line.contains("Wildbloom Node is ready") {
+                        let ready_detail = match mirror_transport {
+                            MirrorTransport::TorProxy(_) => {
+                                "The onion service is online and storage repair is active."
+                            }
+                            MirrorTransport::DirectHttps => {
+                                "Direct mode is online.  Public HTTPS mirror and repair are active."
+                            }
+                        };
                         set_phase(
                             &node_manager,
                             generation,
                             "ready",
-                            "The onion service is online and storage repair is active.",
-                            Some(format!("http://{hostname}/")),
+                            ready_detail,
+                            Some(public_url.clone()),
                             Some(node_port),
                         );
                     }
@@ -544,7 +616,7 @@ fn set_phase(
     generation: u64,
     phase: &'static str,
     detail: &str,
-    onion_url: Option<String>,
+    public_url: Option<String>,
     local_port: Option<u16>,
 ) {
     if let Ok(mut status) = manager.status.write()
@@ -552,7 +624,7 @@ fn set_phase(
     {
         status.phase = phase;
         status.detail = detail.into();
-        status.onion_url = onion_url;
+        status.public_url = public_url;
         status.local_port = local_port;
         eprintln!("Wildbloom Node runtime phase: {phase}: {detail}");
     }
@@ -567,6 +639,7 @@ fn phase_label(phase: &str) -> &'static str {
         "ready" => "Online",
         "error" => "Needs attention",
         "stopped" => "Stopped",
+        "setup" => "Setup required",
         _ => "Starting",
     }
 }
@@ -590,9 +663,7 @@ fn validate_settings(settings: &Settings) -> Result<(), String> {
             || byte_limit == 0
             || expires_at > i64::MAX as u64
         {
-            return Err(
-                "each friend grant must be PUBKEY:POSITIVE_BYTE_LIMIT:UNIX_EXPIRY".into(),
-            );
+            return Err("each friend grant must be PUBKEY:POSITIVE_BYTE_LIMIT:UNIX_EXPIRY".into());
         }
         if settings.allowed_pubkey.as_ref() == Some(&pubkey) {
             return Err("the owner key must not also appear as a friend".into());
@@ -603,6 +674,43 @@ fn validate_settings(settings: &Settings) -> Result<(), String> {
     }
     if !(1..=16_384).contains(&settings.quota_gib) {
         return Err("the storage quota must be between 1 GiB and 16 TiB".into());
+    }
+    if settings.direct_port == 0 {
+        return Err("the direct listener port must be between 1 and 65535".into());
+    }
+    if let Some(public_url) = &settings.direct_public_url {
+        validate_direct_public_url(public_url)?;
+    }
+    Ok(())
+}
+
+fn validate_direct_public_url(value: &str) -> Result<(), String> {
+    let url = reqwest::Url::parse(value)
+        .map_err(|_| "the direct public URL must be a valid HTTP(S) origin")?;
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.path() != "/"
+    {
+        return Err(
+            "the direct public URL must not contain credentials, a path, query or fragment".into(),
+        );
+    }
+    if url.scheme() == "https" {
+        return Ok(());
+    }
+    let local_http = url.scheme() == "http"
+        && url.host_str().is_some_and(|host| {
+            host == "localhost"
+                || host
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .parse::<IpAddr>()
+                    .is_ok_and(|address| address.is_loopback())
+        });
+    if !local_http {
+        return Err("the direct public URL requires HTTPS except on localhost".into());
     }
     Ok(())
 }
@@ -804,16 +912,26 @@ fn main() {
             build_tray(app)?;
             let handle = app.handle().clone();
             let manager = app.state::<Arc<NodeManager>>().inner().clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(error) = start_runtime(handle, manager.clone()).await {
-                    let generation = manager
-                        .status
-                        .read()
-                        .map(|status| status.generation)
-                        .unwrap_or(0);
-                    set_error(&manager, generation, error);
+            match settings_path(&handle) {
+                Ok(path) if path.is_file() => {
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(error) = start_runtime(handle, manager.clone()).await {
+                            let generation = manager
+                                .status
+                                .read()
+                                .map(|status| status.generation)
+                                .unwrap_or(0);
+                            set_error(&manager, generation, error);
+                        }
+                    });
                 }
-            });
+                Ok(_) => {
+                    eprintln!(
+                        "Wildbloom Node runtime phase: setup: choose Tor or direct mode before starting"
+                    );
+                }
+                Err(error) => set_error(&manager, 0, error),
+            }
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -831,6 +949,14 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fresh_desktop_waits_for_an_explicit_transport_choice() {
+        let status = RuntimeStatus::default();
+        assert_eq!(status.phase, "setup");
+        assert!(status.public_url.is_none());
+        assert_eq!(phase_label(status.phase), "Setup required");
+    }
 
     #[test]
     fn accepts_only_canonical_writer_public_keys() {
@@ -855,17 +981,53 @@ mod tests {
         };
         assert!(validate_settings(&settings).is_ok());
 
-        settings.friend_grants.push(format!("{}:1:2000000001", "b".repeat(64)));
+        settings
+            .friend_grants
+            .push(format!("{}:1:2000000001", "b".repeat(64)));
         assert!(validate_settings(&settings).is_err());
         settings.friend_grants = vec![format!("{}:1:2000000000", "a".repeat(64))];
         assert!(validate_settings(&settings).is_err());
 
-        let old: Settings = serde_json::from_str(
-            r#"{"allowedPubkey":null,"quotaGib":10,"startAtLogin":false}"#,
-        )
-        .unwrap();
+        let old: Settings =
+            serde_json::from_str(r#"{"allowedPubkey":null,"quotaGib":10,"startAtLogin":false}"#)
+                .unwrap();
         assert!(old.friend_grants.is_empty());
         assert!(!old.open_shelter);
+        assert_eq!(old.transport, Transport::Tor);
+        assert_eq!(old.direct_port, 3742);
+        assert!(old.direct_public_url.is_none());
+    }
+
+    #[test]
+    fn validates_direct_transport_settings_without_weakening_public_http() {
+        let mut settings = Settings {
+            transport: Transport::Direct,
+            ..Settings::default()
+        };
+        assert!(validate_settings(&settings).is_ok());
+
+        for accepted in [
+            "https://blossom.example/",
+            "https://blossom.example:8443/",
+            "http://localhost:3742/",
+            "http://127.0.0.1:3742/",
+            "http://[::1]:3742/",
+        ] {
+            settings.direct_public_url = Some(accepted.into());
+            assert!(validate_settings(&settings).is_ok(), "{accepted}");
+        }
+        for rejected in [
+            "http://blossom.example/",
+            "https://user@blossom.example/",
+            "https://blossom.example/path",
+            "ftp://blossom.example/",
+        ] {
+            settings.direct_public_url = Some(rejected.into());
+            assert!(validate_settings(&settings).is_err(), "{rejected}");
+        }
+        settings.direct_public_url = None;
+        settings.direct_port = 0;
+        assert!(validate_settings(&settings).is_err());
     }
 
     #[test]

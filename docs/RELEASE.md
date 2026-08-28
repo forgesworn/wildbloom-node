@@ -84,9 +84,10 @@ Before a draft can become public:
 4. macOS signatures, notarisation and stapling must verify.  Windows
    Authenticode status must be valid.  Updater signatures must verify on macOS
    and Windows; the detached signatures on both Linux packages must verify.
-5. Install, first start, onion bootstrap, write allowlist, restart, identity
-   retention, update and uninstall must run on clean machines for every named
-   target.
+5. Install, first start, direct local mode, onion bootstrap, transport switching,
+   write allowlist, restart, identity retention, update and uninstall must run
+   on clean machines for every named target.  Direct mode must prove that no
+   Tor child starts; Tor mode must retain its onion identity.
 6. Release notes must say which operating systems and architectures were
    actually exercised.  CI compilation is not device evidence.
 7. Only then should the draft release be published and the marketing download
