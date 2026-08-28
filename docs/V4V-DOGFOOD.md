@@ -6,9 +6,9 @@ a private storage SDK.
 
 The staged integration is:
 
-1. Run a node and copy its onion URL from the ready log.
-2. Open V4V through Tor-capable browsing and add the onion as an additional
-   Blossom server.
+1. Run a node and copy its selected onion or HTTPS URL from the ready log.
+2. Add the URL as an additional Blossom server.  Onion URLs require a
+   deliberately Tor-capable V4V path; public HTTPS uses ordinary networking.
 3. Upload one encrypted test track to the existing server and the home node.
 4. Read both descriptors back, compare SHA-256 and byte length, then play each
    copy independently.
@@ -30,7 +30,8 @@ V4V should keep encryption before Blossom upload and must not publish a private
 onion, real host, test identity or endpoint into its public repository.  The
 local acceptance fixture should receive those values from environment variables.
 
-Normal browsers do not fetch an onion URL without Tor.  Keep a conventional
-public Blossom origin for ordinary playback until the client deliberately runs
-through Tor; use the Wildbloom copy as an independent recovery replica and
-verify its exact ciphertext hash before decryption.
+Normal browsers do not fetch an onion URL without Tor.  A Wildbloom Node behind
+operator-managed HTTPS can instead be used for ordinary playback, with the
+usual IP and infrastructure metadata exposure.  In either mode, use the
+Wildbloom copy as an independent recovery replica and verify its exact
+ciphertext hash before decryption.

@@ -4,7 +4,7 @@
 
 - uploaded bytes and client-side ciphertext;
 - the operator's disk and configured quota;
-- the persistent Tor onion secret key;
+- the persistent Tor onion secret key when Tor is enabled;
 - Nostr identities used by clients;
 - availability and integrity of published blob URLs.
 
@@ -12,8 +12,8 @@
 
 - The HTTP listener binds to loopback unless the operator uses an explicit
   public-bind override.
-- The managed onion forwards only to that loopback listener.  Tor relay and exit
-  operation are disabled.
+- The managed onion forwards only to that loopback listener when selected.
+  Tor relay and exit operation are disabled.  Direct mode does not start Tor.
 - The desktop starts Tor from the signature-verified bundled resource tree.  On
   Linux it replaces Tor's child-process `LD_LIBRARY_PATH` with that exact bundle
   directory, so the packaged `libevent` is found without inheriting an
@@ -34,9 +34,11 @@
   hashed.
 - Mirror origins must be hash-addressed `.onion` or public HTTPS URLs.
   Redirects, URL credentials, queries, fragments, IP literals, single-label
-  hosts and plaintext clearnet origins are rejected before the fetch.  All
-  origin name resolution and transfer happens through Tor via a loopback-only
-  `socks5h` listener, keeping private-network names away from the host resolver.
+  hosts and plaintext clearnet origins are rejected before the fetch.  Tor mode
+  sends origin name resolution and transfer through a loopback-only `socks5h`
+  listener.  Direct mode disables ambient proxies, filters every DNS answer to
+  public address space and accepts only HTTPS; it cannot be used for onion
+  sources.
 - On Unix, node state, temporary files, database files and onion keys are mode
   `0700` or `0600`.  Windows uses the current user's application-data directory
   and its inherited ACL.  Clean-machine installer review remains a release gate.
@@ -59,6 +61,9 @@
   not proof of future custody.
 - Tor hides the home address from clients but does not make a powered-off home
   server available.
+- Direct mode exposes the node and clients to normal DNS, TLS endpoint and IP
+  metadata.  Wildbloom does not configure or audit the operator's reverse
+  proxy, certificate, firewall or router.
 - SHA-256 proves byte integrity, not ownership, legality or the truth of media.
 - Blob size, timing, requester public key and onion endpoint remain metadata.
 - Nostr relays used for discovery can censor, omit or split views.  Blob transfer
@@ -72,6 +77,7 @@
 
 ## Operator responsibilities
 
-Protect the data directory, back it up if the onion identity matters, keep Tor
-and Wildbloom updated, choose a quota the disk can actually sustain, and do not
-publish a non-loopback listener without an authenticated HTTPS boundary.
+Protect the data directory, back it up if the onion identity matters, keep the
+selected transport and Wildbloom updated, choose a quota the disk can actually
+sustain, and do not publish a non-loopback listener without an authenticated
+HTTPS boundary.

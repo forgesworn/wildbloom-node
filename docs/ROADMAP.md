@@ -5,6 +5,8 @@
 - persistent whole-blob CAS;
 - strict BUD-01, BUD-02, BUD-04, BUD-06, BUD-11 and BUD-12 profile;
 - stable managed Tor v3 endpoint;
+- optional direct mode with loopback binding, operator-managed HTTPS
+  reachability and public-HTTPS mirror/repair;
 - global and per-blob quotas;
 - deny-by-default writer allowlist and bounded concurrent writes;
 - full integrity scan and repair from a previously verified mirror source;
@@ -18,13 +20,13 @@
 - automated loss, repair, source shutdown and onion-identity restart acceptance
   across two fresh Tor clients on macOS;
 - a transport-neutral `BlobFetcher` interface for BUD-04 mirroring and repair,
-  with Tor as the only shipped adapter and unchanged default behaviour when no
+  with Tor and public HTTPS as shipped adapters and unchanged behaviour when no
   adapter is configured;
 - claim-aware owner, friend and guest retention with fixed watermarks,
   mirror-only open shelter, oldest-guest-first eviction, opaque serving,
   self-only BUD-12 listing and migration from the 0.2 owner schema.
 - the unbound router, store and `BlobFetcher` interface are published as the
-  neutral MIT-licensed `shelter-kit` v0.1.0 crate, while the daemon keeps the
+  neutral MIT-licensed `shelter-kit` v0.1.1 crate, while the daemon keeps the
   `Wildbloom Node` BUD-01 product identity.
 
 ## Next acceptance gates

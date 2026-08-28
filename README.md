@@ -1,18 +1,24 @@
 # Wildbloom Node
 
-Run your own Blossom storage at home without opening a router port.
+Run your own Blossom storage with Tor when you need easy private reachability,
+or use your own HTTPS setup when you do not.
 
 Wildbloom Node is a small, cross-platform Blossom server.  It stores blobs on
-your disk by SHA-256, accepts only tightly scoped Nostr authorisation, and makes
-the server reachable through a persistent Tor v3 onion.  It does not use
-WebRTC, STUN or TURN.
+your disk by SHA-256 and accepts only tightly scoped Nostr authorisation.  Tor
+is an optional transport, not a storage requirement.  The same node can use a
+persistent Tor v3 onion, stay local-only, or sit behind an operator-managed
+HTTPS reverse proxy.  It does not use WebRTC, STUN or TURN.
 
 This is a production candidate, not a durability promise.  The headless node
-targets macOS, Linux and Windows.  The native tray application bundles a
-signature-verified Tor Expert Bundle, creates the onion service and starts the
-node without asking the user to open a router port.  Unsigned preview installers
+targets macOS, Linux and Windows.  The native tray application lets the
+operator choose Tor or direct mode.  It bundles a signature-verified Tor Expert
+Bundle for the Tor choice, but does not start it in direct mode.  Unsigned preview installers
 are built separately from production releases; we will not label them as trusted
 downloads until the platform signing and clean-machine acceptance gates pass.
+
+A fresh desktop install waits for the operator to choose a transport before it
+starts either process.  Existing saved settings continue to select Tor unless
+the operator changes them.
 
 ## Why this exists
 
@@ -24,7 +30,7 @@ blob through BUD-04.
 
 It is not a torrent client.  Every replica currently stores a complete blob and
 serves it over ordinary Blossom HTTP.  Nostr can carry private storage offers
-and replication intent; Tor carries the bytes.  A separate QUIC and opaque-relay
+and replication intent; Tor or direct HTTPS carries the bytes.  A separate QUIC and opaque-relay
 lane is a future spike, not part of the durability claim.  RelaySwarm's WebRTC
 session remains for live browser media rather than storage.
 
@@ -32,8 +38,8 @@ session remains for live browser media rather than storage.
 
 - BUD-01 `GET` and `HEAD`, optional file extensions and single byte ranges.
 - BUD-02 streaming `PUT /upload` with `Content-Length` and `X-SHA-256`.
-- BUD-04 `PUT /mirror` from hash-addressed onion or public HTTPS origins through
-  the node's private Tor SOCKS listener.
+- BUD-04 `PUT /mirror` from hash-addressed onion origins through the private
+  Tor SOCKS listener, or from public HTTPS origins through direct mode.
 - BUD-06 authorised upload preflight with quota and per-blob checks.
 - Strict BUD-11 kind `24242` signature, operation, hash, server and expiry
   checks.
@@ -52,7 +58,8 @@ session remains for live browser media rather than storage.
   `nosniff`; conflicting owner MIME claims also fail opaque.
 - Crash reconciliation restores indexed tombstones and removes unindexed files
   left by interrupted file/database transactions.
-- Loopback-only binding by default and a persistent Tor v3 onion identity.
+- Loopback-only binding by default, with a persistent Tor v3 onion or an
+  operator-supplied HTTPS origin.
 - Native Rust and Tauri compile CI configured for macOS, Linux and Windows.
 - A native Tauri tray shell with platform data directories, start-at-login,
   storage status and no private-key input.
@@ -111,8 +118,9 @@ installs rather than an AppImage replacement dressed up as an auto-update.
 ### Run the headless service
 
 The headless path needs [Rust](https://www.rust-lang.org/tools/install) 1.94.1
-or later and a current [Tor Expert Bundle](https://www.torproject.org/download/tor/),
-with the `tor` executable on `PATH`.
+or later.  Tor mode additionally needs a current
+[Tor Expert Bundle](https://www.torproject.org/download/tor/), with the `tor`
+executable on `PATH`.
 
 ```sh
 git clone https://github.com/forgesworn/wildbloom-node.git
@@ -128,11 +136,29 @@ node stores data in the operating system's per-user application-data directory
 unless `--data-dir` or `WILDBLOOM_DATA_DIR` says otherwise.  Without an owner,
 friend grant or explicit open-shelter policy it remains read-only.
 
-For local development without Tor, keep the same explicit owner authority:
+For a supported local-only node without Tor, keep the same explicit owner
+authority:
 
 ```sh
 cargo run -p wildbloomd -- --no-tor --allow-pubkey <64-lower-case-hex-public-key>
 ```
+
+For an internet-facing direct node, keep `wildbloomd` on loopback, terminate
+TLS in a hardened reverse proxy on the same host and give the daemon that exact
+public origin.  Direct public-HTTPS mirroring and repair must be selected
+explicitly:
+
+```sh
+cargo run -p wildbloomd -- \
+  --no-tor \
+  --public-url https://blossom.example \
+  --direct-https-mirrors \
+  --allow-pubkey <64-lower-case-hex-public-key>
+```
+
+Direct mode reveals ordinary client and server network metadata.  It does not
+configure DNS, TLS, a firewall, NAT traversal or a router.  Plain public HTTP
+origins are refused; only loopback and onion origins may use HTTP.
 
 Useful controls:
 
@@ -147,7 +173,8 @@ Useful controls:
 --verify-storage               verify every stored byte and exit
 --bind <IP:PORT>               local listener, default 127.0.0.1:3742
 --tor-bin <PATH>               Tor executable, default tor
---no-tor                       local-only development mode
+--no-tor                       do not start managed Tor
+--direct-https-mirrors         fetch public HTTPS mirrors directly
 ```
 
 Do not put the local listener on the public internet merely because the flag
@@ -156,11 +183,12 @@ exists.  If a conventional HTTPS reverse proxy is genuinely required, read the
 
 ## How applications use it
 
-Applications use the onion URL exactly as they use another Blossom server:
+Applications use the selected onion, HTTPS or local URL exactly as they use
+another Blossom server:
 
 1. Hash the exact bytes with SHA-256.
 2. Sign a short-lived kind `24242` `upload` event for that hash and this node's
-   onion hostname.
+   exact hostname.
 3. `PUT /upload` with the event in `Authorization: Nostr <base64url-event>`.
 4. Keep the returned descriptor URL or publish it through the application's
    normal Nostr records.

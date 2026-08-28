@@ -4,7 +4,8 @@ const elements = {
   phase: document.querySelector("#phase"),
   detail: document.querySelector("#detail"),
   dot: document.querySelector("#status-dot"),
-  onion: document.querySelector("#onion"),
+  address: document.querySelector("#node-address"),
+  addressHint: document.querySelector("#address-hint"),
   blobs: document.querySelector("#blob-count"),
   used: document.querySelector("#used-space"),
   free: document.querySelector("#free-space"),
@@ -14,6 +15,10 @@ const elements = {
   writeStatus: document.querySelector("#write-status"),
   quota: document.querySelector("#quota"),
   autostart: document.querySelector("#autostart"),
+  transport: document.querySelector("#transport"),
+  directFields: document.querySelector("#direct-fields"),
+  directPort: document.querySelector("#direct-port"),
+  directPublicUrl: document.querySelector("#direct-public-url"),
   form: document.querySelector("#settings-form"),
   restart: document.querySelector("#restart"),
   checkUpdate: document.querySelector("#check-update"),
@@ -23,6 +28,14 @@ const elements = {
 
 let settingsLoaded = false;
 let updateAvailable = false;
+
+function updateTransportFields() {
+  const direct = elements.transport.value === "direct";
+  elements.directFields.hidden = !direct;
+  elements.addressHint.textContent = direct
+    ? "Local-only unless you provide an HTTPS reverse proxy.  Direct clients and origins can see ordinary network metadata."
+    : "Tor provides reachability without a router rule and keeps the home IP out of the Blossom address.";
+}
 
 function formatBytes(bytes) {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
@@ -37,7 +50,8 @@ async function refresh() {
     elements.phase.textContent = status.phaseLabel;
     elements.detail.textContent = status.detail;
     elements.dot.className = status.phase === "ready" ? "ready" : status.phase === "error" ? "error" : "";
-    elements.onion.textContent = status.onionUrl || "Waiting for Tor…";
+    elements.restart.disabled = status.phase === "setup";
+    elements.address.textContent = status.publicUrl || "Starting…";
     elements.blobs.textContent = String(status.storage?.blobs ?? 0);
     elements.used.textContent = formatBytes(status.storage?.bytes ?? 0);
     const free = Math.max(0, (status.storage?.quotaBytes ?? 0) - (status.storage?.bytes ?? 0));
@@ -54,6 +68,10 @@ async function refresh() {
       elements.openShelter.checked = Boolean(status.settings.openShelter);
       elements.quota.value = String(status.settings.quotaGib);
       elements.autostart.checked = status.settings.startAtLogin;
+      elements.transport.value = status.settings.transport;
+      elements.directPort.value = String(status.settings.directPort);
+      elements.directPublicUrl.value = status.settings.directPublicUrl || "";
+      updateTransportFields();
       settingsLoaded = true;
     }
   } catch (error) {
@@ -79,6 +97,9 @@ elements.form.addEventListener("submit", async (event) => {
         openShelter: elements.openShelter.checked,
         quotaGib: Number(elements.quota.value),
         startAtLogin: elements.autostart.checked,
+        transport: elements.transport.value,
+        directPort: Number(elements.directPort.value),
+        directPublicUrl: elements.directPublicUrl.value.trim() || null,
       },
     });
     elements.saveStatus.textContent = "Saved.  Restarting the node.";
@@ -90,6 +111,8 @@ elements.form.addEventListener("submit", async (event) => {
     submit.disabled = false;
   }
 });
+
+elements.transport.addEventListener("change", updateTransportFields);
 
 elements.restart.addEventListener("click", async () => {
   elements.restart.disabled = true;

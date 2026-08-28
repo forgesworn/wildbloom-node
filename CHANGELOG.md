@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Tor is now an explicit desktop transport choice rather than a runtime
+  requirement.  A fresh install waits for the choice before starting either
+  process.  Existing saved settings default to Tor for compatibility; direct
+  mode starts only the loopback Blossom sidecar and supports an operator-owned
+  HTTPS origin.
+
 - Managed Tor uses full relay descriptors for its onion-only circuits.  This is
   a larger one-off directory download, but avoids a bootstrap dead-end observed
   when directory caches returned a consensus and zero microdescriptors.
@@ -28,14 +34,17 @@
   0.2 owner schema.
 - The router, content-addressed store and fetch boundary are published as the
   neutral MIT-licensed `shelter-kit` v0.1.0 crate.
+- Direct public-HTTPS mirror and repair through `shelter-kit` v0.1.1, with
+  redirects and ambient proxies disabled and non-public DNS answers refused.
 
 ### Changed
 
 - BUD-04 mirroring and integrity repair fetch through a transport-neutral
   `BlobFetcher` interface (`wildbloom_core::fetch`).  `TorHttpFetcher` over the
-  loopback `socks5h` proxy is the only shipped adapter.  A node without one
-  still refuses `/mirror` and leaves repair candidates unrepaired, exactly as
-  before.  Successful mirrors and repairs log the path that carried the bytes.
+  loopback `socks5h` proxy and `DirectHttpsFetcher` are shipped adapters.  A
+  node without either still refuses `/mirror` and leaves repair candidates
+  unrepaired.  Successful mirrors and repairs log the path that carried the
+  bytes.
 - The two-node Tor acceptance test retries the mirror while a freshly
   published onion is still unreachable, and takes its Tor bootstrap budget
   from `WILDBLOOM_TEST_TOR_TIMEOUT` (default 900 seconds) for days when
@@ -55,6 +64,9 @@
 - A node with no configured writer public key is read-only.
 - Tor is tied to its parent process and the desktop app uses a private explicit
   torrc, loopback listeners and a fifteen-minute cold-bootstrap deadline.
+- Direct mode retains the loopback-only default, refuses public plaintext HTTP
+  origins and treats external HTTPS, DNS and firewall configuration as an
+  explicit operator boundary.
 - macOS signs the Tor executable and its dynamic library as nested code after
   verifying the upstream archive signature.
 - Dependency audit exceptions are exact and documented.  New RustSec warnings

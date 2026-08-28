@@ -23,7 +23,7 @@ section, aside { margin-top: 1rem; padding: 1.2rem; border: 1px solid #29372d; b
 #status-dot { width: 0.7rem; height: 0.7rem; border-radius: 50%; background: #d6a45b; box-shadow: 0 0 0 5px rgba(214, 164, 91, 0.12); }
 #status-dot.ready { background: #8fc67e; box-shadow: 0 0 0 5px rgba(143, 198, 126, 0.12); }
 #status-dot.error { background: #df805e; box-shadow: 0 0 0 5px rgba(223, 128, 94, 0.12); }
-output#onion { display: block; min-height: 2.9rem; padding: 0.85rem; border: 1px solid #35463a; border-radius: 10px; color: #d8ecd0; background: #070a08; font: 0.8rem/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; user-select: all; }
+output#node-address { display: block; min-height: 2.9rem; padding: 0.85rem; border: 1px solid #35463a; border-radius: 10px; color: #d8ecd0; background: #070a08; font: 0.8rem/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; user-select: all; }
 .hint, label small { display: block; margin: 0.55rem 0 0; color: #94a290; font-size: 0.78rem; line-height: 1.45; }
 .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.7rem; padding: 0; border: 0; background: transparent; }
 .stats article { padding: 1rem; border: 1px solid #29372d; border-radius: 14px; background: rgba(12, 18, 13, 0.9); }
@@ -32,9 +32,11 @@ output#onion { display: block; min-height: 2.9rem; padding: 0.85rem; border: 1px
 form { display: grid; gap: 1rem; }
 .access-status { margin: -0.35rem 0 0; padding: 0.7rem 0.8rem; border-left: 2px solid #d6a45b; color: #c8b995; background: rgba(87, 65, 32, 0.16); font-size: 0.8rem; }
 label { display: grid; gap: 0.45rem; color: #d7dfd4; font-weight: 700; }
-input, textarea { width: 100%; border: 1px solid #3b4c40; border-radius: 10px; padding: 0.75rem; color: #edf4ea; background: #070a08; font: inherit; }
+input, textarea, select { width: 100%; border: 1px solid #3b4c40; border-radius: 10px; padding: 0.75rem; color: #edf4ea; background: #070a08; font: inherit; }
 textarea { min-height: 7rem; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; }
-input:focus-visible, textarea:focus-visible, button:focus-visible { outline: 3px solid #b9eea2; outline-offset: 2px; }
+input:focus-visible, textarea:focus-visible, select:focus-visible, button:focus-visible { outline: 3px solid #b9eea2; outline-offset: 2px; }
+.nested-fields { display: grid; gap: 1rem; padding: 1rem; border: 1px solid #35463a; border-radius: 12px; background: rgba(7, 10, 8, 0.55); }
+.nested-fields[hidden] { display: none; }
 .field-with-suffix { display: grid; grid-template-columns: 1fr auto; align-items: center; }
 .field-with-suffix input { border-radius: 10px 0 0 10px; }
 .field-with-suffix span { align-self: stretch; display: grid; place-items: center; padding: 0 0.8rem; border: 1px solid #3b4c40; border-left: 0; border-radius: 0 10px 10px 0; color: #94a290; background: #111812; }

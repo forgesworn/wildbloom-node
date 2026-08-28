@@ -45,6 +45,20 @@ if ($LASTEXITCODE -ne 0 -or $torVersionText -notmatch "^Tor version [0-9]+\.") {
 }
 
 $applicationData = Join-Path $env:LOCALAPPDATA "dev.forgesworn.wildbloom-node"
+$settingsDirectory = Join-Path $env:APPDATA "dev.forgesworn.wildbloom-node"
+$settingsPath = Join-Path $settingsDirectory "settings.json"
+New-Item -ItemType Directory -Force -Path $settingsDirectory | Out-Null
+$settings = @{
+    allowedPubkey = $null
+    friendGrants = @()
+    openShelter = $false
+    quotaGib = 10
+    startAtLogin = $false
+    transport = "tor"
+    directPort = 3742
+    directPublicUrl = $null
+} | ConvertTo-Json -Compress
+[System.IO.File]::WriteAllText($settingsPath, $settings, [System.Text.UTF8Encoding]::new($false))
 $stdout = Join-Path $runtimeRoot "app.stdout.log"
 $stderr = Join-Path $runtimeRoot "app.stderr.log"
 $applicationProcess = Start-Process -FilePath $application.FullName -PassThru `

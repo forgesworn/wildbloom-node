@@ -11,7 +11,7 @@ messages below are an experimental profile, not a new NIP.
 | `GET /<sha256>[.<ext>]` | BUD-01 | Full blob or one RFC 7233-style byte range |
 | `HEAD /<sha256>[.<ext>]` | BUD-01 | Same headers without a body |
 | `PUT /upload` | BUD-02 + BUD-11 | Authorised streaming upload |
-| `PUT /mirror` | BUD-04 + BUD-11 | Authorised onion-to-onion copy |
+| `PUT /mirror` | BUD-04 + BUD-11 | Authorised copy over the selected transport |
 | `HEAD /upload` | BUD-06 + BUD-11 | Authorised size, type and quota preflight |
 | `GET /list/<pubkey>` | BUD-12 + BUD-11 | Authenticated, cursor-paginated list of only the signer's active claims |
 | `DELETE /<sha256>` | BUD-12 + BUD-11 | Remove the signer's claim and, after the final active claim, the blob |
@@ -29,7 +29,7 @@ well-formed `x` and `server` tag whose set includes the current blob and node:
 ```json
 ["t", "upload"]
 ["x", "<lower-case SHA-256>"]
-["server", "<exact onion hostname>"]
+["server", "<exact node hostname>"]
 ["expiration", "<future unix timestamp>"]
 ```
 
@@ -53,8 +53,9 @@ lose a race for the remaining quota.
 hash-addressed public HTTPS URL.  The destination authorisation can cover one
 or more nodes but must include the destination server.  The source must return
 `200` and an exact `Content-Length`; the destination still hashes every
-received byte.  Every fetch and DNS lookup goes through the node's managed Tor
-process.
+received byte.  Tor mode resolves and fetches through its private SOCKS
+listener.  Direct mode accepts only public HTTPS, disables redirects and
+ambient proxies, and rejects DNS answers in non-public address space.
 
 Owner and friend mirror requests receive their configured retention tier.
 With open shelter enabled, any other valid signer receives a best-effort guest
@@ -103,6 +104,6 @@ through an independent GET.  Offers should be sent through more than one Nostr
 relay where availability matters.
 
 A future ForgeSworn-owned QUIC lane with an opaque WebSocket relay may carry the
-same blob stream behind `BlobFetcher`.  It must remain optional: Tor and
-standard Blossom are the interoperable fallback, and no WebRTC/STUN/TURN layer
+same blob stream behind `BlobFetcher`.  It must remain optional: Tor and direct
+HTTPS Blossom are already interoperable choices, and no WebRTC/STUN/TURN layer
 is required.

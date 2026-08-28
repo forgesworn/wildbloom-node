@@ -22,6 +22,11 @@ export XDG_DATA_HOME="$runtime_root/data"
 export XDG_CONFIG_HOME="$runtime_root/config"
 export XDG_CACHE_HOME="$runtime_root/cache"
 mkdir -p "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME"
+settings_directory="$XDG_CONFIG_HOME/dev.forgesworn.wildbloom-node"
+mkdir -p "$settings_directory"
+printf '%s\n' '{"allowedPubkey":null,"friendGrants":[],"openShelter":false,"quotaGib":10,"startAtLogin":false,"transport":"tor","directPort":3742,"directPublicUrl":null}' \
+  > "$settings_directory/settings.json"
+chmod 600 "$settings_directory/settings.json"
 
 app_pid=""
 xvfb_pid=""
@@ -112,7 +117,7 @@ if [ "$ready" != "1" ]; then
   sed -n '1,200p' "$runtime_root/app.stderr.log" >&2
   exit 1
 fi
-echo "installed Linux desktop reached Tor and Blossom readiness"
+echo "installed Linux desktop honoured the harness's explicit Tor choice and reached Blossom readiness"
 
 if [ "$(stat -c '%a' "$database_path")" != "600" ]; then
   echo "the installed desktop created its database with unsafe permissions" >&2
