@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1 - 2026-08-29
+
+- Update the shared shelter-kit core to 0.1.2 so BUD-11 authorisation accepts
+  standard base64, not only url-safe. A spec-compliant Blossom client now
+  authenticates against the node.
+
 ## Unreleased
 
 - Tor is now an explicit desktop transport choice rather than a runtime
