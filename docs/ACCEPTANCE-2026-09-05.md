@@ -58,3 +58,13 @@ tests, readiness-exit regression and six desktop tests passed, as did
 formatting and workspace Clippy with warnings denied. The earlier 0.2.1
 installer matrix passed all four targets in run 33934251403; the 0.2.2
 installers require a separate build of this source.
+
+## Policy revocation follow-up
+
+The final 0.2.2 source consumes Shelter Kit v0.4.1, which serialises concurrent
+owner/grant updates so a friend update cannot restore a removed owner set.
+The core's regression failed on 0.4.0 and all 83 tests pass on 0.4.1.
+Workspace checks and the same live Tor replication, loss/repair, source-off
+and onion-identity restart journey were repeated successfully for this pin.
+Publish installers from the source containing this update; the preceding
+0.4.0-based installer run is superseded.

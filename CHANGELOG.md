@@ -8,6 +8,8 @@
 
 ## 0.2.2 - 2026-09-05
 
+- Include Shelter Kit v0.4.1's serialised policy updates, preventing a
+  concurrent friend-grant update from restoring a removed owner set.
 - Use Shelter Kit v0.4.0, including shell tombstone and optional admission
   APIs. The Node keeps admission filtering disabled by default. Schema 5
   preserves existing data and verification evidence; do not downgrade a store
