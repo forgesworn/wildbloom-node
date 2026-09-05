@@ -31,6 +31,9 @@ fn ready_timeout() -> Duration {
 #[tokio::test]
 #[ignore = "requires a real Tor executable; run with WILDBLOOM_TEST_TOR_BIN=/path/to/tor"]
 async fn two_nodes_replicate_repair_and_preserve_the_onion_identity() {
+    // The acceptance process creates its own reqwest clients, independently
+    // of the child daemons whose fetch adapters install the same provider.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let tor = std::env::var("WILDBLOOM_TEST_TOR_BIN")
         .expect("set WILDBLOOM_TEST_TOR_BIN to an audited Tor executable");
     let keys = Keys::parse(&format!("{:064x}", 1)).unwrap();

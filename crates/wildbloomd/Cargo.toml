@@ -28,5 +28,6 @@ base64.workspace = true
 hex.workspace = true
 nostr.workspace = true
 reqwest.workspace = true
+rustls.workspace = true
 sha2.workspace = true
 tempfile.workspace = true

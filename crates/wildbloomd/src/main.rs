@@ -33,6 +33,9 @@ impl FromStr for FriendGrantArg {
             byte_limit,
             expires_at,
             grant_id: format!("local:{pubkey}:{expires_at}"),
+            // CLI grants are local operator configuration, not delegated
+            // grants issued by another identity.
+            issuer: None,
         }))
     }
 }
