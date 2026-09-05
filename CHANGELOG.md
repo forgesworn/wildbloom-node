@@ -8,6 +8,14 @@
 
 ## Unreleased
 
+- Use Shelter Kit v0.3.0 for owner-scoped listing, current-grant friend lists
+  and verification timestamps. Schema 4 preserves data and marks historical
+  repair sources unverified until explicitly checked again. Deduplicated
+  mirrors no longer certify unread remote bodies.
+- Align the desktop version with the daemon at 0.2.1, and pin signed Tor Expert
+  Bundle 15.0.21 from the official archive so later upstream releases do not
+  invalidate the pinned download URL.
+
 - Consume Shelter Kit v0.2.2, including URL-shaped BUD-11 server scopes,
   schema-v3 advisory claim classes, runtime policy APIs and lane-aware repair.
   Local CLI friend grants have no delegated issuer. The daemon test client and

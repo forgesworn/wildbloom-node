@@ -26,7 +26,7 @@
   mirror-only open shelter, oldest-guest-first eviction, opaque serving,
   self-only BUD-12 listing and migration from the 0.2 owner schema.
 - the unbound router, store and `BlobFetcher` interface are published as the
-  neutral MIT-licensed `shelter-kit` v0.2.2 Git-tagged crate, while the daemon keeps the
+  neutral MIT-licensed `shelter-kit` v0.3.0 Git-tagged crate, while the daemon keeps the
   `Wildbloom Node` BUD-01 product identity.
 
 ## Next acceptance gates

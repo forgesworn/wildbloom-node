@@ -12,7 +12,7 @@ permissions:
   contents: write
 
 env:
-  TOR_EXPERT_BUNDLE_VERSION: 15.0.20
+  TOR_EXPERT_BUNDLE_VERSION: 15.0.21
 
 jobs:
   release:
