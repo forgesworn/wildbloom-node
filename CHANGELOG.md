@@ -8,6 +8,12 @@
 
 ## Unreleased
 
+- Consume Shelter Kit v0.2.2, including URL-shaped BUD-11 server scopes,
+  schema-v3 advisory claim classes, runtime policy APIs and lane-aware repair.
+  Local CLI friend grants have no delegated issuer. The daemon test client and
+  shared fetch adapters use the ring TLS provider without enabling a second
+  provider through reqwest.
+
 - Tor is now an explicit desktop transport choice rather than a runtime
   requirement.  A fresh install waits for the choice before starting either
   process.  Existing saved settings default to Tor for compatibility; direct
