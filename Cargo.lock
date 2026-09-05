@@ -1618,8 +1618,8 @@ dependencies = [
 
 [[package]]
 name = "shelter-kit"
-version = "0.3.0"
-source = "git+https://github.com/forgesworn/shelter-kit?tag=v0.3.0#7df4ed1304e9ca77c8f446b5417f8b214f414f70"
+version = "0.4.0"
+source = "git+https://github.com/forgesworn/shelter-kit?tag=v0.4.0#cdd218175cd934959f37efbfdff82493fe30f064"
 dependencies = [
  "axum",
  "base64",
@@ -2212,7 +2212,7 @@ dependencies = [
 
 [[package]]
 name = "wildbloomd"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "axum",
  "base64",

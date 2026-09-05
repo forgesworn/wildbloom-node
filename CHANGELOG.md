@@ -6,7 +6,13 @@
   standard base64, not only url-safe. A spec-compliant Blossom client now
   authenticates against the node.
 
-## Unreleased
+## 0.2.2 - 2026-09-05
+
+- Use Shelter Kit v0.4.0, including shell tombstone and optional admission
+  APIs. The Node keeps admission filtering disabled by default. Schema 5
+  preserves existing data and verification evidence; do not downgrade a store
+  to an older core that cannot enforce tombstone policy.
+- Version both the daemon and desktop at 0.2.2 for the current installer set.
 
 - Use Shelter Kit v0.3.0 for owner-scoped listing, current-grant friend lists
   and verification timestamps. Schema 4 preserves data and marks historical

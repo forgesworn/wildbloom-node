@@ -43,3 +43,18 @@ The acceptance harness now fails promptly if a node exits before readiness,
 instead of waiting through the Tor bootstrap timeout. Its regression passes
 without starting Tor. Six daemon tests, that harness regression, six desktop
 tests, formatting, Clippy and both dependency audits pass locally.
+
+## Shelter Kit 0.4 and Node 0.2.2
+
+The next integration uses Shelter Kit v0.4.0 and schema 5. Admission remains
+disabled unless a shell explicitly supplies a filter; the existing Node
+configuration therefore keeps accepting the same content. Schema-5 stores
+must not be downgraded to a core that predates tombstone enforcement.
+
+On the same Mac and verified Tor Expert Bundle 15.0.21, two fresh node
+processes passed replication, deliberate destination loss, exact repair,
+source shutdown and onion-identity restart in 38.98 seconds. The six daemon
+tests, readiness-exit regression and six desktop tests passed, as did
+formatting and workspace Clippy with warnings denied. The earlier 0.2.1
+installer matrix passed all four targets in run 33934251403; the 0.2.2
+installers require a separate build of this source.
