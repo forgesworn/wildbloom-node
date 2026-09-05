@@ -28,4 +28,4 @@ tokio = { version = "1.48.0", features = ["fs", "io-util", "macros", "net", "pro
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
 url = "2.5.7"
-wildbloom-core = { package = "shelter-kit", git = "https://github.com/forgesworn/shelter-kit", tag = "v0.2.2" }
+wildbloom-core = { package = "shelter-kit", git = "https://github.com/forgesworn/shelter-kit", tag = "v0.3.0" }

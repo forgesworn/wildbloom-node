@@ -44,8 +44,12 @@ async fn two_nodes_replicate_repair_and_preserve_the_onion_identity() {
     let second_port = free_port();
     let mut first = start_node(&tor, &first_dir, first_port, &pubkey).await;
     let mut second = start_node(&tor, &second_dir, second_port, &pubkey).await;
-    let first_onion = wait_for_node(&first_dir, first_port).await;
-    let second_onion = wait_for_node(&second_dir, second_port).await;
+    let first_onion = wait_for_node(&mut first, &first_dir, first_port)
+        .await
+        .unwrap();
+    let second_onion = wait_for_node(&mut second, &second_dir, second_port)
+        .await
+        .unwrap();
 
     let bytes = b"wildbloom automatic repair acceptance";
     let hash = hex::encode(Sha256::digest(bytes));
@@ -87,7 +91,12 @@ async fn two_nodes_replicate_repair_and_preserve_the_onion_identity() {
 
     stop_node(&mut second).await;
     let mut restarted = start_node(&tor, &second_dir, second_port, &pubkey).await;
-    assert_eq!(wait_for_node(&second_dir, second_port).await, second_onion);
+    assert_eq!(
+        wait_for_node(&mut restarted, &second_dir, second_port)
+            .await
+            .unwrap(),
+        second_onion
+    );
     stop_node(&mut restarted).await;
 }
 
@@ -134,13 +143,20 @@ async fn start_node(tor: &str, directory: &TempDir, port: u16, pubkey: &str) -> 
         .unwrap()
 }
 
-async fn wait_for_node(directory: &TempDir, port: u16) -> String {
+async fn wait_for_node(
+    child: &mut Child,
+    directory: &TempDir,
+    port: u16,
+) -> Result<String, String> {
     let hostname = directory.path().join("tor/onion-service/hostname");
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(1))
         .build()
         .unwrap();
     for _ in 0..(ready_timeout().as_secs() * 4) {
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            return Err(format!("node exited before becoming ready: {status}"));
+        }
         if let Ok(onion) = std::fs::read_to_string(&hostname)
             && let Ok(response) = client
                 .get(format!("http://127.0.0.1:{port}/healthz"))
@@ -148,11 +164,33 @@ async fn wait_for_node(directory: &TempDir, port: u16) -> String {
                 .await
             && response.status() == StatusCode::OK
         {
-            return onion.trim().to_owned();
+            return Ok(onion.trim().to_owned());
         }
         sleep(Duration::from_millis(250)).await;
     }
-    panic!("node did not become ready at {}", hostname.display());
+    Err(format!(
+        "node did not become ready at {}",
+        hostname.display()
+    ))
+}
+
+#[tokio::test]
+async fn readiness_stops_when_the_node_exits() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let directory = tempfile::tempdir().unwrap();
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_wildbloomd"))
+        .arg("--version")
+        .stdout(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let result = timeout(
+        Duration::from_secs(3),
+        wait_for_node(&mut child, &directory, free_port()),
+    )
+    .await
+    .expect("a dead node must not consume the Tor bootstrap timeout");
+    assert!(result.unwrap_err().contains("exited before becoming ready"));
 }
 
 /// A freshly published onion service can take minutes to become reachable

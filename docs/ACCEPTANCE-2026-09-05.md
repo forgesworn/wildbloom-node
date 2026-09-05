@@ -25,3 +25,21 @@ WILDBLOOM_TEST_TOR_BIN=/path/to/tor cargo test --locked \
 This is live Tor replication between isolated node processes on one Mac.
 Trusted installer signatures, clean retail machines, independent physical-node
 custody and the advertised platform installer matrix remain separate gates.
+
+## Shelter Kit 0.3 and current bundled runtime
+
+The follow-up consumes Shelter Kit v0.3.0 at
+`7df4ed1304e9ca77c8f446b5417f8b214f414f70` and aligns the desktop and daemon at
+0.2.1. The same live Tor replication, loss/repair and identity-restart journey
+passed in 56.44 seconds using Tor Expert Bundle 15.0.21 on this Mac.
+
+The bundle's detached signature was verified against the pinned Tor Browser
+Developers key before extraction. The nested macOS executables then received
+ad-hoc signatures using the existing preview script so they could run locally.
+This verifies the signed upstream download and preview execution; it is not a
+Developer ID signature or Apple notarisation of Wildbloom Node.
+
+The acceptance harness now fails promptly if a node exits before readiness,
+instead of waiting through the Tor bootstrap timeout. Its regression passes
+without starting Tor. Six daemon tests, that harness regression, six desktop
+tests, formatting, Clippy and both dependency audits pass locally.

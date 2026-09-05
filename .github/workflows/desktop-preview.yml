@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 env:
-  TOR_EXPERT_BUNDLE_VERSION: 15.0.20
+  TOR_EXPERT_BUNDLE_VERSION: 15.0.21
 
 jobs:
   build:

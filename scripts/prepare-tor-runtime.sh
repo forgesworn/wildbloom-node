@@ -8,7 +8,7 @@ fi
 
 platform="$1"
 destination="$2"
-version="${TOR_EXPERT_BUNDLE_VERSION:-15.0.20}"
+version="${TOR_EXPERT_BUNDLE_VERSION:-15.0.21}"
 fingerprint="EF6E286DDA85EA2A4BA7DE684E2C6E8793298290"
 gpg_bin="${WILDBLOOM_GPG_BIN:-gpg}"
 gpgv_bin="${WILDBLOOM_GPGV_BIN:-gpgv}"
@@ -31,7 +31,8 @@ work_dir="$(mktemp -d "${TMPDIR:-/tmp}/wildbloom-tor.XXXXXX")"
 trap 'rm -rf -- "$work_dir"' EXIT
 gnupg_home="$work_dir/gnupg"
 archive="tor-expert-bundle-${platform}-${version}.tar.gz"
-base_url="https://dist.torproject.org/torbrowser/${version}"
+# Keep exact pins available after they leave Tor's current-release directory.
+base_url="https://archive.torproject.org/tor-package-archive/torbrowser/${version}"
 
 mkdir -p "$destination" "$gnupg_home"
 chmod 700 "$gnupg_home"
