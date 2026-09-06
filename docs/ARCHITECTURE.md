@@ -79,6 +79,15 @@ source is still reachable and returns the exact recorded length and hash.  This
 is local repair, not replica discovery or proof that another operator retains a
 copy.
 
+The optional `wildbloomd replicas` client sits above that server/core boundary.
+It reads a signed local policy, verifies each selected remote blob through a
+streaming GET and asks an external signer for a fresh, scoped BUD-11 event
+before a BUD-04 mirror. Read-back determines whether the configured group
+counts; acknowledgements and earlier observations do not. Its private atomic
+state and lock are separate from the store database, and its authenticated
+client transport does not extend the core's GET-only `BlobFetcher`. See
+[REPLICA-POLICY.md](REPLICA-POLICY.md) for the app-specific envelope and limits.
+
 ## Storage priority boundary
 
 The core gives the operator's files, invited friends and best-effort guest

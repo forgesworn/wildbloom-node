@@ -51,6 +51,10 @@ session remains for live browser media rather than storage.
   interrupted-upload cleanup.
 - Deny-by-default writes, bounded concurrent streams, complete integrity scans
   and repair from previously verified mirror sources.
+- An optional headless replica coordinator with an owner-signed local policy,
+  complete remote byte verification, scoped external authorisation and bounded
+  BUD-04 repairs across explicitly configured targets. See the
+  [replica maintenance guide](docs/REPLICA-POLICY.md).
 - Claim-aware owner, friend and guest retention over one deduplicated CAS.
   Friends have expiring per-key byte ceilings; signed guest mirrors use only
   spare capacity and are evicted first.
@@ -68,7 +72,9 @@ session remains for live browser media rather than storage.
   child cleanup and uninstall.
 
 There is no proof-of-storage protocol, paid quota or automatic discovery of
-strangers willing to hold data.  Repair can restore a damaged local copy only
+strangers willing to hold data. The optional coordinator reports recently
+verified configured failure groups; operator declarations do not prove physical
+independence or future retention. Local repair can restore a damaged copy only
 when the node already recorded a verified source which is still online.  Those
 boundaries are documented in the [roadmap](docs/ROADMAP.md).
 

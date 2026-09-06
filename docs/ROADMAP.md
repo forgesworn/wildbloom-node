@@ -10,6 +10,10 @@
 - global and per-blob quotas;
 - deny-by-default writer allowlist and bounded concurrent writes;
 - full integrity scan and repair from a previously verified mirror source;
+- an optional headless coordinator using signed local copy policies, scoped
+  external signing and complete remote byte checks; five real local Node
+  processes exercise original-node loss, corruption, full quota, coordinator
+  restarts and fresh replacement recovery through a controlled SOCKS fixture;
 - native daemon source and build/test matrix for macOS, Linux and Windows;
 - native Tauri tray shell with bundled, upstream-signature-verified Tor;
 - unsigned `.deb` and NSIS previews installed, started through Tor, checked for
@@ -37,8 +41,9 @@
   removed on clean retail Windows, Linux, Intel Mac and Apple Silicon systems;
 - the tray shell survives reboot and retains the same onion identity on all
   three operating systems;
-- signed pin manifests record desired replica count, independent observations
-  find missing copies, and repair restores the count;
+- the headless replica coordinator passes real Tor, independently installed
+  physical-node and cross-platform acceptance; desktop integration and Bothy
+  pin/whole-vault contracts remain separate work;
 - retention, replica discovery, custody challenges and optional paid quota have
   explicit policy and tests;
 - owner, friend and guest retention, migration and interrupted-transaction
