@@ -99,3 +99,7 @@ jobs:
           name: wildbloom-node-${{ matrix.target }}-unsigned-preview
           path: desktop/src-tauri/target/${{ matrix.target }}/release/bundle
           if-no-files-found: error
+          # Unsigned previews for a look, not the signed artefacts a release
+          # publishes. The default 90 days made this the largest consumer of
+          # the account's Actions storage at 4.55 GB.
+          retention-days: 7
