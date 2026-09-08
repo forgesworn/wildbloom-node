@@ -12,7 +12,7 @@ repository = "https://github.com/forgesworn/wildbloom-node"
 
 [workspace.dependencies]
 axum = "0.8.9"
-base64 = "0.22.1"
+base64 = "0.23.1"
 clap = { version = "4.5.51", features = ["derive", "env"] }
 directories = "6.0.0"
 hex = "0.4.3"
