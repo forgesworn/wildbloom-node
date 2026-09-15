@@ -97,7 +97,11 @@ impl Fixture {
             state_root: None,
             owner: Some(self.owner()),
             owner_file: None,
-            signer: "/synthetic/signer".into(),
+            // Never executed: the real Signer is injected separately via
+            // enrol_with. This only needs to satisfy validate()'s absolute-path
+            // check on every platform, so it's derived from the tempdir rather
+            // than a Unix-style literal (not absolute on Windows).
+            signer: self.root.path().join("synthetic-signer"),
             signer_args: Vec::new(),
             signer_timeout_secs: 30,
             policy_prefix: "synthetic".into(),
