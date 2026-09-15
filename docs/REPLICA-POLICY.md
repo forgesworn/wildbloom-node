@@ -241,6 +241,100 @@ protection. Treat changing that state or the expected public identity as an
 explicit new trust decision. The lock is local advisory coordination; state on
 an untrusted or non-locking network filesystem is outside this guarantee.
 
+## Directory maintenance
+
+One process can maintain every signed policy in a directory:
+
+```sh
+wildbloomd replicas run --policy-dir policies --state-root coordinators \
+  --owner "$OWNER_PUBKEY" --proxy socks5h://127.0.0.1:9050 \
+  --interval 900 --interval-for example-archive-=21600 \
+  --signer /absolute/path/to/local-signer --signer-arg /absolute/path/to/signer.conf
+```
+
+The runner considers files named `signed-<id>.json` and refuses one whose
+verified policy `id` differs from its file name. Each id gets its own private
+state directory and exclusive lock under the state root, exactly as a
+single-policy run would. The directory is rescanned every 30 seconds, so a
+policy created later is picked up without a restart.
+
+Each policy runs on its own schedule: `--interval` by default, or the longest
+matching `--interval-for PREFIX=SECONDS`. Every pass reads every configured
+copy in full, so the interval is a bandwidth decision as much as a freshness
+one. A policy that reports `stopped: true` is not run again until its signed
+event changes. An invalid, expired, misnamed or already-locked policy is
+reported on its own line and retried with backoff (60 seconds, doubling to 30
+minutes) while every other policy keeps running. Reports are written one JSON
+object per line. `--once` runs every present policy once and exits non-zero if
+any failed.
+
+## Enrolment from a source inventory
+
+`wildbloomd replicas enrol` derives and signs policies for a changing set of
+blobs held by one source. It does not contact the source: the operator
+supplies the inventory, a JSON array of `{sha256, size, type?, uploaded?}`
+rows, as a file or on standard input. Empty input is refused rather than read
+as an empty source, because an empty source would mark every unplaced blob
+as lost.
+
+```json
+{
+  "root": "/absolute/replicas",
+  "owner_file": "/absolute/replicas/owner.pub",
+  "signer": "/absolute/path/to/local-signer",
+  "signer_args": ["/absolute/path/to/signer.conf"],
+  "policy_prefix": "example",
+  "profile": "tor-only",
+  "source": { "id": "source", "origin": "http://<source-onion>/" },
+  "archives": [
+    { "id": "archive-one", "origin": "http://<archive-one-onion>/" },
+    { "id": "archive-two", "origin": "http://<archive-two-onion>/" }
+  ],
+  "accept_types": ["application/vnd.example.encrypted"],
+  "policy_ttl_days": 30,
+  "renew_below_days": 7,
+  "intake_grace_days": 7
+}
+```
+
+```sh
+wildbloomd replicas enrol --config enrol.json --inventory-file inventory.json
+```
+
+Each run appends newly seen blobs to `state/ledger.jsonl`. The ledger, not
+the source, is the record of what has been enrolled, so a blob the source later
+forgets stays archived. Two kinds of policy are derived from it:
+
+- `<prefix>-intake` lists the source as a `guest` target and every archive as
+  an `owner` target. It holds at most 128 unplaced blobs, oldest first. When
+  nothing is waiting it becomes a stop revision.
+- `<prefix>-archive-<hex>` lists the archives only. Archived blobs are chunked
+  by leading hash hex; a chunk past 128 blobs splits one character deeper, and
+  the chunk it replaces receives one stop revision.
+
+The source appears only in intake. A source that expires blobs some time after
+their last read would otherwise have every blob read, and so retained, on every
+pass indefinitely.
+
+A blob leaves intake when the intake coordinator has verified it on every
+archive, or on at least one archive once `intake_grace_days` have passed; the
+archive policy then repairs the remaining copies from the verified ones. The
+coordinator discards observations whenever it accepts a new revision, so
+enrolment trusts `<state_root>/<prefix>-intake/state.json` only when its
+policy event is one it signed, for the configured owner, with exactly the
+current targets. A blob that disappears from the source before any archive
+verified it is recorded as lost once and stays in intake.
+
+Only policies whose content changed, or whose expiry falls within
+`renew_below_days`, are signed, each with a new revision. Every signed return
+must verify as the configured owner's policy for exactly the requested content
+before it is written to `policies/signed-<id>.json`; the history record in
+`state/policy-history.jsonl` follows the file, so a crash between them costs
+one revision number and never leaves a coordinator on a superseded file. An
+exclusive lock on `state/enrol.lock` prevents concurrent runs. `--dry-run`
+reports what would be enrolled and signed and writes nothing. Nothing is
+deleted; stopped chunks keep their files and state.
+
 ## Local evidence and limits
 
 `cargo test --test replica_maintenance -- --nocapture` starts five real Node
@@ -257,6 +351,26 @@ copy. The coordinator's read-back detects this and can use another eligible
 target; it does not delete or rewrite that server's claims. Repairing that
 server's local record remains its operator's task. If no verified source or
 eligible writable destination remains, the report retains the deficit.
+
+The same applies when a node's blob file is lost while its index row remains,
+for example after files are removed outside the node. The node answers a mirror
+of that hash from its index without fetching, so coordinator repair cannot
+restore it, and the report keeps showing that target below its floor. Two
+remedies exist on the node itself: `--verify-storage` lists the hash as
+`missing` while the node is stopped, and a node with repair enabled (a mirror
+fetcher and a non-zero `--repair-interval`) repairs it at startup and on each
+repair interval from a verified source URL it recorded when it mirrored that
+blob. A blob the node received by direct upload has no recorded source and
+stays unrepaired. The startup repair was observed once on a manually operated
+node, not in automated acceptance.
+
+Directory maintenance and enrolment are covered by unit tests with synthetic
+identities, hashes and loopback origins: rescans, stop and resume, failure
+isolation, locking, interval selection, ledger and history compatibility,
+trusted-state checks, grace, loss reporting, renewal, the 128-blob cap, chunk
+splitting and refusal of a signer that returns different content. They do not
+exercise Tor, independent nodes or repair after loss, and do not change the
+acceptance gates above.
 
 This coordinator is a headless operator feature. Desktop configuration, Bothy
 pins, whole-vault integration, independent review, real Tor coordinator

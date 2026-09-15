@@ -1,9 +1,15 @@
+mod directory;
 mod engine;
+mod enrol;
 mod policy;
 mod signer;
 mod state;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_directory;
+#[cfg(test)]
+mod tests_enrol;
 mod transport;
 
 use clap::{Args, Subcommand};
@@ -25,6 +31,8 @@ pub enum Error {
     Internal,
     #[error("{0}")]
     Configuration(&'static str),
+    #[error("{0}")]
+    Enrol(String),
 }
 
 #[derive(Debug, Args)]
@@ -33,6 +41,8 @@ pub struct Cli {
     command: Command,
 }
 
+// Parsed once per process; boxing the arguments buys nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Produce an unsigned local policy event; no network or signer contact.
@@ -44,18 +54,51 @@ enum Command {
     },
     /// Verify and maintain explicitly configured replicas.
     Run(RunArgs),
+    /// Derive and sign intake and archive policies from a source inventory.
+    Enrol(EnrolArgs),
+}
+
+#[derive(Debug, Args)]
+struct EnrolArgs {
+    /// Enrolment configuration (JSON). See docs/REPLICA-POLICY.md.
+    #[arg(long)]
+    config: PathBuf,
+    /// JSON array of {sha256, size, type?, uploaded?} rows; `-` reads stdin.
+    #[arg(long)]
+    inventory_file: PathBuf,
+    /// Report what would be enrolled and signed; write and sign nothing.
+    #[arg(long)]
+    dry_run: bool,
 }
 
 #[derive(Debug, Args)]
 struct RunArgs {
-    #[arg(long)]
-    policy: PathBuf,
+    #[arg(
+        long,
+        required_unless_present = "policy_dir",
+        conflicts_with = "policy_dir"
+    )]
+    policy: Option<PathBuf>,
     /// Expected policy author, as a lowercase hexadecimal public key.
     #[arg(long)]
     owner: String,
-    #[arg(long)]
-    state_dir: PathBuf,
-    /// Perform one bounded pass and exit.
+    #[arg(
+        long,
+        required_unless_present = "policy_dir",
+        conflicts_with = "state_root"
+    )]
+    state_dir: Option<PathBuf>,
+    /// Maintain every `signed-<id>.json` in this directory from one process.
+    #[arg(long, requires = "state_root")]
+    policy_dir: Option<PathBuf>,
+    /// With --policy-dir: one private state directory per policy id.
+    #[arg(long, requires = "policy_dir")]
+    state_root: Option<PathBuf>,
+    /// With --policy-dir: interval for ids starting PREFIX (repeatable,
+    /// longest prefix wins), as PREFIX=SECONDS.
+    #[arg(long, requires = "policy_dir", value_parser = directory::parse_interval)]
+    interval_for: Vec<(String, u64)>,
+    /// Perform one bounded pass (per policy, with --policy-dir) and exit.
     #[arg(long)]
     once: bool,
     /// Seconds between completed passes.
@@ -90,11 +133,42 @@ pub async fn run(cli: Cli) -> Result<(), Error> {
             println!("{}", serde_json::to_string_pretty(&event)?);
             Ok(())
         }
+        Command::Enrol(args) => {
+            let config: enrol::Config =
+                serde_json::from_slice(&state::read_bounded(&args.config, 64 * 1024)?)
+                    .map_err(|_| Error::Configuration("enrolment configuration is invalid"))?;
+            let inventory = if args.inventory_file.as_os_str() == "-" {
+                use std::io::Read as _;
+                let mut bytes = Vec::new();
+                std::io::stdin()
+                    .take(enrol::MAX_INVENTORY_BYTES as u64 + 1)
+                    .read_to_end(&mut bytes)
+                    .map_err(|_| state::StateError::Io)?;
+                bytes
+            } else {
+                state::read_bounded(&args.inventory_file, enrol::MAX_INVENTORY_BYTES)?
+            };
+            let inventory = enrol::parse_inventory(&inventory)?;
+            let signer = signer::CommandSigner {
+                executable: config.signer.clone(),
+                arguments: config.signer_args.clone(),
+                timeout: Duration::from_secs(config.signer_timeout_secs.clamp(1, 60)),
+            };
+            let report = enrol::run(
+                &config,
+                &inventory,
+                Some(&signer as &dyn signer::Signer),
+                &clock,
+                args.dry_run,
+            )
+            .await?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            Ok(())
+        }
         Command::Run(args) => {
             if args.signer.as_ref().is_some_and(|path| !path.is_absolute()) {
                 return Err(Error::Configuration("local signer path must be absolute"));
             }
-            let mut state = state::StateDirectory::open(&args.state_dir)?;
             let signer = args.signer.map(|executable| signer::CommandSigner {
                 executable,
                 arguments: args.signer_arg,
@@ -104,9 +178,44 @@ pub async fn run(cli: Cli) -> Result<(), Error> {
                 verification_bytes: args.verification_budget_bytes,
                 mirrors: args.max_mirror_attempts,
             };
+            if let (Some(policy_dir), Some(state_root)) = (args.policy_dir, args.state_root) {
+                if !policy::canonical_hex(&args.owner, 32) {
+                    return Err(Error::Configuration(
+                        "owner must be a lowercase hexadecimal public key",
+                    ));
+                }
+                let proxy = args.proxy.clone();
+                let permit = args.permit_loopback_development;
+                let factory = move |policy: &policy::VerifiedPolicy| {
+                    transport::HttpTransport::new(policy.policy.profile, proxy.as_ref(), permit)
+                        .map(|transport| Box::new(transport) as Box<dyn transport::Transport>)
+                };
+                let settings = directory::Settings {
+                    policy_dir,
+                    state_root,
+                    owner: args.owner,
+                    limits,
+                    default_interval: args.interval,
+                    intervals: args.interval_for,
+                    transport: &factory,
+                };
+                return directory::run(
+                    settings,
+                    &clock,
+                    signer.as_ref().map(|signer| signer as &dyn signer::Signer),
+                    args.once,
+                )
+                .await;
+            }
+            let (Some(policy_path), Some(state_dir)) = (args.policy, args.state_dir) else {
+                return Err(Error::Configuration(
+                    "give --policy and --state-dir, or --policy-dir and --state-root",
+                ));
+            };
+            let mut state = state::StateDirectory::open(&state_dir)?;
             loop {
                 let result = async {
-                    let policy = engine::load_policy(&args.policy, &args.owner, clock.now())?;
+                    let policy = engine::load_policy(&policy_path, &args.owner, clock.now())?;
                     limits.validate(&policy)?;
                     let transport: Box<dyn transport::Transport> =
                         if policy.policy.desired_groups == 0 {
@@ -122,7 +231,7 @@ pub async fn run(cli: Cli) -> Result<(), Error> {
                             )
                         };
                     let guard = engine::Guard {
-                        path: &args.policy,
+                        path: &policy_path,
                         expected: &policy,
                         clock: &clock,
                     };

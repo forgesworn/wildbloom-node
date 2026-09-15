@@ -85,8 +85,12 @@ streaming GET and asks an external signer for a fresh, scoped BUD-11 event
 before a BUD-04 mirror. Read-back determines whether the configured group
 counts; acknowledgements and earlier observations do not. Its private atomic
 state and lock are separate from the store database, and its authenticated
-client transport does not extend the core's GET-only `BlobFetcher`. See
-[REPLICA-POLICY.md](REPLICA-POLICY.md) for the app-specific envelope and limits.
+client transport does not extend the core's GET-only `BlobFetcher`. Its
+directory mode runs each signed policy in a directory on its own schedule with
+per-policy state, and its enrolment command derives and signs those policies
+from an inventory the operator supplies; neither contacts a source on its own.
+See [REPLICA-POLICY.md](REPLICA-POLICY.md) for the app-specific envelope and
+limits.
 
 ## Storage priority boundary
 

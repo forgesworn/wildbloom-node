@@ -42,8 +42,11 @@
 - the tray shell survives reboot and retains the same onion identity on all
   three operating systems;
 - the headless replica coordinator passes real Tor, independently installed
-  physical-node and cross-platform acceptance; desktop integration and Bothy
-  pin/whole-vault contracts remain separate work;
+  physical-node and cross-platform acceptance, including its directory
+  maintenance mode and inventory enrolment (both local implementation
+  candidates covered by unit tests only); store-backed inventory, desktop
+  integration, replica discovery and Bothy pin/whole-vault contracts remain
+  separate work;
 - retention, replica discovery, custody challenges and optional paid quota have
   explicit policy and tests;
 - owner, friend and guest retention, migration and interrupted-transaction

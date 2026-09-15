@@ -11,7 +11,7 @@ use super::{
     transport::{NetworkFailure, Profile},
 };
 
-const MAX_STATE_BYTES: usize = 2 * 1024 * 1024;
+pub const MAX_STATE_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StateError {
@@ -89,7 +89,7 @@ pub fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>, StateError> {
     Ok(bytes)
 }
 
-fn private_directory(path: &Path) -> Result<(), StateError> {
+pub fn private_directory(path: &Path) -> Result<(), StateError> {
     if !path.exists() {
         let mut builder = std::fs::DirBuilder::new();
         builder.recursive(true);

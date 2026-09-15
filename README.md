@@ -53,8 +53,10 @@ session remains for live browser media rather than storage.
   and repair from previously verified mirror sources.
 - An optional headless replica coordinator with an owner-signed local policy,
   complete remote byte verification, scoped external authorisation and bounded
-  BUD-04 repairs across explicitly configured targets. See the
-  [replica maintenance guide](docs/REPLICA-POLICY.md).
+  BUD-04 repairs across explicitly configured targets. It can maintain a
+  whole directory of policies from one process, and enrol a changing set of
+  blobs from an operator-supplied inventory into intake and chunked archive
+  policies. See the [replica maintenance guide](docs/REPLICA-POLICY.md).
 - Claim-aware owner, friend and guest retention over one deduplicated CAS.
   Friends have expiring per-key byte ceilings; signed guest mirrors use only
   spare capacity and are evicted first.
