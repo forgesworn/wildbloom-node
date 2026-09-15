@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Add `wildbloomd replicas run --policy-dir --state-root`: one process
+  maintains every `signed-<id>.json` in a directory, with per-policy state and
+  locks, per-prefix intervals (`--interval-for`), stop-until-changed handling
+  and per-policy failure backoff instead of exiting.
+- Add `wildbloomd replicas enrol`: derive and sign `<prefix>-intake` and
+  chunked `<prefix>-archive-<hex>` policies from an operator-supplied
+  inventory, with an append-only ledger, trusted-state checks, a grace rule,
+  loss reporting, expiry renewal and verification of every signed return.
+- Document that coordinator repair cannot restore a node whose index still
+  lists a blob whose file is gone, and the node-side remedies.
+
 ## 0.2.1 - 2026-08-29
 
 - Update the shared shelter-kit core to 0.1.2 so BUD-11 authorisation accepts

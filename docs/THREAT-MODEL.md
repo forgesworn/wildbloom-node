@@ -70,10 +70,20 @@
   and retrieval do not depend on a relay once endpoints are known.
 - Server-side encryption is not supplied.  Applications such as Wildbloom must
   encrypt before upload when confidentiality matters.
-- There is no automatic replica discovery, replica counting or remote custody
-  challenge.  Local repair works only while a previously recorded source is
+- There is no automatic replica discovery or remote custody challenge. The
+  optional headless coordinator counts only complete bytes verified during its
+  current pass at explicitly configured targets. Declared owner status and
+  failure groups do not prove physical independence or future custody. Local
+  repair works only while a previously recorded source is
   reachable.  It cannot repair the last remaining copy after that source is
   gone.
+- Replica policies and pending signatures are private local operator state.
+  The policy's pinned author and persisted monotonic revision constrain client
+  intent; each destination independently enforces a fresh, scoped BUD-11 write.
+  Policy removal, expiry or change stops subsequent work, but cannot recall an
+  already in-flight remote write. A local signer executable is an explicitly
+  trusted operator component; it can refuse and is never discovered remotely.
+  See [REPLICA-POLICY.md](REPLICA-POLICY.md) for bounds and remaining gates.
 
 ## Operator responsibilities
 

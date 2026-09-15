@@ -7,6 +7,7 @@ use wildbloom_core::{
     router,
 };
 
+mod replicas;
 mod tor;
 
 use tor::TorService;
@@ -47,6 +48,8 @@ impl FromStr for FriendGrantArg {
     about = "A secure, self-hosted Blossom storage node"
 )]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
     /// Address used by the local HTTP service.
     #[arg(long, env = "WILDBLOOM_BIND", default_value = "127.0.0.1:3742")]
     bind: SocketAddr,
@@ -151,6 +154,12 @@ struct Cli {
     parent_pid: Option<u32>,
 }
 
+#[derive(Debug, clap::Subcommand)]
+enum Command {
+    /// Maintain replicas under a signed local policy.
+    Replicas(replicas::Cli),
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
@@ -161,6 +170,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let cli = Cli::parse();
+    if let Some(Command::Replicas(args)) = cli.command {
+        return replicas::run(args).await.map_err(Into::into);
+    }
     #[cfg(target_os = "linux")]
     configure_parent_death(cli.parent_pid)?;
     let data_dir = match cli.data_dir {
