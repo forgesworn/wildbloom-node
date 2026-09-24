@@ -1,0 +1,74 @@
+# Wildbloom Node
+
+> Storing Blossom blobs on somebody else's server means somebody else can lose
+> them, remove them or stop paying the bill. Wildbloom Node is a self-hosted
+> Blossom storage server that turns a user's own machine into a standard
+> Blossom node, reachable over a persistent Tor onion or an operator-managed
+> HTTPS origin.
+
+Wildbloom Node is for people who want to hold their own Nostr-addressed blobs
+rather than trust a third-party Blossom host. It stores blobs on disk by
+SHA-256, accepts only tightly scoped Nostr authorisation (BUD-11), and lets
+another authorised node copy a blob across with BUD-04 mirroring. It is not a
+torrent client or a WebRTC transport: every replica stores a complete blob and
+serves it over ordinary Blossom HTTP.
+
+## Getting Started
+
+Wildbloom Node is not published to a package registry; build the headless
+daemon from source.
+
+```sh
+git clone https://github.com/forgesworn/wildbloom-node.git
+cd wildbloom-node
+cargo build --release
+./target/release/wildbloomd --allow-pubkey <64-lower-case-hex-public-key>
+```
+
+This binds the listener to loopback by default and starts a managed Tor
+process unless `--no-tor` is given. Once ready, the log prints the stable
+`.onion` Blossom URL to give to a Blossom-capable client.
+
+## Key Concepts
+
+- Content-addressed storage: blobs are indexed by the SHA-256 of the bytes
+  actually received, never by a client-supplied filename or digest.
+- BUD-11 authorisation: every write needs a short-lived, signature-checked
+  Nostr kind `24242` event scoped to the exact operation, hash and server
+  identity.
+- Transport is separate from storage: Tor and direct HTTPS both carry bytes
+  for the same underlying Blossom server; neither is required for storage
+  itself.
+- Retention tiers: an owner has full read/write; friends get expiring
+  per-key byte ceilings via `--friend-grant`; `--open-shelter` admits
+  unknown signed guest mirrors on spare capacity only, evicted first.
+- Replica coordination: an optional headless coordinator can enrol blobs
+  from an operator-supplied inventory and repair them across explicitly
+  configured remote targets. See
+  [docs/REPLICA-POLICY.md](docs/REPLICA-POLICY.md).
+
+## API Surface
+
+`wildbloomd` exposes standard Blossom HTTP endpoints:
+
+- `GET` / `HEAD` on a blob's hash (BUD-01), with optional file extensions and
+  single byte ranges.
+- `PUT /upload` (BUD-02): streaming upload with `Content-Length` and
+  `X-SHA-256`, authorised by a BUD-11 event in `Authorization: Nostr <event>`.
+- `PUT /mirror` (BUD-04): pulls a blob from another Blossom origin (onion via
+  the private Tor SOCKS listener, or public HTTPS in direct mode).
+- Authorised, self-only listing and claim-aware deletion (BUD-12), with
+  bounded cursor pagination.
+
+Key CLI flags: `--bind`, `--data-dir`, `--allow-pubkey`, `--friend-grant`,
+`--open-shelter`, `--quota-bytes`, `--max-blob-bytes`, `--no-tor`,
+`--public-url`, `--direct-https-mirrors`, `--verify-storage`.
+
+## Optional
+
+- [Protocol and trust boundaries](docs/PROTOCOL.md)
+- [Storage priority contract](docs/STORAGE-POLICY.md)
+- [Threat model](docs/THREAT-MODEL.md)
+- [Replica maintenance guide](docs/REPLICA-POLICY.md)
+- [Roadmap](docs/ROADMAP.md)
+- [Release process](docs/RELEASE.md)
