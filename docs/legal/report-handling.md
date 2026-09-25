@@ -17,7 +17,7 @@
 
 ## Contact
 
-**abuse@forgesworn.dev** is the published contact for reports about content
+**abuse@safety.forgesworn.dev** is the published contact for reports about content
 on a ForgeSworn-run Wildbloom Node. `[DECISION: confirm this address is set
 up, monitored, and named wherever a ForgeSworn-run node's /healthz or
 equivalent public information page is served, per the general operator
@@ -48,7 +48,7 @@ honestly what we can do and on what timescale.
 ## Intake
 
 1. **Log every report** on receipt, whatever channel it arrives on (email to
-   abuse@forgesworn.dev, a GitHub security advisory, or any other route):
+   abuse@safety.forgesworn.dev, a GitHub security advisory, or any other route):
    date and time received, the reporter's contact detail if given, what they
    reported, the hash or claim they identified, and the channel it arrived
    on.
@@ -122,7 +122,7 @@ ForgeSworn-run node is live.
 
 ## Open items
 
-1. Confirm abuse@forgesworn.dev is live and monitored before this runbook is
+1. Confirm abuse@safety.forgesworn.dev is live and monitored before this runbook is
    relied on. `[DECISION]`
 2. Target acknowledgement and resolution times. `[DECISION]`
 3. This runbook currently applies to no live instance; update the header

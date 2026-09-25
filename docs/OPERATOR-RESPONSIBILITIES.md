@@ -148,7 +148,7 @@ the Online Safety Act expects of services that accept user content.
 
 `[DECISION: each operator must choose and publish their own contact address.
 For a ForgeSworn-run node, see
-docs/legal/report-handling.md, which uses abuse@forgesworn.dev.]`
+docs/legal/report-handling.md, which uses abuse@safety.forgesworn.dev.]`
 
 ## Retention
 
