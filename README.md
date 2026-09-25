@@ -227,6 +227,19 @@ welcome under the [MIT licence](LICENSE).  Desktop packages also retain the
 exact upstream licences for their signature-verified Tor runtime; see
 [third-party notices](THIRD_PARTY_NOTICES.md).
 
+## Running your own node: what you take on
+
+If you run a Wildbloom Node, you are its operator under UK law, with duties
+under the Online Safety Act 2023 and UK GDPR when it accepts content from
+anyone other than yourself. Read
+[`docs/OPERATOR-RESPONSIBILITIES.md`](docs/OPERATOR-RESPONSIBILITIES.md)
+before enabling a friend grant or open shelter. It covers what the software
+can and cannot do today for removing a blob by hash and blocking an
+uploader, and what you need to publish for people to report content to you.
+[`docs/legal/report-handling.md`](docs/legal/report-handling.md) is the
+report-handling runbook for a ForgeSworn-run node specifically. None of
+these documents are legal advice.
+
 ## Support ForgeSworn
 
 If this is useful, sponsor [TheCryptoDonkey on GitHub](https://github.com/sponsors/TheCryptoDonkey),
