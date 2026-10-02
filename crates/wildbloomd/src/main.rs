@@ -82,8 +82,12 @@ struct Cli {
     #[arg(long, env = "WILDBLOOM_PUBLIC_URL")]
     public_url: Option<Url>,
 
-    /// Exact value accepted in BUD-11 server tags (repeatable).
-    #[arg(long = "server-name", env = "WILDBLOOM_SERVER_NAME")]
+    /// Exact value accepted in BUD-11 server tags (repeatable, or comma-separated).
+    #[arg(
+        long = "server-name",
+        env = "WILDBLOOM_SERVER_NAME",
+        value_delimiter = ','
+    )]
     server_names: Vec<String>,
 
     /// Owner Nostr public key allowed to upload, mirror and delete (repeatable).
@@ -476,5 +480,19 @@ mod tests {
     fn parses_the_hidden_desktop_parent_contract() {
         let cli = Cli::try_parse_from(["wildbloomd", "--parent-pid", "1234"]).unwrap();
         assert_eq!(cli.parent_pid, Some(1234));
+    }
+
+    #[test]
+    fn server_names_accept_a_comma_separated_list() {
+        let cli = Cli::try_parse_from([
+            "wildbloomd",
+            "--server-name",
+            "192.0.2.10,archipelago.local",
+        ])
+        .expect("arguments parse");
+        assert_eq!(
+            cli.server_names,
+            vec!["192.0.2.10".to_owned(), "archipelago.local".to_owned()]
+        );
     }
 }
