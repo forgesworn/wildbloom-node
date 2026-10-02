@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- WILDBLOOM_SERVER_NAME accepts a comma-separated list, matching --allow-pubkey and --friend-grant.
 - Add `wildbloomd replicas run --policy-dir --state-root`: one process
   maintains every `signed-<id>.json` in a directory, with per-policy state and
   locks, per-prefix intervals (`--interval-for`), stop-until-changed handling
