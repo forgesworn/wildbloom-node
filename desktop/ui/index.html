@@ -90,6 +90,49 @@
         </form>
       </section>
 
+      <section id="owner-pools" aria-labelledby="pools-heading">
+        <p class="label">Owner-controlled recovery</p>
+        <h2 id="pools-heading">Storage pools</h2>
+        <p class="hint">Check complete replicas or coded parts across the nodes in your private receipt. Importing a receipt stays local. Checking reads your nodes; repair separately needs your approval and external signer.</p>
+        <p class="pool-warning">Repair can reconstruct the complete encrypted file on this machine. Run it on an owner-controlled computer separate from storage nodes promised only one part. No recovery key is needed.</p>
+        <button id="pool-browser" class="secondary" type="button">Create a pool or add replacement nodes in the browser</button>
+        <p class="hint">In the browser, choose a storage layout, or load your existing receipt and add replacements. Sign and save the new receipt, stop its old repair service, then import the replacement here. Old remote copies are never deleted.</p>
+        <form id="pool-import-form">
+          <label>Signed pool receipt <input id="pool-receipt" type="file" accept="application/json,.json" required /></label>
+          <label>Expected owner public key <input id="pool-owner" type="text" required minlength="64" maxlength="64" pattern="[0-9a-f]{64}" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" /><small>Check this against your signer. It is a public key, never an nsec or recovery key.</small></label>
+          <button id="pool-import" type="submit">Verify and save receipt locally</button>
+        </form>
+        <output id="pool-action-status" role="status" aria-live="polite"></output>
+        <p id="pool-load-error" role="alert" hidden></p>
+        <label class="pool-selection">Saved pool receipt <select id="pool-select"><option value="">No receipts imported</option></select></label>
+        <div id="pool-details" hidden>
+          <dl id="pool-facts" class="pool-facts"></dl>
+          <p id="pool-health" role="status" aria-live="polite"></p>
+          <p id="pool-process" class="hint"></p>
+          <p id="pool-observed" class="hint"></p>
+          <ul id="pool-parts" class="pool-parts" aria-label="Parts and approved destinations"></ul>
+          <form id="pool-run-form">
+            <label id="pool-proxy-field" hidden>Tor SOCKS proxy <input id="pool-proxy" type="text" placeholder="socks5h://127.0.0.1:9050" autocomplete="off" spellcheck="false" /><small>Run a local Tor client and supply its SOCKS port. This owner service never falls back to a direct connection.</small></label>
+            <div class="pool-settings-grid">
+              <label>Check every (seconds) <input id="pool-interval" type="number" min="5" max="86400" value="300" required /></label>
+              <label>Authority expires <input id="pool-expiry" type="datetime-local" required /><small>At most one year. Repair stops at this deadline.</small></label>
+              <label>Transfer budget per pass (GiB) <input id="pool-transfer" type="number" min="1" max="32" value="8" required /></label>
+              <label>Temporary disk limit (GiB) <input id="pool-disk" type="number" min="1" max="32" value="5" required /></label>
+            </div>
+            <label>External signer executable <input id="pool-signer" type="text" autocomplete="off" spellcheck="false" placeholder="Absolute path to your signer helper" /><small>Repair only. The helper receives unsigned event JSON on stdin and returns the exact signed event on stdout. Keep signing keys in the signer.</small></label>
+            <label>Signer arguments (optional, one per line) <textarea id="pool-signer-arguments" rows="2" maxlength="65536" autocomplete="off" spellcheck="false"></textarea><small>Arguments are passed directly, without a shell. Do not put keys or other secrets here. These settings are not saved.</small></label>
+            <label class="check warning"><input id="pool-consent" type="checkbox" /><span>I approve reconstructing encrypted bytes here and requesting signatures to restore parts only to this receipt’s destinations until the selected expiry.</span></label>
+            <div class="actions pool-controls">
+              <button id="pool-check" type="button">Check storage (read only)</button>
+              <button id="pool-start" type="submit" disabled>Start automatic repair</button>
+              <button id="pool-stop" class="secondary" type="button" disabled>Stop check or repair</button>
+            </div>
+          </form>
+          <p class="hint">One pool process runs at a time. Closing this window leaves it running in the tray. Quitting, updating or restarting the app stops it; you must approve a new start afterwards. Health is the last completed observation, not a future storage guarantee.</p>
+          <details><summary>Local receipt and work folder</summary><p id="pool-work-dir" class="hint"></p><p class="hint">After a forced shutdown, inspect any pool-pass folders here before removing them. They may contain encrypted file parts. The app will not delete crash leftovers automatically.</p><label class="check"><input id="pool-remove-consent" type="checkbox" /><span>I have backed up this receipt and want to remove it from this desktop.</span></label><button id="pool-remove" class="secondary" type="button" disabled>Remove local receipt</button><p class="hint">This preserves work folders and does not delete any remote data.</p></details>
+        </div>
+      </section>
+
       <aside>
         <strong>What this protects</strong>
         <p>Direct uploads need a short-lived Nostr signature from the owner or an unexpired friend.  Open shelter accepts unknown keys only through signed mirrors and gives them no retention promise.  Encrypt sensitive files before upload.  Tor is optional: it hides the node’s home address, not file size, timing or public Nostr identity.  Direct mode exposes ordinary network metadata.</p>
@@ -98,5 +141,6 @@
       <footer>Closing this window leaves the node running in the tray.  Quit from the tray menu to stop Wildbloom and Tor when Tor is enabled.</footer>
     </main>
     <script src="app.js"></script>
+    <script src="pools.js"></script>
   </body>
 </html>

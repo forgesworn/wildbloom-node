@@ -48,6 +48,17 @@ pub struct Cli {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Verify a private receipt locally and print its placement. No network or signer I/O.
+    PoolInspect {
+        #[arg(long)]
+        receipt: PathBuf,
+        #[arg(long)]
+        owner: String,
+        #[arg(long)]
+        receipt_id: String,
+        #[arg(long)]
+        permit_loopback_development: bool,
+    },
     /// Owner-side unattended repair. This machine may reconstruct ciphertext.
     PoolRepair(pool_repair::RepairArgs),
     /// Validate a private pool receipt and emit unsigned per-part maintenance policies.
@@ -147,6 +158,28 @@ struct RunArgs {
 pub async fn run(cli: Cli) -> Result<(), Error> {
     let clock = engine::SystemClock;
     match cli.command {
+        Command::PoolInspect {
+            receipt,
+            owner,
+            receipt_id,
+            permit_loopback_development,
+        } => {
+            let (manifest, _) = pool::receipt(
+                &state::read_bounded(&receipt, 128 * 1024)?,
+                &owner,
+                &receipt_id,
+                clock.now(),
+                permit_loopback_development,
+            )?;
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({
+                    "receipt_id": receipt_id, "owner": owner, "manifest": manifest,
+                    "storage_verified": false,
+                }))?
+            );
+            Ok(())
+        }
         Command::PoolRepair(args) => pool_repair::run(args).await,
         Command::PoolTemplate {
             receipt,

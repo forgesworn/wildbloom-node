@@ -10,7 +10,29 @@ env:
   TOR_EXPERT_BUNDLE_VERSION: 15.0.21
 
 jobs:
+  tor-inputs:
+    name: Verify pinned Tor downloads
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Download once and verify each upstream bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          export WILDBLOOM_TOR_CACHE_DIR="$RUNNER_TEMP/verified-tor-downloads"
+          for platform in linux-x86_64 macos-aarch64 macos-x86_64 windows-x86_64; do
+            scripts/prepare-tor-runtime.sh "$platform" "$RUNNER_TEMP/tor-$platform"
+          done
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: verified-tor-downloads
+          path: ${{ runner.temp }}/verified-tor-downloads
+          if-no-files-found: error
+          retention-days: 1
+
   build:
+    needs: tor-inputs
     name: ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -64,8 +86,14 @@ jobs:
             'WILDBLOOM_GPGV_BIN=/c/msys64/usr/bin/gpgv.exe' \
             'WILDBLOOM_GPG_PATH_STYLE=windows' \
             >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: verified-tor-downloads
+          path: ${{ runner.temp }}/verified-tor-downloads
       - name: Prepare signed upstream Tor runtime and daemon
         shell: bash
+        env:
+          WILDBLOOM_TOR_DOWNLOAD_DIR: ${{ runner.temp }}/verified-tor-downloads
         run: |
           set -euo pipefail
           scripts/prepare-tor-runtime.sh "${{ matrix.tor }}" desktop/src-tauri/tor-runtime
@@ -89,6 +117,16 @@ jobs:
       - name: Install and exercise the Linux package
         if: runner.os == 'Linux'
         run: scripts/accept-desktop-linux.sh "desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+      - name: Verify the macOS bundle contains the owner-pool commands
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          daemon="desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/Wildbloom Node.app/Contents/MacOS/wildbloomd"
+          test -x "$daemon"
+          "$daemon" replicas pool-inspect --help | grep -q -- '--receipt-id'
+          "$daemon" replicas pool-repair --help | grep -q -- '--check-only'
+          "$daemon" replicas pool-repair --help | grep -q -- '--stop-on-stdin'
       - name: Install and exercise the Windows package
         if: runner.os == 'Windows'
         shell: pwsh

@@ -153,3 +153,13 @@ repair by the resident service, verifies exclusive locking and expiry refusal,
 and decrypts native-repaired bytes in a fresh browser. Use `--maximum` for the
 256 MiB source case. This proves browser/native version-1 coding compatibility
 and local process recovery, not independent physical custody.
+
+## Desktop controls in 0.3.0
+
+The desktop can import and inspect signed receipts locally, check storage
+without a signer, show per-part observations and supervise bounded owner repair.
+See [DESKTOP-POOLS.md](DESKTOP-POOLS.md). `replicas pool-inspect` performs only
+local validation. `replicas pool-repair --check-only` performs one read-only pass
+without signing, reconstruction or uploads. `--stop-on-stdin` binds the lifetime
+to a supervising pipe: a byte or EOF cancels the process gracefully. Normal CLI
+services without that option keep their existing signal/expiry behaviour.

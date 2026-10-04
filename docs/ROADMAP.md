@@ -2,6 +2,11 @@
 
 ## Production candidate, implemented
 
+- browser-created signed storage pools, local receipt inspection, read-only
+  placement checks and owner-side threshold reconstruction/repair;
+- desktop receipt import, timestamped part health, bounded repair controls and
+  graceful supervision; replacement placement remains externally signed in
+  the browser and explicitly imported;
 - persistent whole-blob CAS;
 - strict BUD-01, BUD-02, BUD-04, BUD-06, BUD-11 and BUD-12 profile;
 - stable managed Tor v3 endpoint;
@@ -45,7 +50,7 @@
   physical-node and cross-platform acceptance, including its directory
   maintenance mode and inventory enrolment (both local implementation
   candidates covered by unit tests only); store-backed inventory, desktop
-  integration, replica discovery and Bothy pin/whole-vault contracts remain
+  directory-policy integration, replica discovery and Bothy pin/whole-vault contracts remain
   separate work;
 - retention, replica discovery, custody challenges and optional paid quota have
   explicit policy and tests;

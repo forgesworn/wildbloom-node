@@ -4,3 +4,5 @@ desktop/src-tauri/gen/
 /.DS_Store
 /data/
 *.log
+
+desktop/node_modules/

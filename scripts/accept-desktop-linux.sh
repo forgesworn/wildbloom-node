@@ -47,6 +47,12 @@ trap cleanup EXIT
 sudo apt-get install --yes "$package_path"
 executable="$(command -v wildbloom-desktop)"
 test -x "$executable"
+daemon_binary="$(dpkg-query --listfiles "$package_name" | awk '/\/wildbloomd$/ && !found { print; found = 1 }')"
+test -x "$daemon_binary"
+"$daemon_binary" replicas pool-inspect --help | grep -q -- '--receipt-id'
+"$daemon_binary" replicas pool-repair --help | grep -q -- '--check-only'
+"$daemon_binary" replicas pool-repair --help | grep -q -- '--stop-on-stdin'
+echo "installed daemon includes desktop pool inspection, read-only checks and supervision"
 tor_binary="$(dpkg-query --listfiles "$package_name" | awk '/\/tor-runtime\/tor\/tor$/ && !found { print; found = 1 }')"
 if [ -z "$tor_binary" ] || [ ! -x "$tor_binary" ]; then
   echo "the installed package manifest does not contain an executable Tor runtime" >&2

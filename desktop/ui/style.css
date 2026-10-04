@@ -33,6 +33,7 @@ form { display: grid; gap: 1rem; }
 .access-status { margin: -0.35rem 0 0; padding: 0.7rem 0.8rem; border-left: 2px solid #d6a45b; color: #c8b995; background: rgba(87, 65, 32, 0.16); font-size: 0.8rem; }
 label { display: grid; gap: 0.45rem; color: #d7dfd4; font-weight: 700; }
 input, textarea, select { width: 100%; border: 1px solid #3b4c40; border-radius: 10px; padding: 0.75rem; color: #edf4ea; background: #070a08; font: inherit; }
+input, textarea, select { min-width: 0; max-width: 100%; }
 textarea { min-height: 7rem; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; }
 input:focus-visible, textarea:focus-visible, select:focus-visible, button:focus-visible { outline: 3px solid #b9eea2; outline-offset: 2px; }
 .nested-fields { display: grid; gap: 1rem; padding: 1rem; border: 1px solid #35463a; border-radius: 12px; background: rgba(7, 10, 8, 0.55); }
@@ -58,4 +59,30 @@ footer { padding: 1.5rem 0 0; color: #7f8d7c; font-size: 0.75rem; text-align: ce
   .stats { grid-template-columns: 1fr; }
   .actions { align-items: stretch; flex-direction: column; }
   button { width: 100%; }
+}
+
+[hidden] { display: none !important; }
+h2 { margin: 0.3rem 0 0.8rem; font: 500 2rem Georgia, serif; }
+#pool-import-form, #pool-run-form, .pool-selection { margin-top: 1.5rem; }
+#pool-action-status { display: block; margin-top: 1rem; overflow-wrap: anywhere; }
+.pool-warning { padding: 0.85rem; border-left: 3px solid #d6a45b; color: #edcfab; background: #231d14; font-size: 0.9rem; line-height: 1.5; }
+.pool-health { color: #b9eea2; line-height: 1.5; }
+.pool-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.65rem 1rem; margin: 1.5rem 0; font-size: 0.82rem; }
+.pool-facts dt { color: #94a290; }
+.pool-facts dd { margin: 0; overflow-wrap: anywhere; }
+.pool-parts { display: grid; gap: 0.7rem; padding: 0; list-style: none; }
+.pool-parts li { border: 1px solid #35463a; border-radius: 10px; padding: 0.9rem; }
+.pool-parts p { margin: 0.5rem 0 0; color: #b9c5b6; font-size: 0.8rem; line-height: 1.5; overflow-wrap: anywhere; }
+.pool-settings-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 1rem; }
+.pool-controls { flex-wrap: wrap; }
+#pool-work-dir { overflow-wrap: anywhere; user-select: all; }
+#owner-pools details { margin-top: 1rem; }
+#owner-pools summary { cursor: pointer; padding: 0.7rem 0; }
+#owner-pools details button { margin-top: 0.8rem; }
+#owner-pools .check input { flex: 0 0 24px; height: 24px; }
+summary:focus-visible { outline: 3px solid #b9eea2; outline-offset: 2px; }
+@media (max-width: 560px) {
+  .pool-settings-grid { grid-template-columns: 1fr; }
+  .pool-facts { grid-template-columns: 1fr; gap: 0.3rem; }
+  .pool-facts dd { margin-bottom: 0.6rem; }
 }

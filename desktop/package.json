@@ -1,0 +1,7 @@
+{
+  "name": "wildbloom-desktop-acceptance",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node tests/pools-ui.mjs" },
+  "devDependencies": { "@axe-core/playwright": "4.13.0", "playwright-core": "1.62.1" }
+}
