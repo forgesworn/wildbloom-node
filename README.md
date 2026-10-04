@@ -73,7 +73,7 @@ session remains for live browser media rather than storage.
   runners, including Tor bootstrap, Blossom health, single-instance behaviour,
   child cleanup and uninstall.
 
-There is no proof-of-storage protocol, paid quota or automatic discovery of
+There is no proof-of-storage protocol, payment checkout or automatic discovery of
 strangers willing to hold data. The optional coordinator reports recently
 verified configured failure groups; operator declarations do not prove physical
 independence or future retention. Local repair can restore a damaged copy only
@@ -142,7 +142,7 @@ allowance; later starts reuse its private directory cache.  Once ready, the log
 prints the stable `.onion` Blossom URL.  Add that URL to a Blossom-capable client.  The
 node stores data in the operating system's per-user application-data directory
 unless `--data-dir` or `WILDBLOOM_DATA_DIR` says otherwise.  Without an owner,
-friend grant or explicit open-shelter policy it remains read-only.
+friend grant, activated paid allowance or explicit open-shelter policy it remains read-only.
 
 For a supported local-only node without Tor, keep the same explicit owner
 authority:
@@ -245,3 +245,15 @@ these documents are legal advice.
 If this is useful, sponsor [TheCryptoDonkey on GitHub](https://github.com/sponsors/TheCryptoDonkey),
 [support BRAYs on Ko-fi](https://ko-fi.com/brays), or back
 [ForgeSworn on Geyser](https://geyser.fund/project/forgesworn).
+
+### Paid-storage core prerelease
+
+The daemon pins Shelter Kit `v0.5.0`, which adds schema-6 protected capacity
+allowances and durable sale holds. No checkout endpoint, receiving wallet or
+payment rail is enabled. Allowance activation is a trusted operator integration
+API, not proof of payment. See [the paid core contract](https://github.com/forgesworn/shelter-kit/blob/v0.5.0/PAID-STORAGE.md).
+
+Back up the data directory before upgrading. Schema 6 cannot be reopened with
+the previous schema-5 core; do not downgrade by changing the schema version.
+Published desktop installers are separate release artefacts and do not change
+when this source dependency pin changes.
