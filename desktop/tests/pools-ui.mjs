@@ -65,7 +65,8 @@ try {
   assert.match(await page.locator('#pool-parts').textContent(),/<img src=x/);
   for(const width of [820,420,320]) {
     await page.setViewportSize({width,height:900});
-    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,`overflow at ${width}`);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth ? [...document.querySelectorAll('body *')].filter(e => e.getBoundingClientRect().right > innerWidth).map(e => ({ tag: e.tagName, id: e.id, right: e.getBoundingClientRect().right })) : []);
+    assert.deepEqual(overflow, [], `overflow at ${width}: ${JSON.stringify(overflow)}`);
     const axe=await new AxeBuilder({page}).include('#owner-pools').withTags(['wcag2a','wcag2aa','wcag21aa']).analyze();
     assert.deepEqual(axe.violations.map(v=>({id:v.id,nodes:v.nodes.map(n=>n.target)})),[]);
     if(process.env.WILDBLOOM_SCREENSHOT_DIR)await page.locator('#owner-pools').screenshot({path:`${process.env.WILDBLOOM_SCREENSHOT_DIR}/pools-${width}.png`});

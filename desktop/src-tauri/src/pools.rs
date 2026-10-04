@@ -518,6 +518,22 @@ fn arguments(
     }
     args
 }
+fn require_stopped(slot: &mut Option<Active>, selected: Option<&str>) -> Result<(), String> {
+    if let Some(active) = slot.as_mut()
+        && selected.is_none_or(|id| id == active.id)
+    {
+        if matches!(
+            active.done.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ) {
+            return Err("Stop the active pool check or repair first.".into());
+        }
+        // Consuming a completed receiver also retires its slot. Quit must never
+        // poll that receiver again after a receipt was removed.
+        *slot = None;
+    }
+    Ok(())
+}
 #[tauri::command]
 pub async fn start_pool(
     app: AppHandle,
@@ -526,15 +542,7 @@ pub async fn start_pool(
 ) -> Result<(), String> {
     let _operation = manager.operation.lock().await;
     let mut active = manager.active.lock().await;
-    if let Some(existing) = active.as_mut() {
-        if matches!(
-            existing.done.try_recv(),
-            Err(oneshot::error::TryRecvError::Empty)
-        ) {
-            return Err("Stop the active pool check or repair before starting another.".into());
-        }
-        *active = None;
-    }
+    require_stopped(&mut active, None)?;
     let inspection = manager
         .entries
         .lock()
@@ -668,14 +676,9 @@ pub async fn remove_pool(
     if !hex(&receipt_id) {
         return Err("Invalid receipt ID.".into());
     }
-    if let Some(active) = manager.active.lock().await.as_mut()
-        && active.id == receipt_id
-        && matches!(
-            active.done.try_recv(),
-            Err(oneshot::error::TryRecvError::Empty)
-        )
     {
-        return Err("Stop this pool before removing its local receipt.".into());
+        let mut slot = manager.active.lock().await;
+        require_stopped(&mut slot, Some(&receipt_id))?;
     }
     if !manager
         .entries
@@ -715,6 +718,25 @@ mod tests {
             transfer_budget_bytes: 1024,
             max_work_bytes: 1024,
         }
+    }
+    #[tokio::test]
+    async fn completed_receipt_removal_retires_supervision_before_quit() {
+        let manager = PoolManager::default();
+        let (stop, _stopped) = oneshot::channel();
+        let (finished, done) = oneshot::channel();
+        let mut slot = Some(Active {
+            id: "a".repeat(64),
+            stop: Some(stop),
+            done,
+        });
+        assert!(require_stopped(&mut slot, Some(&"a".repeat(64))).is_err());
+        assert!(slot.is_some());
+        finished.send(()).unwrap();
+        require_stopped(&mut slot, Some(&"a".repeat(64))).unwrap();
+        assert!(slot.is_none());
+        *manager.active.lock().await = slot;
+        manager.stop().await.unwrap();
+        manager.stop().await.unwrap();
     }
     #[test]
     fn bounded_authority_transport_and_reconstruction_are_separate() {
