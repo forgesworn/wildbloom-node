@@ -227,6 +227,119 @@ impl HttpTransport {
     }
 }
 
+impl HttpTransport {
+    /// Stream a fully verified part to a caller-owned private temporary file.
+    pub(super) async fn download(
+        &self,
+        target: &Target,
+        blob: &Blob,
+        path: &std::path::Path,
+    ) -> Result<(), NetworkFailure> {
+        use tokio::io::AsyncWriteExt;
+        let url = self
+            .origin(target)?
+            .join(&blob.sha256)
+            .map_err(|_| NetworkFailure::Refused)?;
+        let mut response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|_| NetworkFailure::Unreachable)?;
+        if response.status() != reqwest::StatusCode::OK
+            || response.content_length() != Some(blob.size)
+        {
+            return Err(NetworkFailure::InvalidBytes);
+        }
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(path)
+            .await
+            .map_err(|_| NetworkFailure::Refused)?;
+        let mut received = 0_u64;
+        let mut hash = Sha256::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|_| NetworkFailure::InvalidBytes)?
+        {
+            received = received
+                .checked_add(chunk.len() as u64)
+                .ok_or(NetworkFailure::InvalidBytes)?;
+            if received > blob.size {
+                return Err(NetworkFailure::InvalidBytes);
+            }
+            hash.update(&chunk);
+            file.write_all(&chunk)
+                .await
+                .map_err(|_| NetworkFailure::Refused)?;
+        }
+        file.flush().await.map_err(|_| NetworkFailure::Refused)?;
+        if received != blob.size || hex::encode(hash.finalize()) != blob.sha256 {
+            return Err(NetworkFailure::InvalidBytes);
+        }
+        Ok(())
+    }
+
+    /// Upload a regenerated part with exact BUD-11 authority. Acknowledgement
+    /// alone is never custody evidence; the caller must verify a complete GET.
+    pub(super) async fn upload(
+        &self,
+        target: &Target,
+        blob: &Blob,
+        path: &std::path::Path,
+        authorization: &str,
+    ) -> Result<(), NetworkFailure> {
+        use tokio::io::AsyncReadExt;
+        let endpoint = self
+            .origin(target)?
+            .join("upload")
+            .map_err(|_| NetworkFailure::Refused)?;
+        let file = tokio::fs::File::open(path)
+            .await
+            .map_err(|_| NetworkFailure::Refused)?;
+        if file
+            .metadata()
+            .await
+            .map_err(|_| NetworkFailure::Refused)?
+            .len()
+            != blob.size
+        {
+            return Err(NetworkFailure::InvalidBytes);
+        }
+        let stream = futures_util::stream::try_unfold(file, |mut file| async move {
+            let mut bytes = vec![0; 64 * 1024];
+            let count = file.read(&mut bytes).await?;
+            bytes.truncate(count);
+            Ok::<_, std::io::Error>(if count == 0 {
+                None
+            } else {
+                Some((bytes, file))
+            })
+        });
+        let mut header = reqwest::header::HeaderValue::from_str(authorization)
+            .map_err(|_| NetworkFailure::Refused)?;
+        header.set_sensitive(true);
+        let response = self
+            .client
+            .put(endpoint)
+            .header(reqwest::header::AUTHORIZATION, header)
+            .header("X-SHA-256", &blob.sha256)
+            .header(reqwest::header::CONTENT_LENGTH, blob.size)
+            .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+            .body(reqwest::Body::wrap_stream(stream))
+            .send()
+            .await
+            .map_err(|_| NetworkFailure::Unreachable)?;
+        if !matches!(response.status().as_u16(), 200 | 201) {
+            return Err(NetworkFailure::Refused);
+        }
+        // Drop the untrusted descriptor; read-back uses only the signed origin/hash.
+        Ok(())
+    }
+}
+
 impl Transport for HttpTransport {
     fn verify<'a>(
         &'a self,

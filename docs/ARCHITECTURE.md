@@ -66,11 +66,20 @@ private temporary file.  The actual digest and byte count are checked before an
 atomic move into the CAS.  Startup reconciles the file and database sides of an
 interrupted move.
 
-This is whole-blob replication today.  Chunk manifests, erasure coding and a
-native node-to-node lane can be added above the CAS and behind the fetcher
-boundary, but a standard Blossom URL must remain available for clients that
-know nothing about those optimisations.  RelaySwarm's WebRTC session is browser
-live-video distribution and is not the storage lane.
+The core replicates whole Blossom blobs. Wildbloom's optional pool client can
+store complete encrypted files or erasure-coded parts as those blobs; the
+owner's browser performs coding and reconstruction above the CAS. The explicit
+`replicas pool-repair` owner process can also regenerate lost parts from a
+threshold of survivors, without a decryption key. It runs separately from
+storage nodes, uses private bounded disk work and an external signer, and
+requires a pinned receipt ID and expiring reconstruction authority. The
+`replicas pool-template` importer validates a private signed receipt and emits
+isolated maintenance policies for its parts without reconstructing ciphertext.
+See [POOL-STORAGE.md](POOL-STORAGE.md). Standard Blossom URLs still serve each
+stored blob. A split file needs its pool-aware owner client and receipt for
+reassembly; ordinary Blossom clients can retrieve individual parts.
+RelaySwarm's WebRTC session is browser live-video distribution and is not the
+storage lane.
 
 Each successful BUD-04 mirror records the exact verified source URL.  An
 integrity scan streams every locally indexed blob through SHA-256.  A missing or
