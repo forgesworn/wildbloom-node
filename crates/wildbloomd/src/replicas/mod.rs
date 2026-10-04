@@ -1,7 +1,10 @@
+mod coding;
 mod directory;
 mod engine;
 mod enrol;
 mod policy;
+mod pool;
+mod pool_repair;
 mod signer;
 mod state;
 #[cfg(test)]
@@ -45,6 +48,24 @@ pub struct Cli {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Owner-side unattended repair. This machine may reconstruct ciphertext.
+    PoolRepair(pool_repair::RepairArgs),
+    /// Validate a private pool receipt and emit unsigned per-part maintenance policies.
+    /// Does not fetch, sign, reconstruct, delete or write coordinator state.
+    PoolTemplate {
+        #[arg(long)]
+        receipt: PathBuf,
+        #[arg(long)]
+        owner: String,
+        /// Monotonic revision for each generated maintenance policy.
+        #[arg(long)]
+        revision: u64,
+        /// Unix seconds; must be in the future and at most one year away.
+        #[arg(long)]
+        expires_at: u64,
+        #[arg(long)]
+        permit_loopback_development: bool,
+    },
     /// Produce an unsigned local policy event; no network or signer contact.
     Template {
         #[arg(long)]
@@ -126,6 +147,25 @@ struct RunArgs {
 pub async fn run(cli: Cli) -> Result<(), Error> {
     let clock = engine::SystemClock;
     match cli.command {
+        Command::PoolRepair(args) => pool_repair::run(args).await,
+        Command::PoolTemplate {
+            receipt,
+            owner,
+            revision,
+            expires_at,
+            permit_loopback_development,
+        } => {
+            let output = pool::templates(
+                &state::read_bounded(&receipt, 128 * 1024)?,
+                &owner,
+                revision,
+                expires_at,
+                clock.now(),
+                permit_loopback_development,
+            )?;
+            println!("{}", serde_json::to_string_pretty(&output)?);
+            Ok(())
+        }
         Command::Template { content, owner } => {
             let bytes = state::read_bounded(&content, policy::MAX_POLICY_BYTES)?;
             let policy = serde_json::from_slice(&bytes).map_err(|_| policy::PolicyError::Schema)?;
