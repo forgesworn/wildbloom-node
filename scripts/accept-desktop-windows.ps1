@@ -32,6 +32,13 @@ if (-not $application) {
     throw "the installed Wildbloom desktop executable is missing"
 }
 
+$daemon = Join-Path $installRoot "wildbloomd.exe"
+if (-not (Test-Path $daemon -PathType Leaf)) { throw "the installed pool daemon is missing" }
+$inspectHelp = (& $daemon replicas pool-inspect --help) -join "`n"
+if ($LASTEXITCODE -ne 0 -or $inspectHelp -notmatch "--receipt-id") { throw "the installed daemon cannot inspect pool receipts" }
+$repairHelp = (& $daemon replicas pool-repair --help) -join "`n"
+if ($LASTEXITCODE -ne 0 -or $repairHelp -notmatch "--check-only" -or $repairHelp -notmatch "--stop-on-stdin") { throw "the installed daemon lacks desktop pool supervision" }
+
 $torBinary = Get-ChildItem -Path $installRoot -Recurse -File -Filter "tor.exe" |
     Where-Object { $_.FullName -match "tor-runtime[\\/]tor[\\/]tor\.exe$" } |
     Select-Object -First 1

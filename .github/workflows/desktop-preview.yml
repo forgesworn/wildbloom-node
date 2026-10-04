@@ -89,6 +89,16 @@ jobs:
       - name: Install and exercise the Linux package
         if: runner.os == 'Linux'
         run: scripts/accept-desktop-linux.sh "desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+      - name: Verify the macOS bundle contains the owner-pool commands
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          daemon="desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/Wildbloom Node.app/Contents/MacOS/wildbloomd"
+          test -x "$daemon"
+          "$daemon" replicas pool-inspect --help | grep -q -- '--receipt-id'
+          "$daemon" replicas pool-repair --help | grep -q -- '--check-only'
+          "$daemon" replicas pool-repair --help | grep -q -- '--stop-on-stdin'
       - name: Install and exercise the Windows package
         if: runner.os == 'Windows'
         shell: pwsh

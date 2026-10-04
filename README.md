@@ -20,6 +20,12 @@ A fresh desktop install waits for the operator to choose a transport before it
 starts either process.  Existing saved settings continue to select Tor unless
 the operator changes them.
 
+The 0.3.0 desktop also manages owner-directed storage pools: import a private
+signed receipt, check part health without signing, and explicitly start or stop
+bounded automatic repair. Run this owner service on a machine allowed to
+reconstruct ciphertext. See [Desktop pools](docs/DESKTOP-POOLS.md) and the
+[physical recovery checklist](docs/PHYSICAL-POOL-ACCEPTANCE.md).
+
 ## Why this exists
 
 Blossom gives Nostr applications a sensible content-addressed storage protocol,
@@ -47,6 +53,11 @@ session remains for live browser media rather than storage.
   claim-aware deletion.  One signer cannot list or delete another signer's
   claims.
 - Persistent SQLite metadata and a disk content-addressed store.
+- Complete encrypted replicas or erasure-coded parts stored as ordinary blobs,
+  with signed pool receipt inspection and owner-side reconstruction/repair.
+  The desktop shows timestamped per-part observations and supervises one pool
+  process at a time; receipts persist, but repair authority needs explicit
+  approval after app restart.
 - Pre-stream global quota reservation, per-blob limits, deduplication and
   interrupted-upload cleanup.
 - Deny-by-default writes, bounded concurrent streams, complete integrity scans

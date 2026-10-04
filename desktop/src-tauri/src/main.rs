@@ -1,3 +1,5 @@
+mod pools;
+
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -878,6 +880,8 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
 
 fn main() {
     let manager = Arc::new(NodeManager::default());
+    let pool_manager = Arc::new(pools::PoolManager::default());
+    let pools_for_exit = pool_manager.clone();
     let managed = manager.clone();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(
@@ -895,12 +899,19 @@ fn main() {
             None,
         ))
         .manage(managed)
+        .manage(pool_manager)
         .invoke_handler(tauri::generate_handler![
             node_status,
             save_settings,
             restart_node,
             check_for_update,
-            install_update
+            install_update,
+            pools::import_pool,
+            pools::pool_status,
+            pools::start_pool,
+            pools::stop_pool,
+            pools::remove_pool,
+            pools::open_pool_client
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
@@ -910,6 +921,7 @@ fn main() {
         })
         .setup(|app| {
             build_tray(app)?;
+            tauri::async_runtime::spawn(pools::load(app.handle().clone(), app.state::<Arc<pools::PoolManager>>().inner().clone()));
             let handle = app.handle().clone();
             let manager = app.state::<Arc<NodeManager>>().inner().clone();
             match settings_path(&handle) {
@@ -941,6 +953,7 @@ fn main() {
             event,
             tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
         ) {
+            tauri::async_runtime::block_on(pools_for_exit.stop()).ok();
             stop_children(&manager);
         }
     });

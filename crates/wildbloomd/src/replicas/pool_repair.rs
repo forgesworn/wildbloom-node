@@ -28,14 +28,20 @@ pub(super) struct RepairArgs {
     #[arg(long)]
     work_dir: PathBuf,
     /// Explicit consent that THIS machine may reconstruct the ciphertext.
-    #[arg(long, required = true)]
+    #[arg(long, required_unless_present = "check_only")]
     allow_reconstruction: bool,
+    /// Read and verify placement once, without signing, reconstructing or uploading.
+    #[arg(long)]
+    check_only: bool,
+    /// Stop gracefully when the supervising desktop sends a byte or closes stdin.
+    #[arg(long)]
+    stop_on_stdin: bool,
     /// Unix seconds. No repair authority exists after this deadline.
     #[arg(long)]
     expires_at: u64,
     /// Absolute external signer path. No signing key is held by this process.
-    #[arg(long)]
-    signer: PathBuf,
+    #[arg(long, required_unless_present = "check_only")]
+    signer: Option<PathBuf>,
     #[arg(long)]
     signer_arg: Vec<String>,
     #[arg(long, default_value_t=30, value_parser=clap::value_parser!(u64).range(1..=60))]
@@ -66,6 +72,19 @@ struct Report {
     reconstructed: bool,
     uploads_attempted: usize,
     reserved_transfer_bytes: u64,
+    nodes: Vec<NodeReport>,
+}
+#[derive(Serialize)]
+struct NodeReport {
+    id: String,
+    part_index: usize,
+    state: &'static str,
+}
+
+fn observe(nodes: &mut [NodeReport], id: &str, state: &'static str) {
+    if let Some(node) = nodes.iter_mut().find(|node| node.id == id) {
+        node.state = state;
+    }
 }
 struct Guard<'a> {
     args: &'a RepairArgs,
@@ -162,6 +181,17 @@ async fn pass(
     let mut left = args.transfer_budget_bytes;
     let mut groups = vec![BTreeSet::new(); manifest.total];
     let mut sources = Vec::new();
+    let mut nodes: Vec<_> = manifest
+        .parts
+        .iter()
+        .flat_map(|part| {
+            part.targets.iter().map(|node| NodeReport {
+                id: node.id.clone(),
+                part_index: part.index,
+                state: "not_checked",
+            })
+        })
+        .collect();
     for part in &manifest.parts {
         let mut stored = false;
         for node in &part.targets {
@@ -170,6 +200,7 @@ async fn pass(
             }
             guard.check()?;
             reserve(&mut left, part.size)?;
+            observe(&mut nodes, &node.id, "unavailable");
             if stored {
                 if transport.verify(&target(node), &blob(part)).await.is_err() {
                     continue;
@@ -190,6 +221,7 @@ async fn pass(
                 stored = true;
             }
             guard.check()?;
+            observe(&mut nodes, &node.id, "verified");
             groups[part.index].insert(node.failure_group.clone());
             if groups[part.index].len() >= usize::from(manifest.copies) {
                 break;
@@ -198,7 +230,8 @@ async fn pass(
     }
     let mut reconstructed = false;
     let mut uploads_attempted = 0;
-    if sources.len() >= manifest.required
+    if !args.check_only
+        && sources.len() >= manifest.required
         && groups
             .iter()
             .any(|g| g.len() < usize::from(manifest.copies))
@@ -253,6 +286,7 @@ async fn pass(
                 guard.check()?;
                 if transport.verify(&target(node), &blob(part)).await.is_ok() {
                     guard.check()?;
+                    observe(&mut nodes, &node.id, "verified");
                     groups[part.index].insert(node.failure_group.clone());
                 }
             }
@@ -270,6 +304,7 @@ async fn pass(
         reconstructed,
         uploads_attempted,
         reserved_transfer_bytes: args.transfer_budget_bytes - left,
+        nodes,
     })
 }
 async fn shutdown() {
@@ -286,8 +321,8 @@ async fn shutdown() {
 }
 pub(super) async fn run(args: RepairArgs) -> Result<(), Error> {
     let now = SystemClock.now();
-    if !args.allow_reconstruction
-        || !args.signer.is_absolute()
+    if (!args.check_only
+        && (!args.allow_reconstruction || !args.signer.as_ref().is_some_and(|p| p.is_absolute())))
         || args.expires_at <= now
         || args.expires_at - now > 365 * 86400
         || !policy::canonical_hex(&args.receipt_id, 32)
@@ -323,7 +358,7 @@ pub(super) async fn run(args: RepairArgs) -> Result<(), Error> {
         ));
     }
     let signer = CommandSigner {
-        executable: args.signer.clone(),
+        executable: args.signer.clone().unwrap_or_default(),
         arguments: args.signer_arg.clone(),
         timeout: Duration::from_secs(args.signer_timeout),
     };
@@ -333,11 +368,22 @@ pub(super) async fn run(args: RepairArgs) -> Result<(), Error> {
     };
     let stop = shutdown();
     tokio::pin!(stop);
+    // A dedicated standard thread avoids leaving a Tokio blocking stdin read
+    // alive at runtime shutdown. The process exits normally after cancellation.
+    let (closed, mut parent_gone) = tokio::sync::oneshot::channel();
+    if args.stop_on_stdin {
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let _ = std::io::stdin().read(&mut [0_u8; 1]);
+            let _ = closed.send(());
+        });
+    }
     loop {
         guard.check()?;
         let remaining = Duration::from_secs(args.expires_at.saturating_sub(SystemClock.now()));
         let result = tokio::select! {
             _ = &mut stop => return Ok(()),
+            _ = &mut parent_gone, if args.stop_on_stdin => return Ok(()),
             _ = tokio::time::sleep(remaining) => return Err(Error::Configuration("owner pool repair authority expired")),
             result = pass(&guard,&manifest,&transport,&signer) => result,
         }?;
@@ -347,7 +393,7 @@ pub(super) async fn run(args: RepairArgs) -> Result<(), Error> {
             &serde_json::to_vec_pretty(&result)?,
         )?;
         println!("{}", serde_json::to_string(&result)?);
-        if args.once {
+        if args.once || args.check_only {
             return if result.protected {
                 Ok(())
             } else {
@@ -356,6 +402,10 @@ pub(super) async fn run(args: RepairArgs) -> Result<(), Error> {
                 ))
             };
         }
-        tokio::select! { _ = &mut stop => return Ok(()), _ = tokio::time::sleep(Duration::from_secs(args.interval).min(remaining)) => {} }
+        tokio::select! {
+            _ = &mut stop => return Ok(()),
+            _ = &mut parent_gone, if args.stop_on_stdin => return Ok(()),
+            _ = tokio::time::sleep(Duration::from_secs(args.interval).min(remaining)) => {}
+        }
     }
 }
