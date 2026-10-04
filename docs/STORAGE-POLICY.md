@@ -191,3 +191,22 @@ friend ceilings across deduplication/restart/expiry, schema migration, policy
 demotion, opaque serving, self-only listing and interrupted file/database
 reconciliation.  The independent two-node V4V journey and the Windows, Linux
 and macOS CI matrix remain the named release gates.
+
+## Paid capacity foundation
+
+Shelter Kit 0.5.0 adds a separate protected `paid` tier. Durable bounded sale
+holds reserve capacity before payment is offered; a trusted operator integration
+activates a signer's allowance only after its own authoritative settlement.
+Node has no checkout or settlement adapter yet. Paying an admission fee still
+does not promote a guest claim or create a paid allowance automatically.
+
+Full paid ceilings and live holds constrain later sales, owner writes and quota
+changes. Writes stop at the term deadline; recovery claims remain protected
+through grace. Renewal preserves signer and ceiling and is idempotent by order
+ID. Friend/owner policy changes cannot demote paid claims. Explicit seller
+policy removal remains possible through tombstones. Physical files deduplicate;
+each paid signer consumes their own logical ceiling.
+
+Schema 6 preserves existing claims and files, but requires a backup before
+upgrade and cannot be opened by the previous core. This source upgrade is not
+a release of payment checkout or signed desktop installers.

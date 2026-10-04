@@ -201,7 +201,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if cli.allowed_pubkeys.is_empty() && cli.friend_grants.is_empty() && !cli.open_shelter {
         tracing::warn!(
-            "no owner, friend grant or open-shelter policy is configured; the node is read-only"
+            "no owner, friend grant or open-shelter policy is configured; writes require a previously activated paid allowance"
         );
     }
     let listener = tokio::net::TcpListener::bind(cli.bind).await?;

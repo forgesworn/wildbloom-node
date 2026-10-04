@@ -232,15 +232,6 @@ checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
 
 [[package]]
 name = "block-buffer"
-version = "0.10.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
-dependencies = [
- "generic-array",
-]
-
-[[package]]
-name = "block-buffer"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa"
@@ -492,21 +483,11 @@ dependencies = [
 
 [[package]]
 name = "digest"
-version = "0.10.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
-dependencies = [
- "block-buffer 0.10.4",
- "crypto-common 0.1.7",
-]
-
-[[package]]
-name = "digest"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
 dependencies = [
- "block-buffer 0.12.1",
+ "block-buffer",
  "const-oid",
  "crypto-common 0.2.2",
 ]
@@ -1431,7 +1412,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-util",
  "tower",
- "tower-http",
+ "tower-http 0.6.11",
  "tower-service",
  "url",
  "wasm-bindgen",
@@ -1721,24 +1702,13 @@ dependencies = [
 
 [[package]]
 name = "sha2"
-version = "0.10.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
-dependencies = [
- "cfg-if",
- "cpufeatures 0.2.17",
- "digest 0.10.7",
-]
-
-[[package]]
-name = "sha2"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.1",
- "digest 0.11.3",
+ "digest",
 ]
 
 [[package]]
@@ -1747,7 +1717,7 @@ version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be176f1a57ce4e3d31c1a166222d9768de5954f811601fb7ca06fc8203905ce1"
 dependencies = [
- "digest 0.11.3",
+ "digest",
  "keccak",
 ]
 
@@ -1762,11 +1732,11 @@ dependencies = [
 
 [[package]]
 name = "shelter-kit"
-version = "0.4.1"
-source = "git+https://github.com/forgesworn/shelter-kit?tag=v0.4.1#4bd5da2219a050f7081ef3c7e84fc3ac1066ab94"
+version = "0.5.0"
+source = "git+https://github.com/forgesworn/shelter-kit?tag=v0.5.0#a2847bdfefd12ec1066a3e2f1cc3608fb9e3ee06"
 dependencies = [
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "fs2",
  "futures-util",
@@ -1778,11 +1748,11 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2",
  "thiserror",
  "tokio",
  "tokio-util",
- "tower-http",
+ "tower-http 0.7.1",
  "tracing",
  "url",
  "uuid",
@@ -2063,6 +2033,21 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "url",
+]
+
+[[package]]
+name = "tower-http"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08a05a66a4fdd61cbbe0a1d755ffe0ca6aba159dd4820936a0ff8a8278245b9c"
+dependencies = [
+ "bitflags 2.13.1",
+ "bytes",
+ "http",
+ "percent-encoding",
+ "pin-project-lite",
+ "tower-layer",
+ "tower-service",
 ]
 
 [[package]]
@@ -2371,7 +2356,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2",
  "sha3",
  "shelter-kit",
  "tempfile",
