@@ -53,8 +53,17 @@ gpg_path() {
 }
 gpg_home_arg="$(gpg_path "$gnupg_home")"
 download() {
-  curl --proto '=https' --tlsv1.2 --location --fail --silent --show-error \
-    --retry 10 --retry-all-errors --retry-delay 2 "$1" --output "$2"
+  local filename
+  filename="$(basename "$2")"
+  if [ -n "${WILDBLOOM_TOR_DOWNLOAD_DIR:-}" ]; then
+    # Cached bytes remain untrusted until the same pinned-key verification below.
+    cp "$WILDBLOOM_TOR_DOWNLOAD_DIR/$filename" "$2"
+    return
+  fi
+  printf 'Downloading pinned Tor input: %s\n' "$filename"
+  curl --ipv4 --http1.1 --proto '=https' --tlsv1.2 --location --fail --silent --show-error \
+    --connect-timeout 20 --max-time 180 \
+    --retry 10 --retry-all-errors --retry-delay 5 "$1" --output "$2"
 }
 
 download "$base_url/$archive" "$work_dir/$archive"
@@ -82,6 +91,12 @@ fi
   --keyring "$(gpg_path "$work_dir/tor-browser-keyring.gpg")" \
   "$(gpg_path "$work_dir/$archive.asc")" \
   "$(gpg_path "$work_dir/$archive")"
+
+if [ -n "${WILDBLOOM_TOR_CACHE_DIR:-}" ]; then
+  mkdir -p "$WILDBLOOM_TOR_CACHE_DIR"
+  cp "$work_dir/$archive" "$work_dir/$archive.asc" \
+    "$work_dir/tor-browser-developers.asc" "$WILDBLOOM_TOR_CACHE_DIR/"
+fi
 
 tar -xzf "$work_dir/$archive" -C "$destination"
 test -f "$destination/data/geoip"
