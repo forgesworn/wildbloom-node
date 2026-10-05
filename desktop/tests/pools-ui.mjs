@@ -27,6 +27,8 @@ try {
       if(command==='import_pool') { if(args.owner!=='b'.repeat(64))throw 'Wrong owner'; imported=true; return window.poolFixture.inspection; }
       if(command==='start_pool') { window.poolFixture.phase=args.settings.checkOnly?'checking':'repairing'; return; }
       if(command==='stop_pool') { window.poolFixture.phase='stopped'; return; }
+      if(command==='review_pool_cleanup') return {passes:[{name:'pool-pass-Ab1234',files:[{name:'source-0',bytes:25}]}],bytes:25};
+      if(command==='clear_pool_cleanup') { if(!args.confirmed) throw 'Confirmation required'; return; }
       if(command==='remove_pool') { imported=false; return; }
       if(command==='open_pool_client')return;
       throw `Unexpected command ${command}`;
@@ -55,6 +57,8 @@ try {
   const repair=await page.evaluate(()=>window.calls.filter(c=>c.command==='start_pool').at(-1).args.settings);
   assert.equal(repair.allowReconstruction,true);assert.equal(repair.checkOnly,false);assert.equal(repair.signer,'/owner/signer');assert.deepEqual(repair.signerArguments,['--account','owner']);
   assert.equal(await page.locator('#pool-remove').isDisabled(),true);
+  assert.equal(await page.locator('#pool-review-cleanup').isDisabled(),true);
+  assert.equal(await page.locator('#pool-clear-cleanup').isDisabled(),true);
   await page.locator('#pool-stop').click();
   await page.evaluate(()=> {
     window.poolFixture.report={observed_at:Math.floor(Date.now()/1000),protected:false,recoverable:true,reconstructed:false,uploads_attempted:0,verified_groups:[1,1,0,0],nodes:[{id:'node-0',part_index:0,state:'verified'}]};
@@ -63,6 +67,7 @@ try {
   await page.waitForFunction(()=>document.querySelector('#pool-health').textContent.includes('Needs repair'));
   assert.equal(await page.locator('#pool-parts img').count(),0);
   assert.match(await page.locator('#pool-parts').textContent(),/<img src=x/);
+  await page.locator('#owner-pools summary').click();
   for(const width of [820,420,320]) {
     await page.setViewportSize({width,height:900});
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth ? [...document.querySelectorAll('body *')].filter(e => e.getBoundingClientRect().right > innerWidth).map(e => ({ tag: e.tagName, id: e.id, right: e.getBoundingClientRect().right })) : []);
@@ -71,7 +76,22 @@ try {
     assert.deepEqual(axe.violations.map(v=>({id:v.id,nodes:v.nodes.map(n=>n.target)})),[]);
     if(process.env.WILDBLOOM_SCREENSHOT_DIR)await page.locator('#owner-pools').screenshot({path:`${process.env.WILDBLOOM_SCREENSHOT_DIR}/pools-${width}.png`});
   }
-  await page.locator('#owner-pools summary').click();
+  assert.equal(await page.locator('#pool-clear-cleanup').isDisabled(),true);
+  await page.locator('#pool-review-cleanup').click();
+  await page.waitForFunction(()=>document.querySelector('#pool-cleanup-status').textContent.includes('25 bytes'));
+  assert.equal(await page.locator('#pool-clear-cleanup').isDisabled(),true);
+  await page.locator('#pool-cleanup-consent').check();
+  await page.locator('#pool-disk').fill('2');
+  assert.equal(await page.locator('#pool-cleanup-consent').isChecked(),false);
+  assert.equal(await page.locator('#pool-clear-cleanup').isDisabled(),true);
+  await page.locator('#pool-review-cleanup').click();
+  await page.locator('#pool-cleanup-consent').check();
+  await page.locator('#pool-clear-cleanup').click();
+  await page.waitForFunction(()=>document.querySelector('#pool-cleanup-status').textContent.includes('Repair remains stopped'));
+  const cleanup=await page.evaluate(()=>window.calls.find(c=>c.command==='clear_pool_cleanup').args);
+  assert.deepEqual(cleanup,{receiptId:'a'.repeat(64),confirmed:true});
+  assert.equal(await page.locator('#pool-consent').isChecked(),false);
+  assert.equal(await page.locator('#pool-clear-cleanup').isDisabled(),true);
   await page.locator('#pool-remove-consent').check();await page.locator('#pool-remove').click();
   await page.locator('#pool-details').waitFor({state:'hidden'});
   assert.deepEqual(errors,[]);assert.deepEqual(unexpected,[]);

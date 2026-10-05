@@ -1,5 +1,6 @@
 #[cfg(feature = "native-acceptance")]
 mod acceptance;
+mod pool_cleanup;
 mod pools;
 
 use reqwest::StatusCode;
@@ -923,6 +924,8 @@ fn main() {
             pools::start_pool,
             pools::stop_pool,
             pools::remove_pool,
+            pools::review_pool_cleanup,
+            pools::clear_pool_cleanup,
             pools::open_pool_client
         ])
         .on_window_event(|window, event| {

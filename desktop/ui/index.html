@@ -129,7 +129,19 @@
             </div>
           </form>
           <p class="hint">One pool process runs at a time. Closing this window leaves it running in the tray. Quitting, updating or restarting the app stops it; you must approve a new start afterwards. Health is the last completed observation, not a future storage guarantee.</p>
-          <details><summary>Local receipt and work folder</summary><p id="pool-work-dir" class="hint"></p><p class="hint">After a forced shutdown, inspect any pool-pass folders here before removing them. They may contain encrypted file parts. The app will not delete crash leftovers automatically.</p><label class="check"><input id="pool-remove-consent" type="checkbox" /><span>I have backed up this receipt and want to remove it from this desktop.</span></label><button id="pool-remove" class="secondary" type="button" disabled>Remove local receipt</button><p class="hint">This preserves work folders and does not delete any remote data.</p></details>
+          <details>
+            <summary>Local receipt and work folder</summary>
+            <p id="pool-work-dir" class="hint"></p>
+            <p class="hint">After a forced shutdown, review disposable repair files here. They may contain encrypted file parts. Cleanup requires your confirmation and does not restart repair.</p>
+            <button id="pool-review-cleanup" class="secondary" type="button" disabled>Review interrupted repair files</button>
+            <p id="pool-cleanup-status" class="hint" role="status"></p>
+            <ul id="pool-cleanup-files" class="pool-parts"></ul>
+            <label class="check"><input id="pool-cleanup-consent" type="checkbox" disabled /><span>I reviewed these temporary encrypted parts and want to clear them from this computer.</span></label>
+            <button id="pool-clear-cleanup" class="secondary" type="button" disabled>Clear reviewed repair files</button>
+            <label class="check"><input id="pool-remove-consent" type="checkbox" /><span>I have backed up this receipt and want to remove it from this desktop.</span></label>
+            <button id="pool-remove" class="secondary" type="button" disabled>Remove local receipt</button>
+            <p class="hint">This preserves work folders and does not delete any remote data.</p>
+          </details>
         </div>
       </section>
 
