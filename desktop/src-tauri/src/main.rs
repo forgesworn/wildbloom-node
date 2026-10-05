@@ -1,3 +1,5 @@
+#[cfg(feature = "native-acceptance")]
+mod acceptance;
 mod pools;
 
 use reqwest::StatusCode;
@@ -879,11 +881,21 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
 }
 
 fn main() {
+    let context = tauri::generate_context!();
+    #[cfg(feature = "native-acceptance")]
+    let context = acceptance::isolate(context);
     let manager = Arc::new(NodeManager::default());
     let pool_manager = Arc::new(pools::PoolManager::default());
     let pools_for_exit = pool_manager.clone();
     let managed = manager.clone();
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(feature = "native-acceptance")]
+    let builder = builder.on_page_load(|_, payload| {
+        if payload.event() == tauri::webview::PageLoadEvent::Finished {
+            acceptance::ready();
+        }
+    });
+    let app = builder
         .plugin(tauri_plugin_single_instance::init(
             |app, _arguments, _cwd| {
                 if let Some(window) = app.get_webview_window("main") {
@@ -921,6 +933,8 @@ fn main() {
         })
         .setup(|app| {
             build_tray(app)?;
+            #[cfg(feature = "native-acceptance")]
+            acceptance::start(app.handle().clone());
             tauri::async_runtime::spawn(pools::load(app.handle().clone(), app.state::<Arc<pools::PoolManager>>().inner().clone()));
             let handle = app.handle().clone();
             let manager = app.state::<Arc<NodeManager>>().inner().clone();
@@ -946,7 +960,7 @@ fn main() {
             }
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("failed to build Wildbloom Node");
     app.run(move |_app, event| {
         if matches!(

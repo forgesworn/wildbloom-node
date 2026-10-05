@@ -198,8 +198,15 @@ async fn inspect(
             "Receipt ID and owner must be lowercase hexadecimal public identifiers.".into(),
         );
     }
+    #[cfg(feature = "native-acceptance")]
+    command
+        .arg("replicas")
+        .arg("pool-inspect")
+        .arg("--permit-loopback-development");
+    #[cfg(not(feature = "native-acceptance"))]
+    command.args(["replicas", "pool-inspect"]);
     let mut child = command
-        .args(["replicas", "pool-inspect", "--receipt"])
+        .arg("--receipt")
         .arg(path)
         .args(["--owner", owner, "--receipt-id", id])
         .stdin(Stdio::null())
@@ -513,6 +520,8 @@ fn arguments(
             args.push(format!("--signer-arg={arg}").into());
         }
     }
+    #[cfg(feature = "native-acceptance")]
+    args.push("--permit-loopback-development".into());
     if let Some(proxy) = &settings.proxy {
         args.extend(["--proxy".into(), proxy.into()]);
     }
