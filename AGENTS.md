@@ -26,3 +26,6 @@ storage, network exposure and Nostr authorisation as security boundaries.
 Run `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`
 and `cargo test --workspace` before pushing.
 
+For native desktop pool lifecycle changes, run `npm run test:native --prefix
+desktop` on macOS. It uses a debug-only driver, real IPC/daemon processes and a
+disposable app identifier; never enable its feature in release builds.

@@ -71,6 +71,22 @@ jobs:
             cp target/release/wildbloomd "desktop/src-tauri/binaries/wildbloomd-${target}"
           fi
       - run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: runner.os == 'macOS'
+        with:
+          node-version: 24
+      - name: Native macOS pool lifecycle
+        if: runner.os == 'macOS'
+        env:
+          WILDBLOOM_NATIVE_EVIDENCE: ${{ runner.temp }}/native-pool-lifecycle.json
+        run: bash scripts/accept-desktop-native-macos.sh
+      - name: Retain native pool evidence
+        if: always() && runner.os == 'macOS'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-macos-pool-lifecycle
+          path: ${{ runner.temp }}/native-pool-lifecycle.json
+          if-no-files-found: warn
 
   audit:
     name: Dependency audit
