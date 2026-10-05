@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.1 preview - 2026-10-05
+
+- Stop owner repair on local temporary-storage write failures instead of
+  misreporting them as unavailable remote parts.
+- Explain expired repair authority and CLI failures with actionable messages.
+- Add automated corruption, threshold, rejected-upload, false-acknowledgement,
+  storage-failure, hard-kill and in-flight expiry tests. Hard-crash leftovers
+  still require operator review before restart; authority is never renewed
+  implicitly.
+- Include the native macOS desktop lifecycle acceptance suite in CI. Preview
+  signing and physical-device limitations remain unchanged.
+
 ## Unreleased
 
 - WILDBLOOM_SERVER_NAME accepts a comma-separated list, matching --allow-pubkey and --friend-grant.

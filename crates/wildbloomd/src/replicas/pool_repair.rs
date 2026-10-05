@@ -5,7 +5,7 @@ use super::{
     policy, pool,
     signer::{CommandSigner, Signer},
     state,
-    transport::{HttpTransport, Transport},
+    transport::{DownloadError, HttpTransport, Transport},
 };
 use base64::Engine as _;
 use clap::Args;
@@ -208,12 +208,17 @@ async fn pass(
             } else {
                 let file = tempfile::NamedTempFile::new_in(temp.path())
                     .map_err(|_| state::StateError::Io)?;
-                if transport
+                match transport
                     .download(&target(node), &blob(part), file.path())
                     .await
-                    .is_err()
                 {
-                    continue;
+                    Ok(()) => {}
+                    Err(DownloadError::Remote(_failure)) => continue,
+                    Err(DownloadError::LocalStorage) => {
+                        return Err(Error::Configuration(
+                            "could not write owner repair temporary storage",
+                        ));
+                    }
                 }
                 let path = temp.path().join(format!("source-{}", part.index));
                 file.persist(&path).map_err(|_| state::StateError::Io)?;
@@ -321,9 +326,11 @@ async fn shutdown() {
 }
 pub(super) async fn run(args: RepairArgs) -> Result<(), Error> {
     let now = SystemClock.now();
+    if args.expires_at <= now {
+        return Err(Error::Configuration("owner pool repair authority expired"));
+    }
     if (!args.check_only
         && (!args.allow_reconstruction || !args.signer.as_ref().is_some_and(|p| p.is_absolute())))
-        || args.expires_at <= now
         || args.expires_at - now > 365 * 86400
         || !policy::canonical_hex(&args.receipt_id, 32)
     {
@@ -409,3 +416,7 @@ pub(super) async fn run(args: RepairArgs) -> Result<(), Error> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests_pool_repair.rs"]
+mod tests;
