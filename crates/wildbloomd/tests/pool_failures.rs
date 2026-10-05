@@ -138,7 +138,10 @@ impl Fixture {
                 if self.work().exists() {
                     for dir in self.passes() {
                         for file in std::fs::read_dir(dir).unwrap().map(Result::unwrap) {
-                            if file.metadata().unwrap().len() == 8 {
+                            // Directory-entry metadata can lag an open writer
+                            // on Windows. Observe the actual bytes through a
+                            // new file handle before injecting the failure.
+                            if std::fs::read(file.path()).is_ok_and(|bytes| bytes.len() == 8) {
                                 return file.path();
                             }
                         }
