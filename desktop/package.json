@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "node tests/pools-ui.mjs",
-    "test:native": "bash ../scripts/accept-desktop-native-macos.sh"
+    "test:native": "node ../scripts/accept-desktop-native.mjs"
   },
   "devDependencies": { "@axe-core/playwright": "4.13.0", "playwright-core": "1.62.1" }
 }
