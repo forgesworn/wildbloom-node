@@ -149,5 +149,8 @@ JSON evidence are recorded separately by the native lifecycle CI step.
 
 The portable harness added later on 5 October passed all eleven checks locally
 on Apple Silicon macOS, including expired-authority refusal. Windows and Linux
-execution is now configured in CI; their first passing runs remain to be
-confirmed. This is native debug-app evidence, not trusted installer acceptance.
+and macOS also passed all eleven checks in [CI run 37285842022](https://github.com/forgesworn/wildbloom-node/actions/runs/37285842022)
+on source `bf6b7c968620a723c0e8ecf7508141e42432d9f2`: Linux in 22.3 seconds,
+macOS in 26.2 seconds and Windows in 31.4 seconds. All eight CI jobs passed;
+the platform jobs retained JSON evidence artifacts. This is native debug-app
+evidence, not trusted installer acceptance.
