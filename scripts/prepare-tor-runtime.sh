@@ -68,7 +68,10 @@ download() {
 
 download "$base_url/$archive" "$work_dir/$archive"
 download "$base_url/$archive.asc" "$work_dir/$archive.asc"
-download "https://keys.openpgp.org/vks/v1/by-fingerprint/$fingerprint" \
+# Tor's documented WKD endpoint avoids depending on a third-party keyserver.
+# The exact primary fingerprint and archive signature are still checked below.
+# https://support.torproject.org/tor-browser/getting-started/verifying-tor-browser/
+download "https://openpgpkey.torproject.org/.well-known/openpgpkey/torproject.org/hu/kounek7zrdx745qydx6p59t9mqjpuhdf" \
   "$work_dir/tor-browser-developers.asc"
 
 actual_fingerprint="$(

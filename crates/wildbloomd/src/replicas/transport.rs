@@ -227,6 +227,18 @@ impl HttpTransport {
     }
 }
 
+/// A local disk failure must stop owner repair, not discredit a remote node.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum DownloadError {
+    Remote(NetworkFailure),
+    LocalStorage,
+}
+impl From<NetworkFailure> for DownloadError {
+    fn from(error: NetworkFailure) -> Self {
+        Self::Remote(error)
+    }
+}
+
 impl HttpTransport {
     /// Stream a fully verified part to a caller-owned private temporary file.
     pub(super) async fn download(
@@ -234,7 +246,7 @@ impl HttpTransport {
         target: &Target,
         blob: &Blob,
         path: &std::path::Path,
-    ) -> Result<(), NetworkFailure> {
+    ) -> Result<(), DownloadError> {
         use tokio::io::AsyncWriteExt;
         let url = self
             .origin(target)?
@@ -249,14 +261,14 @@ impl HttpTransport {
         if response.status() != reqwest::StatusCode::OK
             || response.content_length() != Some(blob.size)
         {
-            return Err(NetworkFailure::InvalidBytes);
+            return Err(NetworkFailure::InvalidBytes.into());
         }
         let mut file = tokio::fs::OpenOptions::new()
             .write(true)
             .truncate(true)
             .open(path)
             .await
-            .map_err(|_| NetworkFailure::Refused)?;
+            .map_err(|_| DownloadError::LocalStorage)?;
         let mut received = 0_u64;
         let mut hash = Sha256::new();
         while let Some(chunk) = response
@@ -268,16 +280,18 @@ impl HttpTransport {
                 .checked_add(chunk.len() as u64)
                 .ok_or(NetworkFailure::InvalidBytes)?;
             if received > blob.size {
-                return Err(NetworkFailure::InvalidBytes);
+                return Err(NetworkFailure::InvalidBytes.into());
             }
             hash.update(&chunk);
             file.write_all(&chunk)
                 .await
-                .map_err(|_| NetworkFailure::Refused)?;
+                .map_err(|_| DownloadError::LocalStorage)?;
         }
-        file.flush().await.map_err(|_| NetworkFailure::Refused)?;
+        file.flush()
+            .await
+            .map_err(|_| DownloadError::LocalStorage)?;
         if received != blob.size || hex::encode(hash.finalize()) != blob.sha256 {
-            return Err(NetworkFailure::InvalidBytes);
+            return Err(NetworkFailure::InvalidBytes.into());
         }
         Ok(())
     }
@@ -670,6 +684,46 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[tokio::test]
+    async fn download_local_open_failure_is_distinct_from_remote_failure() {
+        let root = tempfile::tempdir().unwrap();
+        assert_local_download_failure(root.path()).await;
+    }
+
+    // /dev/full returns a real ENOSPC on write without filling a filesystem.
+    // macOS/Windows run the unavailable-path test and repair-level fault tests.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn download_disk_full_is_a_local_failure() {
+        assert_local_download_failure(std::path::Path::new("/dev/full")).await;
+    }
+
+    async fn assert_local_download_failure(path: &std::path::Path) {
+        let bytes = b"synthetic bytes";
+        let blob = Blob {
+            sha256: hex::encode(Sha256::digest(bytes)),
+            size: bytes.len() as u64,
+        };
+        let mut response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            bytes.len()
+        )
+        .into_bytes();
+        response.extend_from_slice(bytes);
+        let (target, server) = response_target(response).await;
+        let client = HttpTransport::new(Profile::LoopbackDevelopment, None, true).unwrap();
+        assert_eq!(
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                client.download(&target, &blob, path)
+            )
+            .await
+            .unwrap(),
+            Err(DownloadError::LocalStorage)
+        );
+        server.await.unwrap();
     }
 
     #[tokio::test]

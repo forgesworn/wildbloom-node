@@ -154,6 +154,38 @@ and decrypts native-repaired bytes in a fresh browser. Use `--maximum` for the
 256 MiB source case. This proves browser/native version-1 coding compatibility
 and local process recovery, not independent physical custody.
 
+## Automated failure tests
+
+Run `cargo test --workspace` for the quick failure suite alongside the existing
+unit and process tests. The existing CI matrix runs it on Linux, macOS and
+Windows; no external nodes, operator keys or disk-filling setup are required.
+
+- Real HTTP responses with wrong hashes or lengths are rejected. A synthetic
+  2-of-4 fixture restores both data parts from verified parity and compares
+  every restored byte. Below threshold, no signature or upload is attempted.
+- A target returning HTTP 507 and a target falsely acknowledging an upload
+  remain degraded until a later pass verifies the restored bytes.
+- An insufficient scratch budget refuses before network activity. An
+  unavailable working path refuses without changing the file occupying it.
+  Failed local download opens/writes stop repair with a local storage error,
+  rather than reporting the remote node as unavailable. Unix tests interrupt
+  access to the scratch file during a GET; Linux additionally exercises real
+  ENOSPC using `/dev/full`. macOS and Windows do not simulate a full filesystem.
+- A hard kill during a partial download releases the OS lock and preserves the
+  incomplete private files. Restart refuses before network activity. The test
+  then removes only its known disposable pass directory to model operator
+  review and verifies a clean restart. Crash recovery does **not** silently
+  delete leftover files or resume unattended.
+- Expiry cancels a stalled network read and cleans temporary files. A signature
+  returned after expiry cannot authorise an upload. Restart with expired
+  authority gives an explicit expiry error; renewal remains an owner action.
+
+The repair-pass tests use real HTTP and scratch files with a synthetic
+in-process signer. Process tests launch the actual daemon and interrupt it
+while bytes are partially downloaded. These complement the browser recovery
+and native desktop suites; they do not replace independent physical-device,
+installer or power-loss acceptance.
+
 ## Desktop controls in 0.3.0
 
 The desktop can import and inspect signed receipts locally, check storage

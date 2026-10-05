@@ -175,7 +175,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cli = Cli::parse();
     if let Some(Command::Replicas(args)) = cli.command {
-        return replicas::run(args).await.map_err(Into::into);
+        // main's Result termination uses Debug. Preserve the actionable,
+        // redacted Display message instead of exposing variants like State(Io).
+        return replicas::run(args)
+            .await
+            .map_err(|error| error.to_string().into());
     }
     #[cfg(target_os = "linux")]
     configure_parent_death(cli.parent_pid)?;
