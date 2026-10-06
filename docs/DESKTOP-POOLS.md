@@ -92,9 +92,11 @@ caps each at 32 GiB. No quota override is granted on remote nodes.
 - Complete [PHYSICAL-POOL-ACCEPTANCE.md](PHYSICAL-POOL-ACCEPTANCE.md) on actual
   devices before claiming independent-site or clean-machine acceptance.
 
-### Native macOS lifecycle acceptance
+### Native desktop lifecycle acceptance
 
-With Rust, Node 24 and the normal macOS desktop build prerequisites installed:
+With Rust, Node 24 and the normal desktop build prerequisites installed, run
+`npm run test:native --prefix desktop` on macOS, Windows or Linux. To save evidence
+on Unix:
 
 ```sh
 WILDBLOOM_NATIVE_EVIDENCE=/tmp/wildbloom-native-pools.json \
@@ -103,7 +105,7 @@ WILDBLOOM_NATIVE_EVIDENCE=/tmp/wildbloom-native-pools.json \
 
 This builds the actual Tauri desktop with an explicit `native-acceptance` debug
 feature, stages the real daemon sidecar, and runs four disposable loopback nodes.
-The driver operates the production DOM in the native WKWebView. Import, check,
+The driver operates the production DOM in the native WKWebView, WebKitGTK or WebView2. Import, check,
 repair and Stop buttons invoke the production IPC handlers and subprocess
 supervisor; IPC is not mocked. A separate example executable signs only with a
 fixed synthetic test identity. The coding fixture has the expected envelope
@@ -111,7 +113,8 @@ header and deterministic opaque bytes; file encryption/decryption remains
 covered by the browser pool acceptance suite.
 
 The test verifies private receipt import, read-only health without signing or
-uploads, degraded protection after two stores are lost, real repair and Stop,
+uploads, degraded protection after two stores are lost, rejection of expired
+authority without signing or starting a worker, real repair and Stop,
 and another loss repaired while the window is hidden. The driver sends a real
 window close request and uses the same `app.exit` path as tray Quit. It checks
 that the child exits, reconstruction files are removed, the receipt survives
@@ -124,7 +127,10 @@ stores and that exact test profile are removed afterwards. Optional private JSON
 evidence includes outcomes, source/build/harness hashes, OS and native webview
 versions, and timing, but no receipts, endpoints, signer arguments or keys. A
 nonzero command exit means failure, including failures before evidence exists.
-The macOS desktop CI job runs this test and retains the evidence.
+Each desktop CI job runs this test and retains platform-labelled evidence. Linux
+uses Xvfb and a session D-Bus; Windows uses CIM to identify daemon children
+without confusing WebView2 subprocesses with repair workers. Receipt mode bits
+are checked on Unix; Windows application-data ACL review remains a separate gate.
 
 The driver is available only with the explicit Cargo feature, communicates over
 the parent process's pipes rather than a network listener, and cannot compile
@@ -132,10 +138,19 @@ into a release build. That feature alone enables loopback receipt acceptance in
 the desktop's daemon commands. Normal builds retain the production transport
 rules and contain no driver. The test does not establish signed/notarised
 installer acceptance, human keyboard/file-picker/menu accessibility, physical
-multi-device independence, or native Windows/Linux desktop lifecycle behaviour.
+multi-device independence, or Windows receipt ACL acceptance. Wiring a platform
+into CI does not establish a passing run: consult its retained JSON evidence.
 
-On 5 October 2026 the native journey passed repeatedly on the owner's Intel Mac,
+On 5 October 2026 the native journey passed repeatedly on the owner's Mac,
 including all ten lifecycle checks in approximately 23 seconds after building.
 The normal daemon and desktop Rust tests, Clippy and the existing browser-based
 desktop UI/accessibility suite also passed. Hosted macOS results and retained
 JSON evidence are recorded separately by the native lifecycle CI step.
+
+The portable harness added later on 5 October passed all eleven checks locally
+on Apple Silicon macOS, including expired-authority refusal. Windows and Linux
+and macOS also passed all eleven checks in [CI run 37285842022](https://github.com/forgesworn/wildbloom-node/actions/runs/37285842022)
+on source `bf6b7c968620a723c0e8ecf7508141e42432d9f2`: Linux in 22.3 seconds,
+macOS in 26.2 seconds and Windows in 31.4 seconds. All eight CI jobs passed;
+the platform jobs retained JSON evidence artifacts. This is native debug-app
+evidence, not trusted installer acceptance.

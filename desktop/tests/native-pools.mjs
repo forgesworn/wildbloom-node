@@ -4,17 +4,19 @@ import { createHash, randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { release, tmpdir } from 'node:os';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Actual native webview, production UI/IPC/supervision and bundled daemon.
 // The compile-time debug driver controls only an isolated acceptance profile.
-assert.equal(process.platform, 'darwin', 'This acceptance currently targets macOS.');
+assert.ok(['darwin', 'linux', 'win32'].includes(process.platform), 'Unsupported native platform');
+const exe = process.platform === 'win32' ? '.exe' : '';
+const platformName = { darwin: 'macOS', linux: 'Linux', win32: 'Windows' }[process.platform];
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const appBinary = join(repo, 'desktop/src-tauri/target/debug/wildbloom-desktop');
-const daemon = join(dirname(appBinary), 'wildbloomd');
-const signer = join(repo, 'target/debug/examples/acceptance_signer');
+const appBinary = join(repo, `desktop/src-tauri/target/debug/wildbloom-desktop${exe}`);
+const daemon = join(dirname(appBinary), `wildbloomd${exe}`);
+const signer = join(repo, `target/debug/examples/acceptance_signer${exe}`);
 for (const file of [appBinary, daemon, signer]) assert.ok(existsSync(file), 'Build the native acceptance binaries first.');
 const root = mkdtempSync(join(tmpdir(), 'wildbloom-native-pools-'));
 const runId = randomBytes(16).toString('hex');
@@ -25,10 +27,12 @@ const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 const started = Date.now();
 const evidence = {
   schema: 'wildbloom.native-desktop-pools.v1', passed: false,
-  scope: 'macOS native debug webview with compile-time driver; real IPC and local nodes; not signed-installer or physical multi-device acceptance',
+  scope: `${platformName} native debug webview with compile-time driver; real IPC and local nodes; not signed-installer or physical multi-device acceptance`,
+  platform: process.platform,
+  receipt_permissions: process.platform === 'win32' ? 'Windows ACL acceptance remains separate' : 'Unix private mode checked',
   source_commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim(),
   source_dirty: execFileSync('git', ['status', '--porcelain'], { cwd: repo, encoding: 'utf8' }).trim().length > 0,
-  os_version: execFileSync('sw_vers', ['-productVersion'], { encoding: 'utf8' }).trim(),
+  os_version: process.platform === 'darwin' ? execFileSync('sw_vers', ['-productVersion'], { encoding: 'utf8' }).trim() : release(),
   architecture: process.arch, app_sha256: sha(readFileSync(appBinary)), daemon_sha256: sha(readFileSync(daemon)),
   harness_sha256: sha(readFileSync(fileURLToPath(import.meta.url))),
   checks: [],
@@ -100,9 +104,20 @@ function launchApp() {
   const evaluate = (script) => command('eval', `(()=>{try{return (${script});}catch(e){return {driver_error:String(e)}}})()`);
   return { child, command, evaluate, ready: () => webviewReady };
 }
+// WebKitGTK and WebView2 have their own children. Count only real daemon
+// children, so webview subprocesses neither fail nor satisfy supervision checks.
 function descendants(parent) {
-  return execFileSync('ps', ['-axo', 'pid=,ppid='], { encoding: 'utf8' }).trim().split('\n')
-    .map((line) => line.trim().split(/\s+/).map(Number)).filter(([, ppid]) => ppid === parent).map(([pid]) => pid);
+  assert.ok(Number.isSafeInteger(parent) && parent > 0);
+  if (process.platform === 'win32') {
+    const output = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      `Get-CimInstance Win32_Process -Filter "ParentProcessId = ${parent} AND Name = 'wildbloomd.exe'" | ForEach-Object { $_.ProcessId }`],
+    { encoding: 'utf8', timeout: 10000 }).trim();
+    return output ? output.split(/\s+/).map(Number) : [];
+  }
+  return execFileSync('ps', ['-axo', 'pid=,ppid=,comm='], { encoding: 'utf8' }).trim().split('\n')
+    .map((line) => line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/))
+    .filter((row) => row && Number(row[2]) === parent && basename(row[3]) === 'wildbloomd')
+    .map((row) => Number(row[1]));
 }
 function alive(pid) { try { process.kill(pid, 0); return true; } catch { return false; } }
 const record = join(root, 'signer-count');
@@ -142,7 +157,7 @@ try {
     app = launchApp();
     const dirs = await app.command('status');
     for (const path of [dirs.data_dir, dirs.config_dir]) {
-      assert.ok(path.endsWith(`/${profileSuffix}`), 'Only the unique test profile may be touched'); profiles.add(path);
+      assert.ok(basename(path) === profileSuffix, 'Only the unique test profile may be touched'); profiles.add(path);
     }
     await until(app.ready, 'native page load');
     await until(async () => await app.evaluate('!!document.querySelector("#pool-import")') === true, 'native UI ready');
@@ -166,9 +181,9 @@ try {
   await until(async () => await app.evaluate('!document.querySelector("#pool-details").hidden') === true, 'real receipt import');
   const saved = join(dataDir, 'owner-pools', receipt.id, 'receipt.json');
   assert.deepEqual(JSON.parse(readFileSync(saved)), receipt);
-  assert.equal(statSync(saved).mode & 0o077, 0);
+  if (process.platform !== 'win32') assert.equal(statSync(saved).mode & 0o077, 0);
   assert.equal(signatures(), 0);
-  passed('receipt imported through native webview and real IPC; private receipt persisted');
+  passed('receipt imported through native webview and real IPC; receipt persisted in isolated application profile');
   await app.evaluate('document.querySelector("#pool-check").click()');
   await until(async () => await app.evaluate('document.querySelector("#pool-health").textContent.includes("Requested protection verified")') === true, 'read-only health');
   assert.equal(signatures(), 0);
@@ -186,11 +201,23 @@ try {
     for(const [id,value] of ${JSON.stringify([['pool-signer', signer], ['pool-signer-arguments', `--record\n${record}`], ['pool-interval', '5'], ['pool-transfer', '1'], ['pool-disk', '1']])}){
       const el=document.getElementById(id); el.value=value; el.dispatchEvent(new Event('input',{bubbles:true}));
     }
-    const deadline=new Date(Date.now()+300000); deadline.setMinutes(deadline.getMinutes()-deadline.getTimezoneOffset());
+    const deadline=new Date(Date.now()-60000); deadline.setMinutes(deadline.getMinutes()-deadline.getTimezoneOffset());
     const expiry=document.querySelector('#pool-expiry');expiry.value=deadline.toISOString().slice(0,16);expiry.dispatchEvent(new Event('input',{bubbles:true}));
     const consent=document.querySelector('#pool-consent'); consent.checked=true; consent.dispatchEvent(new Event('change',{bubbles:true}));
     document.querySelector('#pool-start').click();return true;
   })()`), true);
+  await until(async () => await app.evaluate('document.querySelector("#pool-action-status").textContent.includes("Authority must expire within the next year")') === true, 'expired authority rejected');
+  assert.equal(signatures(), 0);
+  assert.equal(descendants(app.child.pid).length, 0);
+  assert.equal(await verifyPart(0), false);
+  assert.equal(await verifyPart(1), false);
+  passed('native IPC rejects expired authority without starting a worker, signing or repairing');
+  await app.evaluate(`(()=>{
+    const deadline=new Date(Date.now()+300000); deadline.setMinutes(deadline.getMinutes()-deadline.getTimezoneOffset());
+    const expiry=document.querySelector('#pool-expiry'); expiry.value=deadline.toISOString().slice(0,16); expiry.dispatchEvent(new Event('input',{bubbles:true}));
+    const consent=document.querySelector('#pool-consent'); consent.checked=true; consent.dispatchEvent(new Event('change',{bubbles:true}));
+    document.querySelector('#pool-start').click(); return true;
+  })()`);
   await until(async () => await app.evaluate('document.querySelector("#pool-action-status").textContent.includes("Automatic repair started")') === true, 'repair action accepted');
   await until(async () => await verifyPart(0) && await verifyPart(1), 'desktop owner repair', 45000);
   assert.ok(signatures() >= 2);
@@ -251,9 +278,9 @@ try {
   if (app?.child.exitCode === null) app.child.stdin.end();
   await Promise.all(children.map(stop));
   for (const path of profiles) {
-    assert.ok(path.endsWith(`/${profileSuffix}`)); rmSync(path, { recursive: true, force: true });
+    assert.ok(basename(path) === profileSuffix); rmSync(path, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   }
-  rmSync(root, { recursive: true, force: true });
+  rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   evidence.duration_ms = Date.now() - started;
   if (process.env.WILDBLOOM_NATIVE_EVIDENCE) writeFileSync(process.env.WILDBLOOM_NATIVE_EVIDENCE, `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600 });
 }
