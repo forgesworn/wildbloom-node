@@ -76,7 +76,12 @@ pub fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>, StateError> {
         return Err(StateError::Schema);
     }
     let file = File::open(path).map_err(|_| StateError::Io)?;
-    if !file.metadata().map_err(|_| StateError::Io)?.is_file() {
+    read_file_bounded(file, limit)
+}
+
+fn read_file_bounded(file: File, limit: usize) -> Result<Vec<u8>, StateError> {
+    let metadata = file.metadata().map_err(|_| StateError::Io)?;
+    if !metadata.is_file() || metadata.len() > limit as u64 {
         return Err(StateError::Schema);
     }
     let mut bytes = Vec::new();
@@ -139,10 +144,17 @@ impl StateDirectory {
         let snapshot = if path.try_exists().map_err(|_| StateError::Io)?
             || std::fs::symlink_metadata(&path).is_ok()
         {
+            if !std::fs::symlink_metadata(&path)
+                .map_err(|_| StateError::Io)?
+                .is_file()
+            {
+                return Err(StateError::Schema);
+            }
             let file = File::open(&path).map_err(|_| StateError::Io)?;
             wildbloom_private_state::check_file(&file).map_err(|_| StateError::Io)?;
-            let snapshot: Snapshot = serde_json::from_slice(&read_bounded(&path, MAX_STATE_BYTES)?)
-                .map_err(|_| StateError::Schema)?;
+            let snapshot: Snapshot =
+                serde_json::from_slice(&read_file_bounded(file, MAX_STATE_BYTES)?)
+                    .map_err(|_| StateError::Schema)?;
             if snapshot.version != 1
                 || snapshot.revision == 0
                 || !canonical_hex(&snapshot.owner, 32)
