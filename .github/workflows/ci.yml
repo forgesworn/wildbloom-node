@@ -40,6 +40,13 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      - name: Windows private state and second-account denial
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo build --locked -p wildbloom-private-state --example permissions
+          if ($LASTEXITCODE -ne 0) { throw 'Permission fixture build failed' }
+          ./scripts/accept-private-state-windows.ps1
 
   desktop:
     # Keep the required-check name stable; this also runs native lifecycle tests.

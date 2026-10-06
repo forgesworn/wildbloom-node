@@ -68,8 +68,19 @@ requires its own appropriate Tor Browser setup for onion endpoints.
 Receipts live under the application's local data directory in
 `owner-pools/<receipt-id>/receipt.json`; each receipt has its own private `work`
 directory. The UI shows the exact work path. Unix permissions are 0700 for
-new directories and 0600 for receipt files. Windows relies on the user's private
-application-data ACLs; clean-machine acceptance must verify those ACLs.
+new directories and 0600 for receipt files. Windows creates these directories
+with a protected DACL at creation, granting inheritable full access only to the
+current account, SYSTEM and Administrators. The daemon and desktop share this
+boundary. Existing broad ACLs, unexpected owners and reparse points are refused;
+receipt/report/lock handles are checked before use. This protects against other
+unprivileged accounts, not administrators or malware running as the owner.
+
+If existing state is refused, stop repair and inspect its ACLs before changing
+anything. Preserve the signed receipt and backups. Do not grant Everyone or
+Users access to bypass the refusal. No automatic migration broadens or rewrites
+existing permissions. The app displays a private-permissions error; an operator
+can reimport the signed receipt into a fresh private application profile after
+reviewing the old state.
 
 A graceful stop drops temporary ciphertext files. After an abrupt failure,
 leftover `pool-pass-*` directories cause the daemon to refuse a new pass.
@@ -143,7 +154,11 @@ nonzero command exit means failure, including failures before evidence exists.
 Each desktop CI job runs this test and retains platform-labelled evidence. Linux
 uses Xvfb and a session D-Bus; Windows uses CIM to identify daemon children
 without confusing WebView2 subprocesses with repair workers. Receipt mode bits
-are checked on Unix; Windows application-data ACL review remains a separate gate.
+are checked on Unix. Windows native acceptance inspects actual receipt, work,
+report and lock ACLs. The daemon CI job also creates a disposable unprivileged
+Windows account and verifies it can read a public control but cannot read or
+write synthetic receipts, reports or coded parts; broad ACLs and junctions must
+be refused. These are hosted OS tests; retail-machine acceptance remains open.
 
 The driver is available only with the explicit Cargo feature, communicates over
 the parent process's pipes rather than a network listener, and cannot compile
@@ -151,7 +166,7 @@ into a release build. That feature alone enables loopback receipt acceptance in
 the desktop's daemon commands. Normal builds retain the production transport
 rules and contain no driver. The test does not establish signed/notarised
 installer acceptance, human keyboard/file-picker/menu accessibility, physical
-multi-device independence, or Windows receipt ACL acceptance. Wiring a platform
+multi-device independence, or retail-machine ACL acceptance. Wiring a platform
 into CI does not establish a passing run: consult its retained JSON evidence.
 
 On 5 October 2026 the native journey passed repeatedly on the owner's Mac,

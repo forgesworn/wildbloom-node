@@ -76,7 +76,12 @@ pub fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>, StateError> {
         return Err(StateError::Schema);
     }
     let file = File::open(path).map_err(|_| StateError::Io)?;
-    if !file.metadata().map_err(|_| StateError::Io)?.is_file() {
+    read_file_bounded(file, limit)
+}
+
+fn read_file_bounded(file: File, limit: usize) -> Result<Vec<u8>, StateError> {
+    let metadata = file.metadata().map_err(|_| StateError::Io)?;
+    if !metadata.is_file() || metadata.len() > limit as u64 {
         return Err(StateError::Schema);
     }
     let mut bytes = Vec::new();
@@ -90,31 +95,11 @@ pub fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>, StateError> {
 }
 
 pub fn private_directory(path: &Path) -> Result<(), StateError> {
-    if !path.exists() {
-        let mut builder = std::fs::DirBuilder::new();
-        builder.recursive(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
-        }
-        builder.create(path).map_err(|_| StateError::Io)?;
-    }
-    let metadata = std::fs::symlink_metadata(path).map_err(|_| StateError::Io)?;
-    if !metadata.file_type().is_dir() {
-        return Err(StateError::Directory);
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if metadata.permissions().mode() & 0o077 != 0 {
-            return Err(StateError::Directory);
-        }
-    }
-    Ok(())
+    wildbloom_private_state::private_directory(path).map_err(|_| StateError::Directory)
 }
 
 pub fn write_private(root: &Path, name: &str, bytes: &[u8]) -> Result<(), StateError> {
+    private_directory(root)?;
     let destination = root.join(name);
     if let Ok(metadata) = std::fs::symlink_metadata(&destination)
         && !metadata.file_type().is_file()
@@ -122,6 +107,7 @@ pub fn write_private(root: &Path, name: &str, bytes: &[u8]) -> Result<(), StateE
         return Err(StateError::Io);
     }
     let mut temp = tempfile::NamedTempFile::new_in(root).map_err(|_| StateError::Io)?;
+    wildbloom_private_state::check_file(temp.as_file()).map_err(|_| StateError::Io)?;
     temp.write_all(bytes).map_err(|_| StateError::Io)?;
     temp.as_file().sync_all().map_err(|_| StateError::Io)?;
     temp.persist(destination).map_err(|_| StateError::Io)?;
@@ -151,14 +137,24 @@ impl StateDirectory {
             options.mode(0o600);
         }
         let lock = options.open(lock_path).map_err(|_| StateError::Io)?;
+        wildbloom_private_state::check_file(&lock).map_err(|_| StateError::Io)?;
         fs2::FileExt::try_lock_exclusive(&lock).map_err(|_| StateError::Locked)?;
         private_directory(&root.join("pending"))?;
         let path = root.join("state.json");
         let snapshot = if path.try_exists().map_err(|_| StateError::Io)?
             || std::fs::symlink_metadata(&path).is_ok()
         {
-            let snapshot: Snapshot = serde_json::from_slice(&read_bounded(&path, MAX_STATE_BYTES)?)
-                .map_err(|_| StateError::Schema)?;
+            if !std::fs::symlink_metadata(&path)
+                .map_err(|_| StateError::Io)?
+                .is_file()
+            {
+                return Err(StateError::Schema);
+            }
+            let file = File::open(&path).map_err(|_| StateError::Io)?;
+            wildbloom_private_state::check_file(&file).map_err(|_| StateError::Io)?;
+            let snapshot: Snapshot =
+                serde_json::from_slice(&read_file_bounded(file, MAX_STATE_BYTES)?)
+                    .map_err(|_| StateError::Schema)?;
             if snapshot.version != 1
                 || snapshot.revision == 0
                 || !canonical_hex(&snapshot.owner, 32)

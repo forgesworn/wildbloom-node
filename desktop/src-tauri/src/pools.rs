@@ -136,40 +136,20 @@ fn root(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|_| "Could not locate owner pool storage.".into())
 }
 fn private_dir(path: &Path) -> Result<(), String> {
-    if !path.exists() {
-        let mut builder = fs::DirBuilder::new();
-        builder.recursive(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
-        }
-        builder
-            .create(path)
-            .map_err(|_| "Could not create private pool directory.")?;
-    }
-    let meta = fs::symlink_metadata(path).map_err(|_| "Could not inspect pool directory.")?;
-    if !meta.is_dir() || meta.file_type().is_symlink() {
-        return Err("Pool state must use ordinary private directories.".into());
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if meta.permissions().mode() & 0o077 != 0 {
-            return Err("Pool directory is not private (0700 required).".into());
-        }
-    }
-    Ok(())
+    wildbloom_private_state::private_directory(path)
+        .map_err(|_| "Pool directory must be private to this account (Unix mode 0700 or a private Windows ACL).".into())
 }
+
 fn read(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
     let meta = fs::symlink_metadata(path).map_err(|_| "Could not read pool state.")?;
     if !meta.is_file() || meta.file_type().is_symlink() || meta.len() > limit as u64 {
         return Err("Invalid or oversized pool state.".into());
     }
     let mut bytes = Vec::new();
-    fs::File::open(path)
-        .map_err(|_| "Could not open pool state.")?
-        .take(limit as u64 + 1)
+    let file = fs::File::open(path).map_err(|_| "Could not open pool state.")?;
+    wildbloom_private_state::check_file(&file)
+        .map_err(|_| "Pool file permissions are not private.")?;
+    file.take(limit as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| "Could not read pool state.")?;
     if bytes.len() > limit {
@@ -357,6 +337,8 @@ pub async fn import_pool(
     private_dir(&root)?;
     let mut file =
         tempfile::NamedTempFile::new_in(&root).map_err(|_| "Could not stage private receipt.")?;
+    wildbloom_private_state::check_file(file.as_file())
+        .map_err(|_| "Receipt permissions are not private.")?;
     file.write_all(receipt.as_bytes())
         .map_err(|_| "Could not stage receipt.")?;
     file.as_file()

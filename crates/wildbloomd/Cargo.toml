@@ -9,6 +9,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+wildbloom-private-state = { path = "../private-state" }
 axum.workspace = true
 base64.workspace = true
 clap.workspace = true
