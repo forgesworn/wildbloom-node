@@ -9,7 +9,10 @@ the replacement candidate and the published signed preview as the baseline.
 The harness copies the real app from a read-only DMG into a disposable
 `Applications` directory, executes its production binary and bundled services,
 quits through the normal macOS application event, replaces the app, then removes
-it. No acceptance feature is compiled into the package and no signature is
+it. First-launch and direct-mode checks use the candidate. A second empty profile
+lets the baseline create its own database and onion identity before replacement;
+this avoids inadvertently checking a database downgrade. No acceptance feature
+is compiled into the package and no signature is
 modified. Signed inputs require Gatekeeper acceptance and stapled tickets;
 preview candidates explicitly use `--candidate-adhoc`, which checks signatures
 but does not claim Developer ID trust. The baseline always requires trust checks.

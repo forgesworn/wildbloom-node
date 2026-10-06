@@ -21,7 +21,7 @@
     "No updater feed or automatic-update acceptance",
     "No independent physical-device acceptance"
   ],
-  "baseline_version": "0.3.3",
   "candidate_version": "0.3.3",
+  "baseline_version": "0.3.3",
   "replacement_kind": "same-version reinstall"
 }

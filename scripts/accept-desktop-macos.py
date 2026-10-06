@@ -238,7 +238,8 @@ def main():
         private_file(database)
 
     try:
-        evidence["baseline_version"] = install(args.baseline)
+        # First-install checks must exercise the candidate, not merely the old baseline.
+        evidence["candidate_version"] = install(args.candidate, args.candidate_adhoc)
         # Atomic creation is the ownership boundary for all subsequent profile cleanup.
         profile.mkdir(mode=0o700)
         profile_owned = True
@@ -258,6 +259,12 @@ def main():
         ready("direct")
         stop()
         passed("Installed direct mode honours quota/writer settings and starts no Tor")
+        # The baseline must create its own database; do not accidentally test a downgrade.
+        shutil.rmtree(profile)
+        profile_owned = False
+        profile.mkdir(mode=0o700)
+        profile_owned = True
+        evidence["baseline_version"] = install(args.baseline)
         save_settings("tor")
         launch()
         ready("tor")
@@ -267,7 +274,8 @@ def main():
         identity = {name: digest(onion_root / name) for name in ("hostname", "hs_ed25519_secret_key", "hs_ed25519_public_key")}
         settings_digest = digest(settings_path)
         passed("Installed Tor mode reaches Blossom readiness and keeps private state at 0600")
-        evidence["candidate_version"] = install(args.candidate, args.candidate_adhoc)
+        require(install(args.candidate, args.candidate_adhoc) == evidence["candidate_version"],
+                "candidate version changed during acceptance")
         evidence["replacement_kind"] = ("same-version reinstall" if evidence["baseline_version"] == evidence["candidate_version"] else "cross-version replacement")
         require(digest(settings_path) == settings_digest, "bundle replacement changed settings")
         launch()
