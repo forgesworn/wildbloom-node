@@ -82,7 +82,7 @@ jobs:
           WILDBLOOM_NATIVE_EVIDENCE: ${{ runner.temp }}/native-pool-lifecycle.json
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then
-            dbus-run-session -- xvfb-run -a node scripts/accept-desktop-native.mjs
+            xvfb-run -a dbus-run-session -- node scripts/accept-desktop-native.mjs
           else
             node scripts/accept-desktop-native.mjs
           fi
