@@ -12,9 +12,10 @@ HTTPS reverse proxy.  It does not use WebRTC, STUN or TURN.
 This is a production candidate, not a durability promise.  The headless node
 targets macOS, Linux and Windows.  The native tray application lets the
 operator choose Tor or direct mode.  It bundles a signature-verified Tor Expert
-Bundle for the Tor choice, but does not start it in direct mode.  Unsigned preview installers
-are built separately from production releases; we will not label them as trusted
-downloads until the platform signing and clean-machine acceptance gates pass.
+Bundle for the Tor choice, but does not start it in direct mode. Preview installers
+are distributed separately from production releases. The Mac preview has verified
+Developer ID signatures and Apple notarisation; Windows signing, automatic
+updates and clean-machine acceptance remain open.
 
 A fresh desktop install waits for the operator to choose a transport before it
 starts either process.  Existing saved settings continue to select Tor unless
@@ -98,8 +99,12 @@ remain release evidence rather than assumptions.
 
 ## Install and run
 
-The desktop application is the intended consumer install.  Until signed
-installers are published, build it only from a revision you have reviewed.
+The desktop application is the intended consumer install. Try the
+[signed Mac preview](https://github.com/forgesworn/wildbloom-node/releases/tag/v0.3.3-preview.2)
+or [Windows/Linux previews](https://github.com/forgesworn/wildbloom-node/releases/tag/v0.3.3-preview.1),
+or build from a revision you have reviewed. The releases include checksums and
+exact validation scope. Windows packages remain unsigned; Mac packages are
+manual installs with [signing evidence and remaining gates](docs/MACOS-SIGNING-2026-10-06.md).
 
 ### Build the desktop preview from source
 
