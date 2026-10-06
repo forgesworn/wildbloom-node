@@ -84,3 +84,6 @@ public static class PrivateStateAccess {
     if ($created) { Remove-LocalUser -Name $account }
     if (Test-Path $root) { Remove-Item -LiteralPath $root -Recurse -Force }
 }
+# The last probe deliberately failed. Do not leak its expected native exit code
+# into GitHub's PowerShell wrapper after every assertion and cleanup succeeded.
+$global:LASTEXITCODE = 0
