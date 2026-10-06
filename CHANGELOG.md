@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.3 preview - 2026-10-06
+
+- Protect Windows owner receipts, coordinator state and repair work with private
+  ACLs created before writing data. Refuse broad/null ACLs and reparse points;
+  share the checks between the desktop and daemon.
+- Exercise real second-account read/write denial on Windows, plus persisted
+  native receipt, report and lock ACL checks. Existing overly broad state is
+  refused rather than silently changing its permissions.
+- Harden the future signed-release workflow with an all-platform credential
+  preflight, byte-level updater signature verification, and Windows runtime,
+  expected-signer and timestamp checks.
+- This remains an unsigned/ad-hoc preview. Trusted signing, independent security
+  review and physical multi-device acceptance remain separate release gates.
+
 ## 0.3.2 preview - 2026-10-06
 
 - Review and explicitly clear interrupted owner repair files from the desktop.
