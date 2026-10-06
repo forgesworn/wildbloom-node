@@ -5016,6 +5016,14 @@ dependencies = [
  "tauri-plugin-updater",
  "tempfile",
  "tokio",
+ "wildbloom-private-state",
+]
+
+[[package]]
+name = "wildbloom-private-state"
+version = "0.1.0"
+dependencies = [
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

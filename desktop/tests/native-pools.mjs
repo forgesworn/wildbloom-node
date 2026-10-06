@@ -30,7 +30,7 @@ const evidence = {
   schema: 'wildbloom.native-desktop-pools.v1', passed: false,
   scope: `${platformName} native debug webview with compile-time driver; real IPC and local nodes; not signed-installer or physical multi-device acceptance`,
   platform: process.platform,
-  receipt_permissions: process.platform === 'win32' ? 'Windows ACL acceptance remains separate' : 'Unix private mode checked',
+  receipt_permissions: process.platform === 'win32' ? 'Windows owner/SYSTEM/Administrators ACL checked on persisted receipt and repair state' : 'Unix private mode checked',
   source_commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim(),
   source_dirty: execFileSync('git', ['status', '--porcelain'], { cwd: repo, encoding: 'utf8' }).trim().length > 0,
   os_version: process.platform === 'darwin' ? execFileSync('sw_vers', ['-productVersion'], { encoding: 'utf8' }).trim() : release(),
@@ -38,6 +38,12 @@ const evidence = {
   harness_sha256: sha(readFileSync(fileURLToPath(import.meta.url))),
   checks: [],
 };
+function privatePermissions(path) {
+  if (process.platform !== 'win32') { assert.equal(statSync(path).mode & 0o077, 0); return; }
+  execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', join(repo, 'scripts/check-private-state-windows.ps1')], {
+    env: { ...process.env, WILDBLOOM_PRIVATE_PATH: path }, stdio: 'pipe',
+  });
+}
 function passed(name) { evidence.checks.push(name); console.log(`PASS ${name}`); }
 async function until(fn, label, timeout = 20000) {
   const end = Date.now() + timeout;
@@ -188,7 +194,8 @@ try {
   await until(async () => await app.evaluate('!document.querySelector("#pool-details").hidden') === true, 'real receipt import');
   const saved = join(dataDir, 'owner-pools', receipt.id, 'receipt.json');
   assert.deepEqual(JSON.parse(readFileSync(saved)), receipt);
-  if (process.platform !== 'win32') assert.equal(statSync(saved).mode & 0o077, 0);
+  privatePermissions(saved);
+  privatePermissions(dirname(saved));
   assert.equal(signatures(), 0);
   passed('receipt imported through native webview and real IPC; receipt persisted in isolated application profile');
   await clickControl('pool-check');
@@ -196,6 +203,7 @@ try {
   assert.equal(signatures(), 0);
   const work = join(dataDir, 'owner-pools', receipt.id, 'work');
   assert.equal(JSON.parse(readFileSync(join(work, 'pool-report.json'))).uploads_attempted, 0);
+  for (const path of [work, join(work, 'pool-report.json'), join(work, 'coordinator.lock')]) privatePermissions(path);
   passed('desktop read-only check verifies four real parts without signing or uploading');
   for (const index of [0, 1]) { await stop(nodes[index].child); await startNode(nodes[index], 1); }
   await until(async () => await app.evaluate('!document.querySelector("#pool-check").disabled') === true, 'check completion');

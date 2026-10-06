@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/wildbloomd"]
+members = ["crates/wildbloomd", "crates/private-state", "crates/release-verify"]
 resolver = "3"
 
 [workspace.package]

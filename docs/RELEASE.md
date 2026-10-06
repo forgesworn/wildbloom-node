@@ -21,9 +21,9 @@ hosted Linux runner, and a nominally portable file which fails to start on
 current distributions is worse than two honest native packages.  The headless
 daemon remains an ordinary Linux binary for other package systems.
 
-Use preview builds to find packaging and clean-machine faults.  Don't link them
-from the marketing site and don't ask users to click through operating-system
-trust warnings.
+Use preview builds to find packaging and clean-machine faults. Marketing links
+must label published previews accurately, including their missing trust gates;
+never present them as trusted installers or advise bypassing OS trust checks.
 
 ## Production credentials
 
@@ -64,9 +64,36 @@ WINDOWS_CERTIFICATE_PASSWORD
 WINDOWS_TIMESTAMP_URL
 ```
 
+Run `node scripts/check-signing-readiness.mjs` to inspect configured secret names
+without reading values. A configured name does not prove a credential is valid.
+On 6 October 2026 only the updater secret names were configured. A valid local
+Developer ID Application identity was found, but the default Keychain metadata
+scan found no notarisation profile. Neither observation establishes CI authority.
+
+For Apple, use the existing Developer ID Application identity if authorised for
+this product and configure the six Apple secrets above through the GitHub secret
+UI or a private local file/stdin. Never paste private material into chat, command
+arguments, PRs or logs. The certificate archive must include its private key;
+notarisation uses an Apple app-specific password with the corresponding team.
+Do not export every identity from a developer Keychain to obtain this one.
+
+For Windows, first identify the trusted signing provider. The current workflow
+supports a provider-authorised importable PFX plus an RFC 3161 timestamp URL.
+Hardware-backed certificates or cloud signing need that provider's Tauri
+`signCommand` integration; do not export hardware-protected keys or substitute
+a self-signed certificate. A new trusted signature can still encounter
+SmartScreen reputation warnings. See the official
+[Tauri Windows signing guide](https://v2.tauri.app/distribute/sign/windows/) and
+[macOS signing guide](https://v2.tauri.app/distribute/sign/macos/).
+
 The signed release workflow refuses `workflow_dispatch` from any branch other
 than `main`, refuses version drift and stops before building when a required
-credential is absent.  Apple secrets are exposed only to macOS jobs and Windows
+credential is absent. A preflight checks all platforms before any platform
+creates a draft. Windows daemon/Tor executables are signed and checked before
+bundling; installer checks require the configured signer and a timestamp.
+`wildbloom-release-verify` streams each macOS/Windows updater artifact through
+minisign verification against the public key pinned in source. Its tests reject
+modified artifact bytes and a wrong key; signature-file existence is insufficient.  Apple secrets are exposed only to macOS jobs and Windows
 certificate secrets only to Windows jobs.  It always creates a draft release.
 Linux `.deb` and `.rpm` files get detached minisign signatures made with the
 same separately held release key.  They are installed or replaced explicitly;

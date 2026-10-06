@@ -69,16 +69,9 @@ fn disposable(name: &str) -> bool {
 }
 /// Lock is identical to the owner's CLI service and remains held across review/removal.
 pub fn lock(work: &Path) -> Result<fs::File, String> {
-    let meta = ordinary(work, true)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if meta.permissions().mode() & 0o077 != 0 {
-            return Err("Repair work directory must be private (0700 required).".into());
-        }
-    }
-    #[cfg(not(unix))]
-    let _ = meta;
+    ordinary(work, true)?;
+    wildbloom_private_state::check_directory(work)
+        .map_err(|_| "Repair work directory permissions are not private.")?;
     let path = work.join("coordinator.lock");
     match fs::symlink_metadata(&path) {
         Ok(_) => {
@@ -97,6 +90,8 @@ pub fn lock(work: &Path) -> Result<fs::File, String> {
     let file = options
         .open(path)
         .map_err(|_| "Could not open the repair lock.")?;
+    wildbloom_private_state::check_file(&file)
+        .map_err(|_| "Repair lock permissions are not private.")?;
     fs2::FileExt::try_lock_exclusive(&file)
         .map_err(|_| "Repair files are in use. Stop the desktop or CLI owner service first.")?;
     Ok(file)
@@ -181,13 +176,22 @@ pub fn clear(work: &Path, expected: &Review) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn fixture() -> (tempfile::TempDir, std::path::PathBuf) {
-        let root = tempfile::tempdir().unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    struct Fixture {
+        _temp: tempfile::TempDir,
+        path: std::path::PathBuf,
+    }
+    impl Fixture {
+        fn path(&self) -> &Path {
+            &self.path
         }
+    }
+    fn fixture() -> (Fixture, std::path::PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Fixture {
+            path: temp.path().join("private"),
+            _temp: temp,
+        };
+        wildbloom_private_state::private_directory(root.path()).unwrap();
         let pass = tempfile::Builder::new()
             .prefix("pool-pass-")
             .tempdir_in(root.path())
