@@ -42,7 +42,8 @@ jobs:
       - run: cargo test --workspace
 
   desktop:
-    name: Desktop lifecycle (${{ matrix.os }})
+    # Keep the required-check name stable; this also runs native lifecycle tests.
+    name: Desktop compile (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
