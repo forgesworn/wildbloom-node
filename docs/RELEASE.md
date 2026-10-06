@@ -93,8 +93,8 @@ creates a draft. Windows daemon/Tor executables are signed and checked before
 bundling; installer checks require the configured signer and a timestamp.
 `wildbloom-release-verify` streams each macOS/Windows updater artifact through
 minisign verification against the public key pinned in source. Its tests reject
-modified artifact bytes and a wrong key; signature-file existence is insufficient.  Apple secrets are exposed only to macOS jobs and Windows
-certificate secrets only to Windows jobs.  It always creates a draft release.
+modified artifact bytes and a wrong key; signature-file existence is insufficient.  After the read-only credential preflight, platform build jobs receive only
+their own Apple or Windows signing credentials.  It always creates a draft release.
 Linux `.deb` and `.rpm` files get detached minisign signatures made with the
 same separately held release key.  They are installed or replaced explicitly;
 we do not advertise Tauri's AppImage-only Linux auto-update path.
