@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { once } from 'node:events';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { release, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -19,8 +19,9 @@ const daemon = join(dirname(appBinary), `wildbloomd${exe}`);
 const signer = join(repo, `target/debug/examples/acceptance_signer${exe}`);
 for (const file of [appBinary, daemon, signer]) assert.ok(existsSync(file), 'Build the native acceptance binaries first.');
 const root = mkdtempSync(join(tmpdir(), 'wildbloom-native-pools-'));
-const runId = randomBytes(16).toString('hex');
-const profileSuffix = `dev.forgesworn.wildbloom-acceptance.${runId}`;
+// Always exercise a digit-leading ID; its app-identifier segment needs a letter prefix on D-Bus.
+const runId = `0${randomBytes(16).toString('hex').slice(1)}`;
+const profileSuffix = `dev.forgesworn.wildbloom-acceptance.run${runId}`;
 const children = [], profiles = new Set();
 const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -91,14 +92,14 @@ function launchApp() {
   });
   // Never copy native output, signer events or receipt contents into evidence.
   child.stderr.resume();
-  child.on('exit', () => {
-    for (const wait of pending.values()) { clearTimeout(wait.timer); wait.reject(new Error('Native app exited during driver command')); }
+  child.on('exit', (code, signal) => {
+    for (const wait of pending.values()) { clearTimeout(wait.timer); wait.reject(new Error(`Native app exited during ${wait.op}: code=${code}, signal=${signal}`)); }
     pending.clear();
   });
   const command = (op, script = '') => new Promise((resolve, reject) => {
     const id = ++serial;
     const timer = setTimeout(() => { pending.delete(id); reject(new Error(`Native driver timed out: ${op}`)); }, 15000);
-    pending.set(id, { resolve, reject, timer });
+    pending.set(id, { resolve, reject, timer, op });
     child.stdin.write(`${JSON.stringify({ id, op, script })}\n`);
   });
   const evaluate = (script) => command('eval', `(()=>{try{return (${script});}catch(e){return {driver_error:String(e)}}})()`);
@@ -123,6 +124,12 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch { return 
 const record = join(root, 'signer-count');
 const signatures = () => existsSync(record) ? readFileSync(record, 'utf8').split('\n').filter(Boolean).length : 0;
 let app;
+async function clickControl(id) {
+  // Import can reveal the receipt before its final refresh releases busy state.
+  // A disabled DOM button silently ignores click(), so wait for the real control.
+  await until(async () => await app.evaluate(`document.getElementById(${JSON.stringify(id)})?.disabled === false`) === true, `${id} enabled`);
+  await app.evaluate(`document.getElementById(${JSON.stringify(id)}).click()`);
+}
 try {
   const nodes = [];
   for (let index = 0; index < 4; index++) {
@@ -184,7 +191,7 @@ try {
   if (process.platform !== 'win32') assert.equal(statSync(saved).mode & 0o077, 0);
   assert.equal(signatures(), 0);
   passed('receipt imported through native webview and real IPC; receipt persisted in isolated application profile');
-  await app.evaluate('document.querySelector("#pool-check").click()');
+  await clickControl('pool-check');
   await until(async () => await app.evaluate('document.querySelector("#pool-health").textContent.includes("Requested protection verified")') === true, 'read-only health');
   assert.equal(signatures(), 0);
   const work = join(dataDir, 'owner-pools', receipt.id, 'work');
@@ -192,7 +199,7 @@ try {
   passed('desktop read-only check verifies four real parts without signing or uploading');
   for (const index of [0, 1]) { await stop(nodes[index].child); await startNode(nodes[index], 1); }
   await until(async () => await app.evaluate('!document.querySelector("#pool-check").disabled') === true, 'check completion');
-  await app.evaluate('document.querySelector("#pool-check").click()');
+  await clickControl('pool-check');
   await until(async () => await app.evaluate('document.querySelector("#pool-health").textContent.includes("Needs repair")') === true, 'degraded health');
   await until(async () => await app.evaluate('!document.querySelector("#pool-check").disabled') === true, 'degraded check completion');
   passed('desktop reports recoverable but underprotected after two disposable stores are lost');
@@ -224,7 +231,7 @@ try {
   await until(async () => descendants(app.child.pid).length === 1, 'one supervised repair child');
   passed('desktop starts the real owner service and restores both missing parts');
 
-  await app.evaluate('document.querySelector("#pool-stop").click()');
+  await clickControl('pool-stop');
   await until(async () => await app.evaluate('document.querySelector("#pool-action-status").textContent === "Pool process stopped."') === true, 'explicit stop action');
   assert.equal(descendants(app.child.pid).length, 0);
   assert.equal(await app.evaluate('document.querySelector("#pool-consent").checked'), false);
@@ -267,10 +274,41 @@ try {
   assert.deepEqual(JSON.parse(readFileSync(saved)), receipt);
   passed('reopening retains the receipt but no signer, consent, child or automatic repair authority');
   // A fresh read-only check also proves quit released the work-directory lock.
-  await app.evaluate('document.querySelector("#pool-check").click()');
+  await clickControl('pool-check');
   await until(async () => await app.evaluate('document.querySelector("#pool-health").textContent.includes("Needs repair")') === true, 'fresh check after restart');
   assert.equal(signatures(), signaturesAtQuit);
   passed('fresh post-restart check reuses the released lock and reports current degraded storage');
+  await until(async () => await app.evaluate('!document.querySelector("#pool-check").disabled') === true, 'final check completion');
+  // Model the exact disposable files left by an interrupted owner pass. Real
+  // forced-process failures are exercised by the daemon's subprocess suite.
+  const leftover = join(work, 'pool-pass-Ab1234');
+  mkdirSync(leftover, { mode: 0o700 });
+  writeFileSync(join(leftover, 'source-0'), Buffer.from('synthetic temporary ciphertext'));
+  const reportBeforeCleanup = readFileSync(join(work, 'pool-report.json'));
+  await clickControl('pool-review-cleanup');
+  await until(async () => await app.evaluate('document.querySelector("#pool-cleanup-status").textContent.includes("1 interrupted repair folder")') === true, 'native cleanup review');
+  assert.equal(await app.evaluate('document.querySelector("#pool-clear-cleanup").disabled'), true);
+  assert.ok(existsSync(join(leftover, 'source-0')), 'Review must not delete');
+  writeFileSync(join(leftover, 'coded-1'), Buffer.from('changed since review'));
+  const confirmCleanup = '(()=>{const c=document.querySelector("#pool-cleanup-consent");c.checked=true;c.dispatchEvent(new Event("change",{bubbles:true}));document.querySelector("#pool-clear-cleanup").click();return true})()';
+  await app.evaluate(confirmCleanup);
+  await until(async () => await app.evaluate('document.querySelector("#pool-action-status").textContent.includes("changed since review")') === true, 'stale cleanup rejected');
+  assert.ok(existsSync(join(leftover, 'source-0')));
+  await clickControl('pool-review-cleanup');
+  await until(async () => await app.evaluate('!document.querySelector("#pool-cleanup-consent").disabled') === true, 'fresh cleanup review');
+  await app.evaluate(confirmCleanup);
+  await until(async () => await app.evaluate('document.querySelector("#pool-cleanup-status").textContent.includes("Repair remains stopped")') === true, 'native confirmed cleanup');
+  assert.equal(existsSync(leftover), false);
+  assert.deepEqual(readFileSync(join(work, 'pool-report.json')), reportBeforeCleanup);
+  assert.deepEqual(JSON.parse(readFileSync(saved)), receipt);
+  assert.equal(signatures(), signaturesAtQuit);
+  assert.equal(descendants(app.child.pid).length, 0);
+  assert.equal(await app.evaluate('document.querySelector("#pool-consent").checked'), false);
+  passed('native cleanup requires review and confirmation, refuses changed files, preserves receipt/report and stays stopped');
+  await clickControl('pool-check');
+  await until(async () => await app.evaluate('document.querySelector("#pool-health").textContent.includes("Needs repair") && !document.querySelector("#pool-check").disabled') === true, 'read-only check after cleanup');
+  assert.equal(signatures(), signaturesAtQuit);
+  passed('explicit read-only check works after clearing interrupted repair files');
   const finalExit = once(app.child, 'exit'); await app.command('quit');
   assert.equal((await bounded(finalExit, 'Final quit hung'))[0], 0);
   evidence.passed = true;

@@ -73,8 +73,15 @@ application-data ACLs; clean-machine acceptance must verify those ACLs.
 
 A graceful stop drops temporary ciphertext files. After an abrupt failure,
 leftover `pool-pass-*` directories cause the daemon to refuse a new pass.
-Review them in the displayed work folder and remove only identified disposable
-pass directories. Do not remove receipt backups or unrelated data. Disk and
+Open **Local receipt and work folder**, select **Review interrupted repair files**,
+and inspect the folder names, file names and byte counts. Confirm the temporary
+parts are disposable, then select **Clear reviewed repair files**. This uses the
+same exclusive lock as the CLI owner service and refuses cleanup while that
+service is active, if the reviewed files changed, or if folders contain links,
+nested directories or unexpected files. A changed review requires fresh review
+and confirmation. Cleanup preserves receipts, reports and remote data; it never
+starts repair or restores signing consent. Unexpected files require manual review
+in the displayed work folder. Do not remove receipt backups or unrelated data. Disk and
 transfer limits default to 5 GiB and 8 GiB per pass respectively; the desktop
 caps each at 32 GiB. No quota override is granted on remote nodes.
 
@@ -119,7 +126,13 @@ and another loss repaired while the window is hidden. The driver sends a real
 window close request and uses the same `app.exit` path as tray Quit. It checks
 that the child exits, reconstruction files are removed, the receipt survives
 reopening, and signer settings/consent/repair authority do not. A fresh check
-after reopening proves the work-directory lock was released.
+after reopening proves the work-directory lock was released. The cleanup journey
+also stages synthetic interrupted-pass files, reviews them through real IPC,
+requires confirmation, refuses a changed review, clears only the reviewed files,
+and verifies that an explicit read-only check works afterwards. The expanded
+thirteen-check journey passed locally on Apple Silicon macOS on 6 October 2026
+in 30.7 seconds. The eleven-check hosted results below predate cleanup; consult
+the release's retained CI evidence for its exact source and platform outcomes.
 
 Every run uses a randomly named application identifier and fresh node stores;
 it never overrides HOME or opens the normal application profile. Temporary
@@ -148,8 +161,8 @@ desktop UI/accessibility suite also passed. Hosted macOS results and retained
 JSON evidence are recorded separately by the native lifecycle CI step.
 
 The portable harness added later on 5 October passed all eleven checks locally
-on Apple Silicon macOS, including expired-authority refusal. Windows and Linux
-and macOS also passed all eleven checks in [CI run 37285842022](https://github.com/forgesworn/wildbloom-node/actions/runs/37285842022)
+on Apple Silicon macOS, including expired-authority refusal. Windows, Linux
+and hosted macOS also passed all eleven checks in [CI run 37285842022](https://github.com/forgesworn/wildbloom-node/actions/runs/37285842022)
 on source `bf6b7c968620a723c0e8ecf7508141e42432d9f2`: Linux in 22.3 seconds,
 macOS in 26.2 seconds and Windows in 31.4 seconds. All eight CI jobs passed;
 the platform jobs retained JSON evidence artifacts. This is native debug-app

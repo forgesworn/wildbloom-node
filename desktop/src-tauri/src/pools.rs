@@ -95,6 +95,7 @@ pub struct PoolManager {
     active: tokio::sync::Mutex<Option<Active>>,
     operation: tokio::sync::Mutex<()>,
     load_error: Mutex<Option<String>>,
+    cleanup_review: Mutex<Option<(String, crate::pool_cleanup::Review)>>,
 }
 #[derive(Serialize)]
 pub struct PoolList {
@@ -561,6 +562,10 @@ pub async fn start_pool(
         .inspection
         .clone();
     validate_run(&settings, &inspection, now())?;
+    *manager
+        .cleanup_review
+        .lock()
+        .map_err(|_| "Pool state lock failed.")? = None;
     let directory = root(&app)?.join(&settings.receipt_id);
     private_dir(&directory)?;
     let verified = inspect(
@@ -641,7 +646,7 @@ pub async fn start_pool(
             entry.detail = match outcome {
                 Some(true) if settings.check_only => "Read-only check finished. See the observation time and verified parts below.",
                 Some(true) => "Owner repair stopped.",
-                Some(false) => "Process stopped: protection is incomplete, authority expired, or configuration needs attention. Check the last observation, budgets, signer and proxy. After an abrupt stop, inspect the private work folder for pool-pass leftovers before retrying.",
+                Some(false) => "Process stopped: protection is incomplete, authority expired, or configuration needs attention. Check the last observation, budgets, signer and proxy. After an abrupt stop, use Review interrupted repair files under Local receipt and work folder before retrying.",
                 None => "Stopped. No further checks or repair will run until you start again.",
             }.into();
         }
@@ -674,6 +679,68 @@ impl PoolManager {
         *slot = None;
         Ok(())
     }
+}
+// Paths always come from a verified local receipt, never from the webview.
+fn cleanup_work(app: &AppHandle, manager: &PoolManager, id: &str) -> Result<PathBuf, String> {
+    if !hex(id)
+        || !manager
+            .entries
+            .lock()
+            .map_err(|_| "Pool state lock failed.")?
+            .contains_key(id)
+    {
+        return Err("Select an imported receipt first.".into());
+    }
+    let root = root(app)?;
+    private_dir(&root)?;
+    let directory = root.join(id);
+    private_dir(&directory)?;
+    let work = directory.join("work");
+    private_dir(&work)?;
+    Ok(work)
+}
+#[tauri::command]
+pub async fn review_pool_cleanup(
+    app: AppHandle,
+    manager: State<'_, Arc<PoolManager>>,
+    receipt_id: String,
+) -> Result<crate::pool_cleanup::Review, String> {
+    let _operation = manager.operation.lock().await;
+    *manager
+        .cleanup_review
+        .lock()
+        .map_err(|_| "Pool state lock failed.")? = None;
+    require_stopped(&mut *manager.active.lock().await, Some(&receipt_id))?;
+    let work = cleanup_work(&app, &manager, &receipt_id)?;
+    let _lock = crate::pool_cleanup::lock(&work)?;
+    let review = crate::pool_cleanup::review(&work)?;
+    *manager
+        .cleanup_review
+        .lock()
+        .map_err(|_| "Pool state lock failed.")? = Some((receipt_id, review.clone()));
+    Ok(review)
+}
+#[tauri::command]
+pub async fn clear_pool_cleanup(
+    app: AppHandle,
+    manager: State<'_, Arc<PoolManager>>,
+    receipt_id: String,
+    confirmed: bool,
+) -> Result<(), String> {
+    let _operation = manager.operation.lock().await;
+    let (id, review) = manager
+        .cleanup_review
+        .lock()
+        .map_err(|_| "Pool state lock failed.")?
+        .take()
+        .ok_or("Review interrupted repair files first.")?;
+    if !confirmed || id != receipt_id {
+        return Err("Confirm cleanup of the reviewed receipt first.".into());
+    }
+    require_stopped(&mut *manager.active.lock().await, Some(&receipt_id))?;
+    let work = cleanup_work(&app, &manager, &receipt_id)?;
+    let _lock = crate::pool_cleanup::lock(&work)?;
+    crate::pool_cleanup::clear(&work, &review)
 }
 #[tauri::command]
 pub async fn remove_pool(

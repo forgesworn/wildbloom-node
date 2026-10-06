@@ -6,6 +6,11 @@
   let busy = false;
   let refreshing = false;
   let revision = 0;
+  let cleanupReview = null;
+  function resetCleanup() {
+    cleanupReview = null; el('cleanup-consent').checked = false;
+    el('cleanup-files').replaceChildren(); el('cleanup-status').textContent = '';
+  }
   const selected = () => pools.find((p) => p.inspection.receipt_id === el('select').value);
   const running = (pool) => ['checking', 'repairing'].includes(pool?.phase);
   const active = () => pools.some(running);
@@ -14,7 +19,7 @@
   date.setMinutes(date.getMinutes() - date.getTimezoneOffset());
   el('expiry').value = date.toISOString().slice(0, 16);
 
-  function revoke() { revision++; el('consent').checked = false; el('remove-consent').checked = false; controls(); }
+  function revoke() { resetCleanup(); revision++; el('consent').checked = false; el('remove-consent').checked = false; controls(); }
   function controls() {
     el('import').disabled = busy;
     el('check').disabled = busy || active() || !selected();
@@ -22,6 +27,9 @@
     el('stop').disabled = busy || !active();
     el('remove').disabled = busy || running(selected()) || !el('remove-consent').checked;
     el('select').disabled = busy;
+    el('review-cleanup').disabled = busy || active() || !selected();
+    el('cleanup-consent').disabled = busy || active() || !cleanupReview?.passes.length;
+    el('clear-cleanup').disabled = busy || active() || !cleanupReview?.passes.length || !el('cleanup-consent').checked;
   }
   function fact(label, value) {
     const term = document.createElement('dt'); term.textContent = label;
@@ -31,6 +39,7 @@
   function render() {
     const pool = selected(); el('details').hidden = !pool;
     if (!pool) { controls(); return; }
+    if (active() && cleanupReview) resetCleanup();
     const { inspection, report } = pool;
     const manifest = inspection.manifest;
     el('facts').replaceChildren();
@@ -140,6 +149,30 @@
   el('stop').addEventListener('click', () => action(async () => {
     await invoke('stop_pool'); revoke(); message('Pool process stopped.');
   }));
+  el('review-cleanup').addEventListener('click', () => action(async () => {
+    revoke();
+    const id = selected()?.inspection.receipt_id;
+    const current = revision;
+    const review = await invoke('review_pool_cleanup', { receiptId: id });
+    if (current !== revision || id !== selected()?.inspection.receipt_id) throw new Error('Selection changed. Review again.');
+    cleanupReview = review;
+    el('cleanup-status').textContent = review.passes.length ? `${review.passes.length} interrupted repair folder(s), ${review.bytes.toLocaleString()} bytes. Receipt, reports and remote parts will be preserved.` : 'No interrupted repair files found.';
+    for (const pass of review.passes) {
+      const item = document.createElement('li');
+      item.textContent = `${pass.name}: ${pass.files.map(file => `${file.name} (${file.bytes.toLocaleString()} bytes)`).join(', ') || 'empty folder'}`;
+      el('cleanup-files').append(item);
+    }
+    message('Local repair files reviewed. No nodes or signer were contacted.');
+  }));
+  el('clear-cleanup').addEventListener('click', () => action(async () => {
+    if (!cleanupReview || !el('cleanup-consent').checked) throw new Error('Review and confirm temporary file cleanup first.');
+    const id = selected()?.inspection.receipt_id;
+    revoke();
+    await invoke('clear_pool_cleanup', { receiptId: id, confirmed: true });
+    el('cleanup-status').textContent = 'Reviewed repair files cleared. Repair remains stopped; start it again explicitly when ready.';
+    message('Temporary repair files cleared. Receipt, reports and remote parts were preserved.');
+  }));
+  el('cleanup-consent').addEventListener('change', controls);
   el('remove').addEventListener('click', () => action(async () => {
     if (!el('remove-consent').checked || !selected()) throw new Error('Confirm your receipt backup first.');
     await invoke('remove_pool', { receiptId: selected().inspection.receipt_id }); revoke(); message('Local receipt removed. Remote parts and work folders were preserved.');
