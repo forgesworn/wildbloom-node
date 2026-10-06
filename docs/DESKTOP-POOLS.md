@@ -129,8 +129,10 @@ reopening, and signer settings/consent/repair authority do not. A fresh check
 after reopening proves the work-directory lock was released. The cleanup journey
 also stages synthetic interrupted-pass files, reviews them through real IPC,
 requires confirmation, refuses a changed review, clears only the reviewed files,
-and verifies that an explicit read-only check works afterwards. That addition
-needs its own passing run; the eleven-check results below predate cleanup.
+and verifies that an explicit read-only check works afterwards. The expanded
+thirteen-check journey passed locally on Apple Silicon macOS on 6 October 2026
+in 30.7 seconds. The eleven-check hosted results below predate cleanup; consult
+the release's retained CI evidence for its exact source and platform outcomes.
 
 Every run uses a randomly named application identifier and fresh node stores;
 it never overrides HOME or opens the normal application profile. Temporary

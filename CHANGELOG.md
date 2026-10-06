@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.2 preview - 2026-10-06
+
+- Review and explicitly clear interrupted owner repair files from the desktop.
+  Cleanup holds the repair lock, rejects changed reviews and unexpected files,
+  and preserves receipts, reports and remote parts. Repair remains stopped.
+- Exercise the native desktop recovery lifecycle on Linux, macOS and Windows,
+  including expired-authority refusal and interrupted-file cleanup.
+- Preserve existing required CI check names while adding native acceptance.
+  Preview signing and physical-device limitations remain unchanged.
+
 ## 0.3.1 preview - 2026-10-05
 
 - Stop owner repair on local temporary-storage write failures instead of
