@@ -1,0 +1,42 @@
+name: Signed Mac installation acceptance
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/accept-desktop-macos*'
+      - 'scripts/test-accept-desktop-macos.py'
+      - '.github/workflows/macos-install.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/accept-desktop-macos*'
+      - 'scripts/test-accept-desktop-macos.py'
+      - '.github/workflows/macos-install.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  installed:
+    name: Signed installation (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-15-intel]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Verify refusal of existing operator state and tampered inputs
+        run: python3 scripts/test-accept-desktop-macos.py
+      - name: Exercise checksum-pinned public signed DMG on a fresh runner
+        run: python3 scripts/accept-desktop-macos-bundle.py --output "$RUNNER_TEMP/macos-install.json"
+      - name: Retain sanitised installation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: signed-macos-install-${{ matrix.os }}
+          path: ${{ runner.temp }}/macos-install.json
+          if-no-files-found: error
+          retention-days: 14

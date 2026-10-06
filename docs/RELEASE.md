@@ -14,6 +14,13 @@ GitHub release.  The artefact name says `unsigned-preview` because that is what
 it is.  On fresh hosted Linux and Windows runners it also installs the generated
 package, starts the installed app through Tor, checks the packaged Blossom
 service and single-instance behaviour, stops the process tree and uninstalls.
+On both hosted Mac architectures, the [installation harness](MACOS-INSTALL-ACCEPTANCE.md)
+exercises fresh startup and direct mode with the candidate, then installs a
+checksum-pinned signed baseline, starts Tor, replaces it with the new DMG,
+verifies settings/onion identity retention and
+removes the app. It distinguishes a same-version reinstall from a cross-version
+replacement and retains sanitised evidence; reboot, interactive UI and automatic
+update acceptance remain separate.
 
 Linux releases are deliberately `.deb` and `.rpm` packages.  We don't publish
 an AppImage: the current Tauri bundler path is not dependable enough on its
