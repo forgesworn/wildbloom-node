@@ -1,0 +1,50 @@
+{
+  "signing": {
+    "input": "Wildbloom.Node_0.3.3_aarch64.dmg",
+    "input_sha256": "07bdca42e6f3391a1b66518639d9de5f86958b4afb1169ba5fb55fcacd952a9a",
+    "source_commit": "39e46f4d5802d8660ce1617956cf5ae9b6200e11",
+    "signing_identity": "Developer ID Application: Epona Solutions Ltd (2GLP954N6A)",
+    "team_id": "2GLP954N6A",
+    "started_at": "2026-10-06T13:25:47.648949+00:00",
+    "script_sha256": "381751094824a71886a3a896c00bbfb235c3aac92eeb8c21399c15fd858031ec",
+    "passed": true,
+    "scope": "Local Developer ID signing and Apple notarisation; no updater signature, publication or clean-machine acceptance",
+    "version": "0.3.3",
+    "signed_code": [
+      "Contents/MacOS/wildbloom-desktop",
+      "Contents/MacOS/wildbloomd",
+      "Contents/Resources/tor-runtime/tor/libevent-2.1.7.dylib",
+      "Contents/Resources/tor-runtime/tor/pluggable_transports/conjure-client",
+      "Contents/Resources/tor-runtime/tor/pluggable_transports/lyrebird",
+      "Contents/Resources/tor-runtime/tor/tor"
+    ],
+    "app": {
+      "id": "c5ad8052-b621-4202-9751-651447768a02",
+      "submitted_sha256": "db5cc88657e238cbfca3f605df1617a2e8aa1728c76fe7c646e96b15d0b03b40",
+      "status": "Accepted"
+    },
+    "dmg": {
+      "id": "1ff6d28a-efb3-4a0a-bfc0-6cf8c3bd91d9",
+      "submitted_sha256": "be61db4491d078fb8900324d359802b3d6470015407a7c4641a368773910dfac",
+      "status": "Accepted"
+    },
+    "output": "Wildbloom.Node_0.3.3_aarch64-signed.dmg",
+    "output_sha256": "d03616835df7c5fce531c8429c40a57733562f948f4a472e6802ec713acf743d",
+    "finished_at": "2026-10-06T13:27:10.167391+00:00"
+  },
+  "independent_package_verification": {
+    "passed": true,
+    "artifact": "Wildbloom.Node_0.3.3_aarch64-signed.dmg",
+    "sha256": "d03616835df7c5fce531c8429c40a57733562f948f4a472e6802ec713acf743d",
+    "checks": [
+      "final DMG checksum",
+      "DMG and contained app stapled tickets",
+      "DMG and app Gatekeeper acceptance",
+      "deep strict signatures",
+      "all six nested Mach-O team, runtime and timestamp checks",
+      "native bundled daemon version and pool commands",
+      "native signed Tor with its bundled dylib"
+    ],
+    "scope": "read-only verification on the existing Apple Silicon Mac; no clean-machine install, GUI lifecycle, upgrade or physical Intel acceptance"
+  }
+}

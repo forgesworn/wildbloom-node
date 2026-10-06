@@ -1,0 +1,49 @@
+{
+  "signing": {
+    "input": "Wildbloom.Node_0.3.3_x64.dmg",
+    "input_sha256": "e4bff7c9118e53db4a681f1565396e89e3c98615de7e214aa13f62c313cf3c64",
+    "source_commit": "39e46f4d5802d8660ce1617956cf5ae9b6200e11",
+    "signing_identity": "Developer ID Application: Epona Solutions Ltd (2GLP954N6A)",
+    "team_id": "2GLP954N6A",
+    "started_at": "2026-10-06T15:28:19.328629+00:00",
+    "script_sha256": "381751094824a71886a3a896c00bbfb235c3aac92eeb8c21399c15fd858031ec",
+    "passed": true,
+    "scope": "Local Developer ID signing and Apple notarisation; no updater signature, publication or clean-machine acceptance",
+    "version": "0.3.3",
+    "signed_code": [
+      "Contents/MacOS/wildbloom-desktop",
+      "Contents/MacOS/wildbloomd",
+      "Contents/Resources/tor-runtime/tor/libevent-2.1.7.dylib",
+      "Contents/Resources/tor-runtime/tor/pluggable_transports/conjure-client",
+      "Contents/Resources/tor-runtime/tor/pluggable_transports/lyrebird",
+      "Contents/Resources/tor-runtime/tor/tor"
+    ],
+    "app": {
+      "id": "0b824a12-dc81-4de3-b662-82e6937b08db",
+      "submitted_sha256": "481a614e6ed3f47bf48d54ae0de18f8a2cb996f27c4fc3015427a569c7467968",
+      "status": "Accepted"
+    },
+    "dmg": {
+      "id": "f9b0a194-f563-4f43-ba4d-e16e6a068355",
+      "submitted_sha256": "626e85f01ce98ab1bad38edd68f72fdb6d9815c4a2cda94f9d9a10e613171a55",
+      "status": "Accepted"
+    },
+    "output": "Wildbloom.Node_0.3.3_x64-signed.dmg",
+    "output_sha256": "255b02b6dbb3dee1560b12a4d1298ac91f3b967a08a2c41670ac720cf1231520",
+    "finished_at": "2026-10-06T15:29:49.259653+00:00"
+  },
+  "independent_package_verification": {
+    "passed": true,
+    "artifact": "Wildbloom.Node_0.3.3_x64-signed.dmg",
+    "sha256": "255b02b6dbb3dee1560b12a4d1298ac91f3b967a08a2c41670ac720cf1231520",
+    "checks": [
+      "final DMG checksum",
+      "DMG and contained app stapled tickets",
+      "DMG and app Gatekeeper acceptance",
+      "deep strict signatures",
+      "all six nested Mach-O team, runtime and timestamp checks",
+      "Intel daemon architecture; not native Intel execution"
+    ],
+    "scope": "read-only verification on the existing Apple Silicon Mac; no clean-machine install, GUI lifecycle, upgrade or physical Intel acceptance"
+  }
+}

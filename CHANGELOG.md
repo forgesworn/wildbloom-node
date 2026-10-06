@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.3 preview.2 (Mac signing) - 2026-10-06
+
+- Sign the existing Apple Silicon and Intel 0.3.3 binaries with Developer ID,
+  notarise both apps and DMGs, and staple and verify their tickets. Retain exact
+  input/output checksums, Apple submission IDs and package verification evidence.
+- Include nested Tor transport helpers in the runtime signing script and cover
+  them with a real Mach-O regression in macOS CI. Add a repeatable local Keychain
+  signing tool which refuses an input checksum mismatch before accessing credentials.
+- These remain manual-install previews. Windows signing, automatic updates,
+  clean-machine acceptance, physical multi-device recovery and independent
+  security review remain open. Windows/Linux preview.1 downloads are unchanged.
+
 ## 0.3.3 preview - 2026-10-06
 
 - Protect Windows owner receipts, coordinator state and repair work with private

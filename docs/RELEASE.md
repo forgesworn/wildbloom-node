@@ -25,6 +25,14 @@ Use preview builds to find packaging and clean-machine faults. Marketing links
 must label published previews accurately, including their missing trust gates;
 never present them as trusted installers or advise bypassing OS trust checks.
 
+A preview may have verified platform signatures without meeting the production
+gate below. The [0.3.3 signed Mac preview](MACOS-SIGNING-2026-10-06.md) follows
+this path: publish separately, retain exact input/output hashes and signing
+evidence, label the remaining acceptance gaps, and keep automatic updates off.
+Signing existing binaries does not change their source commit; the release tag
+must identify the original build source, with signing-tool provenance recorded
+separately. Never overwrite an earlier preview's installer bytes.
+
 ## Production credentials
 
 A production release needs three different authorities:
@@ -66,9 +74,11 @@ WINDOWS_TIMESTAMP_URL
 
 Run `node scripts/check-signing-readiness.mjs` to inspect configured secret names
 without reading values. A configured name does not prove a credential is valid.
-On 6 October 2026 only the updater secret names were configured. A valid local
-Developer ID Application identity was found, but the default Keychain metadata
-scan found no notarisation profile. Neither observation establishes CI authority.
+On 6 October 2026 only the updater secret names were configured. A later scan
+of the user Keychain search list found a working local notarisation profile in
+the login Keychain. Both Mac 0.3.3 candidates were then signed with Developer ID,
+accepted by Apple and stapled. See [the exact candidate evidence](MACOS-SIGNING-2026-10-06.md).
+Local signing authority does not establish hosted CI authority.
 
 For Apple, use the existing Developer ID Application identity if authorised for
 this product and configure the six Apple secrets above through the GitHub secret

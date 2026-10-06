@@ -24,10 +24,10 @@ sign() {
   codesign --verify --strict --verbose=2 "$1"
 }
 
-while IFS= read -r candidate; do
+while IFS= read -r -d '' candidate; do
   if file "$candidate" | grep -q 'Mach-O'; then
     sign "$candidate"
   fi
-done < <(find "$runtime/tor" -maxdepth 1 -type f ! -name tor -print | sort)
+done < <(find "$runtime/tor" -type f ! -path "$tor" -print0)
 sign "$tor"
 "$tor" --version >/dev/null
