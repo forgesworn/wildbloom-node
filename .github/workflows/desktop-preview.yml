@@ -117,16 +117,20 @@ jobs:
       - name: Install and exercise the Linux package
         if: runner.os == 'Linux'
         run: scripts/accept-desktop-linux.sh "desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
-      - name: Verify the macOS bundle contains the owner-pool commands
+      - name: Install and exercise the macOS package against the signed baseline
         if: runner.os == 'macOS'
-        shell: bash
         run: |
-          set -euo pipefail
-          daemon="desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/Wildbloom Node.app/Contents/MacOS/wildbloomd"
-          test -x "$daemon"
-          "$daemon" replicas pool-inspect --help | grep -q -- '--receipt-id'
-          "$daemon" replicas pool-repair --help | grep -q -- '--check-only'
-          "$daemon" replicas pool-repair --help | grep -q -- '--stop-on-stdin'
+          python3 scripts/accept-desktop-macos-bundle.py \
+            --bundle "desktop/src-tauri/target/${{ matrix.target }}/release/bundle" \
+            --candidate-adhoc --output "$RUNNER_TEMP/macos-install.json"
+      - name: Retain macOS installation evidence
+        if: always() && runner.os == 'macOS'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-install-${{ matrix.target }}
+          path: ${{ runner.temp }}/macos-install.json
+          if-no-files-found: warn
+          retention-days: 14
       - name: Install and exercise the Windows package
         if: runner.os == 'Windows'
         shell: pwsh

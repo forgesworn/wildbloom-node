@@ -75,6 +75,11 @@ notarisation profile.
 
 ## Remaining gates
 
+The [Mac installation harness](MACOS-INSTALL-ACCEPTANCE.md) adds automated
+installed-app/service and replacement checks on both hosted architectures.
+Its evidence is separate from the original read-only signing checks above;
+same-version reinstall results do not prove a cross-version or automatic update.
+
 - Configure hosted Apple signing authority separately. GitHub currently has
   updater secret names only; local Keychain success does not configure CI.
 - Verify updater signatures before offering automatic updates.

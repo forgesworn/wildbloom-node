@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "passed": true,
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "architecture": "arm64",
+  "harness_commit": null,
+  "baseline_sha256": "d03616835df7c5fce531c8429c40a57733562f948f4a472e6802ec713acf743d",
+  "candidate_sha256": "d03616835df7c5fce531c8429c40a57733562f948f4a472e6802ec713acf743d",
+  "candidate_trust": "Developer ID and notarisation",
+  "checks": [
+    "Fresh installed app waits for explicit transport choice",
+    "Installed direct mode honours quota/writer settings and starts no Tor",
+    "Installed Tor mode reaches Blossom readiness and keeps private state at 0600",
+    "Replacement app restarts with unchanged settings and onion key/hostname",
+    "Normal app quits stop all observed bundled children",
+    "Removing installed app preserves operator settings, database and onion identity"
+  ],
+  "limits": [
+    "No physical reboot or login-item test",
+    "No visual/UI interaction acceptance",
+    "No updater feed or automatic-update acceptance",
+    "No independent physical-device acceptance"
+  ],
+  "baseline_version": "0.3.3",
+  "candidate_version": "0.3.3",
+  "replacement_kind": "same-version reinstall"
+}
