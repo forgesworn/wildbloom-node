@@ -19,8 +19,9 @@ const daemon = join(dirname(appBinary), `wildbloomd${exe}`);
 const signer = join(repo, `target/debug/examples/acceptance_signer${exe}`);
 for (const file of [appBinary, daemon, signer]) assert.ok(existsSync(file), 'Build the native acceptance binaries first.');
 const root = mkdtempSync(join(tmpdir(), 'wildbloom-native-pools-'));
-const runId = randomBytes(16).toString('hex');
-const profileSuffix = `dev.forgesworn.wildbloom-acceptance.${runId}`;
+// Always exercise a digit-leading ID; its app-identifier segment needs a letter prefix on D-Bus.
+const runId = `0${randomBytes(16).toString('hex').slice(1)}`;
+const profileSuffix = `dev.forgesworn.wildbloom-acceptance.run${runId}`;
 const children = [], profiles = new Set();
 const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));

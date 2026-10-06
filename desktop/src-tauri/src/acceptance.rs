@@ -11,7 +11,9 @@ use tauri::{AppHandle, Manager};
 pub fn isolate(mut context: tauri::Context<tauri::Wry>) -> tauri::Context<tauri::Wry> {
     let id = std::env::var("WILDBLOOM_ACCEPTANCE_ID").expect("acceptance requires a disposable ID");
     assert!(id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()));
-    context.config_mut().identifier = format!("dev.forgesworn.wildbloom-acceptance.{id}");
+    // The Linux single-instance bus name requires every segment to start
+    // with a non-digit, even when the disposable hex ID begins with a number.
+    context.config_mut().identifier = format!("dev.forgesworn.wildbloom-acceptance.run{id}");
     context
 }
 
