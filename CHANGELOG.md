@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.4 preview - Unreleased
+
+- Automate both Mac preview signatures and Apple notarisation from an exact,
+  successful CI build using the owner's existing Keychain. Retain build,
+  signature, checksum and native upgrade evidence without exporting credentials.
+- Require a genuine upgrade from the signed 0.3.3 baseline for new Mac builds;
+  reject reinstalls, downgrades and mismatched daemon/desktop versions.
+- Allow hosted native Intel and Apple Silicon acceptance of checksum-pinned
+  signed draft candidates. Automatic updater and physical reboot acceptance
+  remain separate gates.
+
 ## 0.3.3 preview.2 (Mac signing) - 2026-10-06
 
 - Sign the existing Apple Silicon and Intel 0.3.3 binaries with Developer ID,

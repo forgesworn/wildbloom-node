@@ -20,12 +20,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bundle", type=Path, help="built bundle directory; omit to reinstall the signed baseline")
     parser.add_argument("--candidate-adhoc", action="store_true")
+    parser.add_argument("--require-upgrade", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if platform.system() != "Darwin" or platform.machine() not in BASELINES:
         parser.error("a native supported Mac is required")
     if args.candidate_adhoc and args.bundle is None:
         parser.error("ad-hoc mode requires a preview bundle")
+    if args.require_upgrade and args.bundle is None:
+        parser.error("upgrade mode requires a candidate bundle")
     candidate = None
     if args.bundle:
         candidates = list(args.bundle.rglob("*.dmg"))
@@ -50,6 +53,8 @@ def main():
                    "--allow-current-account", "--output", str(args.output)]
         if args.candidate_adhoc:
             command.append("--candidate-adhoc")
+        if args.require_upgrade:
+            command.append("--require-upgrade")
         subprocess.run(command, check=True)
 
 

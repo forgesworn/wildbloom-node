@@ -42,6 +42,11 @@ separately. Never overwrite an earlier preview's installer bytes.
 
 ## Production credentials
 
+For Mac-only previews, [the automated local signing and upgrade command](MACOS-RELEASE-AUTOMATION.md)
+uses existing Keychain authority and works independently of Windows credentials.
+It produces reviewable candidates; it does not enable automatic updates or
+establish GitHub-hosted Apple signing authority.
+
 A production release needs three different authorities:
 
 - the Wildbloom updater private key, held as encrypted GitHub secrets, signs

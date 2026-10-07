@@ -38,6 +38,8 @@ def main():
     parser.add_argument("--team-id", required=True)
     parser.add_argument("--profile", required=True)
     parser.add_argument("--keychain", type=Path)
+    parser.add_argument("--expected-version", help="refuse unexpected bundle versions before signing")
+    parser.add_argument("--expected-architecture", choices=["arm64", "x86_64"])
     parser.add_argument("--output", required=True, type=Path,
                         help="New directory; existing output is never overwritten")
     args = parser.parse_args()
@@ -112,6 +114,12 @@ def main():
         if info["CFBundleIdentifier"] != "dev.forgesworn.wildbloom-node":
             raise RuntimeError("unexpected app identifier")
         evidence["version"] = info["CFBundleShortVersionString"]
+        if args.expected_version and evidence["version"] != args.expected_version:
+            raise RuntimeError("unexpected app version; refusing to sign")
+        architectures = run("lipo", "-archs", app / "Contents/MacOS/wildbloom-desktop").split()
+        if args.expected_architecture and architectures != [args.expected_architecture]:
+            raise RuntimeError("unexpected app architecture; refusing to sign")
+        evidence["architectures"] = architectures
         macho = []
         for path in sorted(app.rglob("*")):
             if path.is_symlink():

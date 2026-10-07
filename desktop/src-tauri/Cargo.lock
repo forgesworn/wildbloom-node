@@ -5002,7 +5002,7 @@ dependencies = [
 
 [[package]]
 name = "wildbloom-desktop"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "fs2",
  "reqwest",
