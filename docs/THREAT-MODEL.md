@@ -70,7 +70,9 @@
   and retrieval do not depend on a relay once endpoints are known.
 - Server-side encryption is not supplied.  Applications such as Wildbloom must
   encrypt before upload when confidentiality matters.
-- There is no automatic replica discovery or remote custody challenge. The
+- Trusted signed server-list discovery does not grant replication authority.
+  Optional [fresh full-read audits](STORAGE-AUDITS.md) establish present
+  retrievability, not continuous custody or separate physical storage. The
   optional headless coordinator counts only complete bytes verified during its
   current pass at explicitly configured targets. Declared owner status and
   failure groups do not prove physical independence or future custody. Local

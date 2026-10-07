@@ -197,7 +197,8 @@ and macOS CI matrix remain the named release gates.
 Shelter Kit 0.5.0 adds a separate protected `paid` tier. Durable bounded sale
 holds reserve capacity before payment is offered; a trusted operator integration
 activates a signer's allowance only after its own authoritative settlement.
-Node has no checkout or settlement adapter yet. Paying an admission fee still
+The opt-in [checkout](CHECKOUT.md) uses Phoenixd and LNURLcash receiving adapters.
+Paying an admission fee still
 does not promote a guest claim or create a paid allowance automatically.
 
 Full paid ceilings and live holds constrain later sales, owner writes and quota

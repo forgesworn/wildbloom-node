@@ -85,8 +85,10 @@ session remains for live browser media rather than storage.
   runners, including Tor bootstrap, Blossom health, single-instance behaviour,
   child cleanup and uninstall.
 
-There is no proof-of-storage protocol, payment checkout or automatic discovery of
-strangers willing to hold data. The optional coordinator reports recently
+Opt-in [direct operator checkout](docs/CHECKOUT.md) and
+[private full-read storage audits](docs/STORAGE-AUDITS.md) are available in this
+source. The browser discovers recommendations from trusted signed server lists;
+it does not automatically choose strangers to hold data. The optional coordinator reports recently
 verified configured failure groups; operator declarations do not prove physical
 independence or future retention. Local repair can restore a damaged copy only
 when the node already recorded a verified source which is still online.  Those
@@ -265,9 +267,9 @@ If this is useful, sponsor [TheCryptoDonkey on GitHub](https://github.com/sponso
 ### Paid-storage core prerelease
 
 The daemon pins Shelter Kit `v0.5.0`, which adds schema-6 protected capacity
-allowances and durable sale holds. No checkout endpoint, receiving wallet or
-payment rail is enabled. Allowance activation is a trusted operator integration
-API, not proof of payment. See [the paid core contract](https://github.com/forgesworn/shelter-kit/blob/v0.5.0/PAID-STORAGE.md).
+allowances and durable sale holds. An explicit `--checkout-profile` enables
+Lightning and LNURLcash checkout with authoritative receiving checks. It is off
+by default and requires operator-owned credentials; see [setup and limitations](docs/CHECKOUT.md). See [the paid core contract](https://github.com/forgesworn/shelter-kit/blob/v0.5.0/PAID-STORAGE.md).
 
 Back up the data directory before upgrading. Schema 6 cannot be reopened with
 the previous schema-5 core; do not downgrade by changing the schema version.
