@@ -40,8 +40,12 @@ until those credentials are provisioned; this command automates local signing.
    app profiles or logs. Do not replace published installer bytes.
 6. Dispatch `macos-install.yml` with `release_tag`, `arm64_sha256` and
    `intel_sha256` copied from the verified output. Both native hosted runners
-   fetch the draft using their read-only token, verify the exact bytes and
-   exercise signed baseline-to-candidate upgrades. Retain both reports and
+   receive checksum-verified artifacts from a separate draft-fetch job and
+   exercise signed baseline-to-candidate upgrades. GitHub hides drafts from
+   read-only tokens, so only the fetch-only Linux job has `contents: write`;
+   it has no checkout and executes no candidate code. Mac runners keep
+   read-only permissions, recheck the bytes and have no release token in the
+   app's environment. Retain both reports and
    workflow/source references before publishing a preview.
 
 The upgrade assertion compares numeric versions, checks the daemon version
