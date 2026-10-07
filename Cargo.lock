@@ -1468,9 +1468,9 @@ dependencies = [
 
 [[package]]
 name = "nostr"
-version = "0.45.4"
+version = "0.45.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67bacf4195a119bc55d576ec6b54cc103723cb46fff5f907b8bdac8fd29ac4a0"
+checksum = "38ca5c25a6df8d4d78fdf39b42792438f6ce22b4809ccbfdb27582ed9ca45407"
 dependencies = [
  "base64 0.22.1",
  "bech32 0.12.0",
@@ -2340,7 +2340,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
