@@ -34,6 +34,20 @@ pub(crate) struct Record {
     pub payment_hash: Option<String>,
     pub rotation: Option<Rotation>,
 }
+fn validate_existing_file(metadata: &fs::Metadata) -> Result<(), Error> {
+    if !metadata.is_file() {
+        return Err(Error::Invalid);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(Error::Invalid);
+        }
+    }
+    Ok(())
+}
+
 impl Ledger {
     pub fn open(directory: &Path) -> Result<Self, Error> {
         wildbloom_private_state::private_directory(directory)?;
@@ -50,16 +64,7 @@ impl Ledger {
         let open_private = |name: &str| -> Result<File, Error> {
             let path = directory.join(name);
             if let Ok(metadata) = fs::symlink_metadata(&path) {
-                if !metadata.is_file() {
-                    return Err(Error::Invalid);
-                }
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    if metadata.permissions().mode() & 0o077 != 0 {
-                        return Err(Error::Invalid);
-                    }
-                }
+                validate_existing_file(&metadata)?;
             }
             let mut options = OpenOptions::new();
             options.read(true).write(true).create(true).truncate(false);
@@ -88,16 +93,7 @@ impl Ledger {
         ] {
             let path = directory.join(name);
             if let Ok(metadata) = fs::symlink_metadata(&path) {
-                if !metadata.is_file() {
-                    return Err(Error::Invalid);
-                }
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    if metadata.permissions().mode() & 0o077 != 0 {
-                        return Err(Error::Invalid);
-                    }
-                }
+                validate_existing_file(&metadata)?;
             }
         }
         let db = Connection::open(directory.join("checkout.sqlite3"))?;
