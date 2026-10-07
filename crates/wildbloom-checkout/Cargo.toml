@@ -1,0 +1,40 @@
+[package]
+name = "wildbloom-checkout"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+wildbloom-private-state = { path = "../private-state" }
+tower-http = { version = "0.7.1", features = ["cors"] }
+axum.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+clap.workspace = true
+base64.workspace = true
+fs2.workspace = true
+hex.workspace = true
+nostr.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+url.workspace = true
+wildbloom-core.workspace = true
+rusqlite = { version = "0.40.0", features = ["bundled"] }
+async-trait = "0.1"
+lightning-invoice = "=0.34.1"
+toll-booth = { git = "https://github.com/forgesworn/toll-booth-rs", rev = "acd8b1495b4033fcbf3156b9f32d70fcabec74fa", default-features = false }
+lnurlcash-core = { git = "https://github.com/lnurlcash/lnurlcash-core", rev = "adc9c475cf7a7cdd9ac09a059347d0aaae287995", default-features = false }
+
+[dev-dependencies]
+futures-util.workspace = true
+tempfile.workspace = true
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+
+bitcoin = "0.32"
+lightning-types = "0.3.5"

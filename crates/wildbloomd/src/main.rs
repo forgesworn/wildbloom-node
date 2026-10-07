@@ -7,6 +7,7 @@ use wildbloom_core::{
     router,
 };
 
+mod proofs;
 mod replicas;
 mod tor;
 
@@ -61,6 +62,14 @@ struct Cli {
     /// Persistent data directory.
     #[arg(long, env = "WILDBLOOM_DATA_DIR")]
     data_dir: Option<PathBuf>,
+
+    /// Private operator checkout profile; enables direct-to-operator Lightning/LNURLcash sales.
+    #[arg(long, env = "WILDBLOOM_CHECKOUT_PROFILE", requires = "no_tor")]
+    checkout_profile: Option<PathBuf>,
+
+    /// Enable bounded authenticated full-read storage challenges (not continuous-retention proofs).
+    #[arg(long, env = "WILDBLOOM_STORAGE_PROOFS")]
+    storage_proofs: bool,
 
     /// Total bytes available for stored blobs.
     #[arg(
@@ -289,7 +298,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::time::Duration::from_secs(cli.repair_interval),
         ));
     }
-    axum::serve(listener, router(state))
+    let mut routes = router(state.clone());
+    if cli.storage_proofs {
+        routes = routes.merge(proofs::router(
+            state.store().clone(),
+            public_url.to_string(),
+        ));
+    }
+    if let Some(profile) = cli.checkout_profile {
+        let checkout = wildbloom_checkout::RuntimeProfile::read(&profile)
+            .and_then(|profile| profile.open(state.store().clone(), public_url.as_str()))
+            .map_err(|error| error.to_string())?;
+        routes = routes.merge(checkout);
+    }
+    axum::serve(listener, routes)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     if let Some(tor) = tor {
