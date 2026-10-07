@@ -5,33 +5,112 @@ on:
     paths:
       - 'scripts/accept-desktop-macos*'
       - 'scripts/test-accept-desktop-macos.py'
+      - 'scripts/*release-macos-preview.py'
       - '.github/workflows/macos-install.yml'
   push:
     branches: [main]
     paths:
       - 'scripts/accept-desktop-macos*'
       - 'scripts/test-accept-desktop-macos.py'
+      - 'scripts/*release-macos-preview.py'
       - '.github/workflows/macos-install.yml'
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Optional signed preview tag (including drafts); empty tests baseline reinstall
+        type: string
+      arm64_sha256:
+        description: Exact signed Apple Silicon DMG checksum when testing a release
+        type: string
+      intel_sha256:
+        description: Exact signed Intel DMG checksum when testing a release
+        type: string
 
 permissions:
   contents: read
 
 jobs:
+  candidate:
+    # GitHub hides drafts from contents:read tokens. Keep the write-capable
+    # token in a fetch-only job: no checkout and no candidate code execution.
+    name: Fetch signed draft (${{ matrix.arch }})
+    if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        arch: [aarch64, x64]
+    steps:
+      - name: Fetch and checksum the exact draft package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          CANDIDATE_SHA256: ${{ matrix.arch == 'aarch64' && inputs.arm64_sha256 || inputs.intel_sha256 }}
+          CANDIDATE_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-preview\.[0-9]+$ ]]
+          [[ "$CANDIDATE_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          candidate_dir="$RUNNER_TEMP/signed-candidate"
+          mkdir "$candidate_dir"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern "*_${CANDIDATE_ARCH}-signed.dmg" --dir "$candidate_dir"
+          candidates=("$candidate_dir/"*.dmg)
+          test "${#candidates[@]}" -eq 1
+          test "$(sha256sum "${candidates[0]}" | cut -d ' ' -f 1)" = "$CANDIDATE_SHA256"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: signed-candidate-${{ matrix.arch }}
+          path: ${{ runner.temp }}/signed-candidate/*.dmg
+          if-no-files-found: error
+          retention-days: 1
+
   installed:
+    needs: candidate
+    if: always() && (needs.candidate.result == 'success' || needs.candidate.result == 'skipped')
     name: Signed installation (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, macos-15-intel]
+        include:
+          - os: macos-latest
+            arch: aarch64
+          - os: macos-15-intel
+            arch: x64
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Verify refusal of existing operator state and tampered inputs
-        run: python3 scripts/test-accept-desktop-macos.py
+        run: |
+          python3 scripts/test-accept-desktop-macos.py
+          python3 scripts/test-release-macos-preview.py
       - name: Exercise checksum-pinned public signed DMG on a fresh runner
+        if: inputs.release_tag == ''
         run: python3 scripts/accept-desktop-macos-bundle.py --output "$RUNNER_TEMP/macos-install.json"
+      - name: Verify and upgrade to the exact signed release candidate
+        if: inputs.release_tag != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: signed-candidate-${{ matrix.arch }}
+          path: ${{ runner.temp }}/signed-candidate
+      - name: Exercise the checksum-pinned signed upgrade without a release token
+        if: inputs.release_tag != ''
+        env:
+          CANDIDATE_SHA256: ${{ matrix.arch == 'aarch64' && inputs.arm64_sha256 || inputs.intel_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          candidate_dir="$RUNNER_TEMP/signed-candidate"
+          candidates=("$candidate_dir/"*.dmg)
+          test "${#candidates[@]}" -eq 1
+          test "$(shasum -a 256 "${candidates[0]}" | cut -d ' ' -f 1)" = "$CANDIDATE_SHA256"
+          python3 scripts/accept-desktop-macos-bundle.py --bundle "$candidate_dir" \
+            --require-upgrade --output "$RUNNER_TEMP/macos-install.json"
       - name: Retain sanitised installation evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -16,6 +16,14 @@ spec.loader.exec_module(acceptance)
 
 
 class RefusalTests(unittest.TestCase):
+    def test_upgrade_rejects_reinstall_downgrade_and_invalid_versions(self):
+        for baseline, candidate in [("0.3.3", "0.3.3"), ("0.3.4", "0.3.3"),
+                                    ("0.3.3", "0.3.4-preview.1"), ("0.3.3", "00.3.4")]:
+            with self.subTest(baseline=baseline, candidate=candidate), self.assertRaises(RuntimeError):
+                acceptance.verify_upgrade(baseline, candidate)
+        acceptance.verify_upgrade("0.3.3", "0.3.4")
+        acceptance.verify_upgrade("0.9.9", "0.10.0")
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)

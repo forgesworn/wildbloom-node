@@ -43,6 +43,15 @@ def verify_input(path, expected):
     require(path.is_file() and digest(path) == expected, "DMG checksum mismatch")
 
 
+def verify_upgrade(baseline, candidate):
+    # Release bundle versions are deliberately numeric, not lexical comparisons.
+    pattern = r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
+    require(re.fullmatch(pattern, baseline) and re.fullmatch(pattern, candidate),
+            "upgrade requires numeric major.minor.patch bundle versions")
+    require(tuple(map(int, candidate.split("."))) > tuple(map(int, baseline.split("."))),
+            "upgrade candidate must be newer than baseline")
+
+
 def processes():
     rows = {}
     for line in run("/bin/ps", "-axww", "-o", "pid=,ppid=,command=").splitlines():
@@ -87,6 +96,8 @@ def main():
                         help="explicitly permit disposable state in this account; existing state is always refused")
     parser.add_argument("--candidate-adhoc", action="store_true",
                         help="preview build only: check code signatures without claiming Developer ID trust")
+    parser.add_argument("--require-upgrade", action="store_true",
+                        help="refuse same-version reinstalls and downgrades")
     args = parser.parse_args()
     require(platform.system() == "Darwin", "macOS is required")
     # Validate both inputs before any app/profile mutation.
@@ -175,6 +186,8 @@ def main():
             run("ditto", source, installed)
             run("codesign", "--verify", "--deep", "--strict", installed)
             daemon = installed / "Contents/MacOS/wildbloomd"
+            require(run(daemon, "--version").strip() == "wildbloomd " + info["CFBundleShortVersionString"],
+                    "bundled daemon version differs from desktop version")
             require("--receipt-id" in run(daemon, "replicas", "pool-inspect", "--help"), "missing pool inspection")
             require("--stop-on-stdin" in run(daemon, "replicas", "pool-repair", "--help"), "missing owner repair")
             tor = installed / "Contents/Resources/tor-runtime/tor/tor"
@@ -265,6 +278,9 @@ def main():
         profile.mkdir(mode=0o700)
         profile_owned = True
         evidence["baseline_version"] = install(args.baseline)
+        if args.require_upgrade:
+            verify_upgrade(evidence["baseline_version"], evidence["candidate_version"])
+            passed("Candidate desktop and daemon are strictly newer than the baseline")
         save_settings("tor")
         launch()
         ready("tor")
