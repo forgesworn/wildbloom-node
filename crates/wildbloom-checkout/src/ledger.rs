@@ -1,4 +1,4 @@
-use crate::{Error, Order, Quote, State, digest};
+use crate::{Error, Order, Quote, RefundReceipt, RefundStatus, State, digest};
 use fs2::FileExt;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -33,6 +33,32 @@ pub(crate) struct Record {
     pub request: String,
     pub payment_hash: Option<String>,
     pub rotation: Option<Rotation>,
+    pub refund: Option<RefundJournal>,
+}
+// Deliberately no Debug: this journal contains a spendable note and invoice.
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct RefundJournal {
+    pub destination: String,
+    pub invoice: String,
+    pub payment_hash: String,
+    pub receiver_verify: Option<String>,
+    pub request_url: String,
+    pub issuer_verify: Option<String>,
+    pub refunded_at: Option<u64>,
+}
+impl RefundJournal {
+    fn public(&self, amount_msat: u64) -> RefundReceipt {
+        RefundReceipt {
+            status: if self.refunded_at.is_some() {
+                RefundStatus::Completed
+            } else {
+                RefundStatus::Pending
+            },
+            amount_msat,
+            payment_hash: self.payment_hash.clone(),
+            refunded_at: self.refunded_at,
+        }
+    }
 }
 fn validate_existing_file(metadata: &fs::Metadata) -> Result<(), Error> {
     if !metadata.is_file() {
@@ -99,20 +125,29 @@ impl Ledger {
         let db = Connection::open(directory.join("checkout.sqlite3"))?;
         db.busy_timeout(std::time::Duration::from_secs(5))?;
         let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 1 {
+        if version > 2 {
             return Err(Error::Invalid);
         }
         db.execute_batch(
-            "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;
-            BEGIN IMMEDIATE;
-            CREATE TABLE IF NOT EXISTS orders (
-                id TEXT PRIMARY KEY NOT NULL, signer TEXT NOT NULL, request TEXT NOT NULL,
-                quote TEXT NOT NULL, digest TEXT NOT NULL, state TEXT NOT NULL,
-                invoice TEXT, payment_hash TEXT UNIQUE, rotation TEXT, note_id TEXT UNIQUE,
-                settlement TEXT UNIQUE, receipt TEXT
-            );
-            PRAGMA user_version=1; COMMIT;",
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;",
         )?;
+        if version == 0 {
+            db.execute_batch(
+                "BEGIN IMMEDIATE;
+                CREATE TABLE IF NOT EXISTS orders (
+                    id TEXT PRIMARY KEY NOT NULL, signer TEXT NOT NULL, request TEXT NOT NULL,
+                    quote TEXT NOT NULL, digest TEXT NOT NULL, state TEXT NOT NULL,
+                    invoice TEXT, payment_hash TEXT UNIQUE, rotation TEXT, note_id TEXT UNIQUE,
+                    settlement TEXT UNIQUE, receipt TEXT, refund TEXT
+                );
+                PRAGMA user_version=2; COMMIT;",
+            )?;
+        } else if version == 1 {
+            db.execute_batch(
+                "BEGIN IMMEDIATE; ALTER TABLE orders ADD COLUMN refund TEXT;
+                PRAGMA user_version=2; COMMIT;",
+            )?;
+        }
         for name in [
             "checkout.sqlite3",
             "checkout.sqlite3-wal",
@@ -161,17 +196,32 @@ impl Ledger {
             .collect()
     }
     pub(crate) fn get(&self, id: &str) -> Result<Option<Record>, Error> {
-        let row=self.db()?.query_row("SELECT request,quote,digest,state,invoice,payment_hash,rotation,receipt FROM orders WHERE id=?1",[id],|r| {
-            Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,Option<String>>(6)?,r.get::<_,Option<String>>(7)?))
+        let row=self.db()?.query_row("SELECT request,quote,digest,state,invoice,payment_hash,rotation,receipt,refund FROM orders WHERE id=?1",[id],|r| {
+            Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,Option<String>>(6)?,r.get::<_,Option<String>>(7)?,r.get::<_,Option<String>>(8)?))
         }).optional()?;
         row.map(
-            |(request, quote, quote_digest, state, invoice, payment_hash, rotation, receipt)| {
+            |(
+                request,
+                quote,
+                quote_digest,
+                state,
+                invoice,
+                payment_hash,
+                rotation,
+                receipt,
+                refund,
+            )| {
+                let quote: Quote = serde_json::from_str(&quote)?;
+                let refund: Option<RefundJournal> =
+                    refund.map(|s| serde_json::from_str(&s)).transpose()?;
                 Ok(Record {
                     request,
                     payment_hash,
                     rotation: rotation.map(|s| serde_json::from_str(&s)).transpose()?,
+                    refund: refund.clone(),
                     order: Order {
-                        quote: serde_json::from_str(&quote)?,
+                        refund: refund.map(|r| r.public(quote.offer.price_msat)),
+                        quote,
                         quote_digest,
                         state: serde_json::from_value(serde_json::Value::String(state))?,
                         invoice,
@@ -252,6 +302,47 @@ impl Ledger {
         if self.db()?.execute(
             "UPDATE orders SET state='active',receipt=?1 WHERE id=?2 AND state='settled'",
             params![serde_json::to_string(receipt)?, id],
+        )? != 1
+        {
+            return Err(Error::Conflict);
+        }
+        Ok(())
+    }
+    pub(crate) fn start_refund(&self, id: &str, refund: &RefundJournal) -> Result<(), Error> {
+        if self.db()?.execute(
+            "UPDATE orders SET refund=?1 WHERE id=?2 AND state='refund_required' AND refund IS NULL",
+            params![serde_json::to_string(refund)?, id],
+        )? != 1
+        {
+            return Err(Error::Conflict);
+        }
+        Ok(())
+    }
+    pub(crate) fn update_refund(&self, id: &str, refund: &RefundJournal) -> Result<(), Error> {
+        let current = self
+            .get(id)?
+            .and_then(|record| record.refund)
+            .ok_or(Error::Conflict)?;
+        if current.payment_hash != refund.payment_hash || current.request_url != refund.request_url
+        {
+            return Err(Error::Conflict);
+        }
+        if self.db()?.execute(
+            "UPDATE orders SET refund=?1 WHERE id=?2 AND state='refund_required'",
+            params![serde_json::to_string(refund)?, id],
+        )? != 1
+        {
+            return Err(Error::Conflict);
+        }
+        Ok(())
+    }
+    pub(crate) fn complete_refund(&self, id: &str, refund: &RefundJournal) -> Result<(), Error> {
+        if refund.refunded_at.is_none() {
+            return Err(Error::Invalid);
+        }
+        if self.db()?.execute(
+            "UPDATE orders SET state='refunded',refund=?1 WHERE id=?2 AND state='refund_required'",
+            params![serde_json::to_string(refund)?, id],
         )? != 1
         {
             return Err(Error::Conflict);

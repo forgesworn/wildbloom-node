@@ -11,13 +11,13 @@ mod service;
 mod transport;
 pub use phoenixd::Phoenixd;
 pub use profile::{RuntimeProfile, read_private_file};
-pub use transport::{Destination, HttpNoteTransport};
+pub use transport::{Destination, HttpNoteTransport, HttpRefundTransport};
 
 pub use auth::{Principal, authenticate};
 pub use contract::*;
 pub use http::router;
 pub use ledger::Ledger;
-pub use service::{Checkout, NoteTransport, SensitiveUrl, TransportFailure};
+pub use service::{Checkout, NoteTransport, RefundTransport, SensitiveUrl, TransportFailure};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

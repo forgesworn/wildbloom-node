@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 use wildbloom_checkout::{
-    Checkout, Config, Destination, Error, HttpNoteTransport, Ledger, Phoenixd,
+    Checkout, Config, Destination, Error, HttpNoteTransport, HttpRefundTransport, Ledger, Phoenixd,
 };
 use wildbloom_core::{Store, StoreConfig};
 
@@ -38,6 +38,15 @@ enum Command {
         order: String,
         #[arg(long)]
         profile: PathBuf,
+    },
+    /// Send or resume the one journalled full LNURLcash refund for this order.
+    Refund {
+        order: String,
+        #[arg(long)]
+        profile: PathBuf,
+        /// Confirms that the operator reviewed the order's customer refund address.
+        #[arg(long)]
+        confirm_destination: bool,
     },
 }
 #[derive(Deserialize)]
@@ -104,6 +113,9 @@ fn open(profile: &Path, ledger: Ledger) -> Result<(Checkout, Option<Arc<Phoenixd
         max_blob_bytes: profile.max_blob_bytes,
     })
     .map_err(|_| Error::Internal)?;
+    let refund_transport = Arc::new(HttpRefundTransport::new(
+        profile.checkout.allow_loopback_http,
+    ));
     let checkout = Checkout::new(
         profile.checkout,
         ledger,
@@ -112,7 +124,8 @@ fn open(profile: &Path, ledger: Ledger) -> Result<(Checkout, Option<Arc<Phoenixd
             .clone()
             .map(|p| p as Arc<dyn toll_booth::backends::LightningBackend>),
         notes,
-    )?;
+    )?
+    .with_refunds(refund_transport);
     Ok((checkout, phoenix))
 }
 async fn run(args: Args) -> Result<(), Error> {
@@ -138,6 +151,18 @@ async fn run(args: Args) -> Result<(), Error> {
                 .await?;
             checkout.recover_invoice(&order, invoice).await?;
             println!("original invoice attached; settlement check still required");
+        }
+        Command::Refund {
+            order,
+            profile,
+            confirm_destination,
+        } => {
+            if !confirm_destination {
+                return Err(Error::Invalid);
+            }
+            let (checkout, _) = open(&profile, ledger)?;
+            let result = checkout.refund(&order).await?;
+            println!("{}", serde_json::to_string(&result)?);
         }
     }
     Ok(())
