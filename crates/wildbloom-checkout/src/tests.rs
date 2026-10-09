@@ -1800,6 +1800,31 @@ async fn checkout_http_rate_limit_has_static_no_store_responses() {
     assert_eq!(response.headers()["cache-control"], "no-store");
 }
 
+#[tokio::test]
+async fn checkout_http_advertises_bound_lnurlcash_refunds() {
+    use axum::{
+        body::{Body, to_bytes},
+        http::Request,
+    };
+    use tower::ServiceExt;
+    let fixture = Fixture::new();
+    let response = router(fixture.checkout)
+        .oneshot(
+            Request::builder()
+                .uri("/checkout/v1/offers")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let value: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
+    assert_eq!(
+        value["features"],
+        serde_json::json!(["lnurlcash_refunds_v1"])
+    );
+}
+
 #[test]
 fn offers_fit_the_browser_transport_without_precision_loss() {
     let mut c = config();

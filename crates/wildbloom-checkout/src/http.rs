@@ -77,7 +77,7 @@ async fn no_store(mut response: Response) -> Response {
 }
 async fn offers(State(c): State<Checkout>) -> impl IntoResponse {
     axum::Json(
-        serde_json::json!({"version":1,"seller_id":c.config().seller_id,"seller_name":c.config().seller_name,"node_origin":c.config().origin,"network":c.config().network,"offers":c.config().offers,"rails":c.rails(),"issuers":c.config().issuers}),
+        serde_json::json!({"version":1,"seller_id":c.config().seller_id,"seller_name":c.config().seller_name,"node_origin":c.config().origin,"network":c.config().network,"offers":c.config().offers,"rails":c.rails(),"issuers":c.config().issuers,"features":["lnurlcash_refunds_v1"]}),
     )
 }
 #[derive(Deserialize)]
