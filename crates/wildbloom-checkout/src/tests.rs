@@ -10,7 +10,7 @@ use nostr::prelude::{EventBuilder, FinalizeEvent, Keys, Kind, Tag, Timestamp};
 use std::{
     sync::{
         Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -103,6 +103,7 @@ fn request(id: &str, rail: Rail) -> QuoteRequest {
         rail,
         issuer_id: (rail == Rail::Lnurlcash).then(|| "test-mint".into()),
         renews: None,
+        refund_to: None,
     }
 }
 fn invoice(amount: u64, network: Currency, expiry: u64, preimage: [u8; 32]) -> Invoice {
@@ -498,6 +499,8 @@ struct Mint {
     mode: MintMode,
     requests: Mutex<Vec<String>>,
     db: std::path::PathBuf,
+    refund_settled: Mutex<Option<Arc<AtomicBool>>>,
+    drop_refund_response: AtomicBool,
 }
 #[async_trait::async_trait]
 impl NoteTransport for Mint {
@@ -507,6 +510,30 @@ impl NoteTransport for Mint {
         let u = url::Url::parse(url.expose()).unwrap();
         let pairs: std::collections::BTreeMap<_, _> = u.query_pairs().collect();
         if u.path() == "/callback" {
+            if let Some(pr) = pairs.get("pr") {
+                let db = rusqlite::Connection::open(&self.db).unwrap();
+                let journal: String = db
+                    .query_row(
+                        "SELECT refund FROM orders WHERE state='refund_required'",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert!(journal.contains(pr.as_ref()));
+                self.refund_settled
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .store(true, Ordering::SeqCst);
+                if self.drop_refund_response.swap(false, Ordering::SeqCst) {
+                    return Err(TransportFailure);
+                }
+                return Ok(serde_json::to_vec(&serde_json::json!({
+                    "status":"OK", "pr":pr, "verify":"https://mint.example/verify/refund"
+                }))
+                .unwrap());
+            }
             // Assert the replacement and exact request are durable BEFORE money moves.
             let db = rusqlite::Connection::open(&self.db).unwrap();
             let raw: String = db
@@ -571,6 +598,8 @@ fn notes(f: &Fixture, mode: MintMode) -> (Checkout, Arc<Mint>) {
         mode,
         requests: Mutex::new(vec![]),
         db: f.root.path().join("checkout/checkout.sqlite3"),
+        refund_settled: Mutex::new(None),
+        drop_refund_response: AtomicBool::new(false),
     });
     (
         Checkout::new(
@@ -583,6 +612,119 @@ fn notes(f: &Fixture, mode: MintMode) -> (Checkout, Arc<Mint>) {
         .unwrap(),
         mint,
     )
+}
+
+struct RefundNet {
+    settled: Arc<AtomicBool>,
+    invoice: Invoice,
+    requests: Mutex<Vec<String>>,
+}
+#[async_trait::async_trait]
+impl RefundTransport for RefundNet {
+    async fn get(&self, url: &SensitiveUrl) -> Result<Vec<u8>, TransportFailure> {
+        self.requests.lock().unwrap().push(url.expose().into());
+        let parsed = url::Url::parse(url.expose()).unwrap();
+        let value = match (parsed.host_str().unwrap(), parsed.path()) {
+            ("buyer.example", "/.well-known/lnurlp/customer") => serde_json::json!({
+                "tag":"payRequest", "callback":"https://buyer.example/callback",
+                "minSendable":10_000, "maxSendable":10_000, "metadata":"[]"
+            }),
+            ("buyer.example", "/callback") => serde_json::json!({
+                "pr":self.invoice.bolt11, "verify":"https://buyer.example/verify/refund"
+            }),
+            ("buyer.example" | "mint.example", "/verify/refund") => serde_json::json!({
+                "settled":self.settled.load(Ordering::SeqCst), "pr":self.invoice.bolt11,
+                "preimage":self.settled.load(Ordering::SeqCst).then(|| hex::encode([9;32]))
+            }),
+            _ => return Err(TransportFailure),
+        };
+        Ok(serde_json::to_vec(&value).unwrap())
+    }
+}
+
+#[tokio::test]
+async fn failed_lnurlcash_fulfilment_refunds_once_from_the_journalled_asset() {
+    let f = Fixture::new();
+    let (checkout, mint) = notes(&f, MintMode::RecoverReplacement);
+    let settled = Arc::new(AtomicBool::new(false));
+    *mint.refund_settled.lock().unwrap() = Some(settled.clone());
+    mint.drop_refund_response.store(true, Ordering::SeqCst);
+    let refund_net = Arc::new(RefundNet {
+        settled,
+        invoice: invoice(10_000, Currency::Bitcoin, 300, [9; 32]),
+        requests: Mutex::new(Vec::new()),
+    });
+    let checkout = checkout.with_refunds(refund_net.clone());
+    let p = principal(1);
+    let mut request = request("automatic-refund", Rail::Lnurlcash);
+    request.refund_to = Some("customer@buyer.example".into());
+    let order = checkout.quote(&p, request).await.unwrap();
+    assert!(matches!(
+        checkout
+            .lnurlcash(&p, &order.quote.order_id, &order.quote_digest, &note())
+            .await,
+        Err(Error::Pending)
+    ));
+    rusqlite::Connection::open(f.root.path().join("storage/wildbloom.sqlite3"))
+        .unwrap()
+        .execute(
+            "UPDATE paid_sales SET expires=?1 WHERE id=?2",
+            rusqlite::params![(now().unwrap() - 1) as i64, order.quote.order_id],
+        )
+        .unwrap();
+    assert_eq!(
+        checkout
+            .check(&p, &order.quote.order_id, &order.quote_digest)
+            .await
+            .unwrap()
+            .state,
+        State::RefundRequired
+    );
+    assert!(matches!(
+        checkout.refund(&order.quote.order_id).await,
+        Err(Error::Pending)
+    ));
+    let pending = checkout.order(&p, &order.quote.order_id).unwrap();
+    assert_eq!(pending.state, State::RefundRequired);
+    assert_eq!(pending.refund.unwrap().status, RefundStatus::Pending);
+    let melts = mint
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|request| request.contains("pr="))
+        .count();
+    let refunded = checkout.refund(&order.quote.order_id).await.unwrap();
+    assert_eq!(refunded.state, State::Refunded);
+    let receipt = refunded.refund.unwrap();
+    assert_eq!(receipt.status, RefundStatus::Completed);
+    assert_eq!(receipt.amount_msat, 10_000);
+    assert!(receipt.refunded_at.is_some());
+    assert_eq!(
+        mint.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|request| request.contains("pr="))
+            .count(),
+        melts,
+        "settlement proof completes a lost-response refund without spending twice"
+    );
+    let issuer_requests = mint.requests.lock().unwrap().len();
+    let refund_requests = refund_net.requests.lock().unwrap().len();
+    assert_eq!(
+        checkout.refund(&order.quote.order_id).await.unwrap().state,
+        State::Refunded
+    );
+    assert_eq!(mint.requests.lock().unwrap().len(), issuer_requests);
+    assert_eq!(refund_net.requests.lock().unwrap().len(), refund_requests);
+    let public =
+        serde_json::to_string(&checkout.order(&p, &order.quote.order_id).unwrap()).unwrap();
+    let private = f.ledger.get(&order.quote.order_id).unwrap().unwrap();
+    let journal = private.refund.unwrap();
+    assert!(!public.contains(&journal.invoice));
+    assert!(!public.contains(&journal.request_url));
+    assert!(!public.contains(&private.rotation.unwrap().new_secret));
 }
 #[tokio::test]
 async fn lnurlcash_rotates_before_activation_and_public_state_contains_no_assets() {
@@ -763,6 +905,49 @@ fn private_ledger_lock_permissions_and_future_schema_are_enforced() {
     db.execute_batch("PRAGMA user_version=999").unwrap();
     drop(db);
     assert!(matches!(Ledger::open(&path), Err(Error::Invalid)));
+}
+#[test]
+fn version_one_checkout_migrates_in_place_for_refund_journals() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("ledger");
+    std::fs::create_dir(&path).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let database = path.join("checkout.sqlite3");
+    let db = rusqlite::Connection::open(&database).unwrap();
+    db.execute_batch(
+        "CREATE TABLE orders (
+            id TEXT PRIMARY KEY NOT NULL, signer TEXT NOT NULL, request TEXT NOT NULL,
+            quote TEXT NOT NULL, digest TEXT NOT NULL, state TEXT NOT NULL,
+            invoice TEXT, payment_hash TEXT UNIQUE, rotation TEXT, note_id TEXT UNIQUE,
+            settlement TEXT UNIQUE, receipt TEXT
+        ); PRAGMA user_version=1;",
+    )
+    .unwrap();
+    drop(db);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&database, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    drop(Ledger::open(&path).unwrap());
+    let db = rusqlite::Connection::open(database).unwrap();
+    assert_eq!(
+        db.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    let columns: Vec<String> = db
+        .prepare("PRAGMA table_info(orders)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert!(columns.contains(&"refund".into()));
 }
 #[tokio::test]
 async fn capacity_saga_recovers_and_expired_quotes_do_not_contact_backend() {

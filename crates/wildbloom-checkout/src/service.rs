@@ -1,4 +1,4 @@
-use crate::ledger::{Record, Rotation};
+use crate::ledger::{Record, RefundJournal, Rotation};
 use crate::{
     Config, Error, Ledger, Network, Order, Principal, Quote, QuoteRequest, Rail, Receipt, State,
     digest, id, now,
@@ -31,6 +31,10 @@ pub struct TransportFailure;
 pub trait NoteTransport: Send + Sync {
     async fn get(&self, url: &SensitiveUrl) -> Result<Vec<u8>, TransportFailure>;
 }
+#[async_trait::async_trait]
+pub trait RefundTransport: Send + Sync {
+    async fn get(&self, url: &SensitiveUrl) -> Result<Vec<u8>, TransportFailure>;
+}
 #[derive(Clone)]
 pub struct Checkout {
     config: Arc<Config>,
@@ -38,6 +42,7 @@ pub struct Checkout {
     store: Store,
     lightning: Option<Arc<dyn LightningBackend>>,
     notes: Option<Arc<dyn NoteTransport>>,
+    refunds: Option<Arc<dyn RefundTransport>>,
     receiving: Arc<tokio::sync::Mutex<()>>,
 }
 impl Checkout {
@@ -55,8 +60,13 @@ impl Checkout {
             store,
             lightning,
             notes,
+            refunds: None,
             receiving: Arc::new(tokio::sync::Mutex::new(())),
         })
+    }
+    pub fn with_refunds(mut self, refunds: Arc<dyn RefundTransport>) -> Self {
+        self.refunds = Some(refunds);
+        self
     }
     pub fn config(&self) -> &Config {
         &self.config
@@ -108,6 +118,9 @@ impl Checkout {
         if !id(&request.request_id)
             || !id(&request.offer_id)
             || request.renews.as_ref().is_some_and(|v| !id(v))
+            || request.refund_to.as_ref().is_some_and(|value| {
+                value.len() > 320 || !lnurlcash_core::is_lightning_address(value)
+            })
         {
             return Err(Error::Invalid);
         }
@@ -168,6 +181,7 @@ impl Checkout {
             created_at,
             expires_at,
             renews: request.renews,
+            refund_to: request.refund_to,
         };
         self.ledger.insert(&quote, &request_json)?;
         self.reserve(self.ledger.get(&order_id)?.ok_or(Error::Internal)?)
@@ -353,6 +367,20 @@ impl Checkout {
         }
         serde_json::from_slice(&bytes).map_err(|_| Error::Pending)
     }
+    async fn refund_fetch(&self, url: &str) -> Result<serde_json::Value, Error> {
+        let transport = self.refunds.as_ref().ok_or(Error::Unavailable)?;
+        let bytes = tokio::time::timeout(
+            Duration::from_secs(15),
+            transport.get(&SensitiveUrl(url.to_owned())),
+        )
+        .await
+        .map_err(|_| Error::Pending)?
+        .map_err(|_| Error::Pending)?;
+        if bytes.len() > 65536 {
+            return Err(Error::Pending);
+        }
+        serde_json::from_slice(&bytes).map_err(|_| Error::Pending)
+    }
     async fn rotate(&self, id: &str, quote: &Quote, rotation: &Rotation) -> Result<(), Error> {
         // Removed or changed issuer configuration must not silently send assets
         // to a new operator. Recovery retains the original journal in all cases.
@@ -442,6 +470,139 @@ impl Checkout {
         };
         self.check(&principal, id, &record.order.quote_digest).await
     }
+    /// Trusted local operator action, never an HTTP route. It is available only
+    /// for a settled LNURLcash order whose reserved storage could not activate.
+    /// The exact invoice and melt are journalled before the note is spent, and a
+    /// retry can only resume that same payment.
+    pub async fn refund(&self, id: &str) -> Result<Order, Error> {
+        let _guard = self.receiving.try_lock().map_err(|_| Error::Busy)?;
+        let mut record = self.ledger.get(id)?.ok_or(Error::NotFound)?;
+        if record.order.state == State::Refunded {
+            return Ok(record.order);
+        }
+        if record.order.state != State::RefundRequired || record.order.quote.rail != Rail::Lnurlcash
+        {
+            return Err(Error::Conflict);
+        }
+        let destination = record
+            .order
+            .quote
+            .refund_to
+            .clone()
+            .filter(|value| lnurlcash_core::is_lightning_address(value))
+            .ok_or(Error::Unavailable)?;
+        let rotation = record
+            .rotation
+            .as_ref()
+            .filter(|rotation| rotation.certificate.is_some())
+            .ok_or(Error::Pending)?;
+        let mut prepared_now = false;
+        if record.refund.is_none() {
+            let pay_url = lnurlcash_core::resolve_mint_input(&destination).ok_or(Error::Invalid)?;
+            let pay_body = self.refund_fetch(&pay_url).await?;
+            let pay = protocol::parse_pay_request(&pay_body).map_err(|_| Error::Pending)?;
+            same_origin(&pay_url, &pay.callback)?;
+            let amount = record.order.quote.offer.price_msat;
+            if amount < pay.min_sendable || amount > pay.max_sendable {
+                return Err(Error::Unavailable);
+            }
+            let invoice_request =
+                protocol::invoice_request(&pay.callback, amount).map_err(|_| Error::Pending)?;
+            let invoice_body = self.refund_fetch(&invoice_request.url).await?;
+            let invoice =
+                protocol::parse_invoice(&invoice_body, amount).map_err(|_| Error::Pending)?;
+            let payment_hash = validate_refund_invoice(&record.order.quote, &invoice.pr)?;
+            if let Some(verify) = invoice.verify.as_deref() {
+                same_origin(&pay_url, verify)?;
+            }
+            let request = protocol::melt_request(
+                &record
+                    .order
+                    .quote
+                    .issuer
+                    .as_ref()
+                    .ok_or(Error::Unavailable)?
+                    .callback,
+                &rotation.new_secret,
+                &invoice.pr,
+            )
+            .map_err(|_| Error::Pending)?;
+            let journal = RefundJournal {
+                destination,
+                invoice: invoice.pr,
+                payment_hash,
+                receiver_verify: invoice.verify,
+                request_url: request.url,
+                issuer_verify: None,
+                refunded_at: None,
+            };
+            self.ledger.start_refund(id, &journal)?;
+            record = self.ledger.get(id)?.ok_or(Error::Internal)?;
+            prepared_now = true;
+        }
+        let mut refund = record.refund.ok_or(Error::Internal)?;
+        if !prepared_now && self.refund_settled(&refund).await? {
+            refund.refunded_at = Some(now()?);
+            self.ledger.complete_refund(id, &refund)?;
+            return Ok(self.ledger.get(id)?.ok_or(Error::Internal)?.order);
+        }
+        let body = self.fetch(&refund.request_url).await?;
+        let response = protocol::parse_mutation(&body, MutationKind::Melt, &[], policy())
+            .map_err(|_| Error::Pending)?;
+        if response
+            .pr
+            .as_ref()
+            .is_some_and(|invoice| !same_invoice(invoice, &refund.invoice))
+        {
+            return Err(Error::Pending);
+        }
+        if let Some(verify) = response.verify {
+            let issuer = record
+                .order
+                .quote
+                .issuer
+                .as_ref()
+                .ok_or(Error::Unavailable)?;
+            same_origin(&issuer.callback, &verify)?;
+            refund.issuer_verify = Some(verify);
+            self.ledger.update_refund(id, &refund)?;
+        }
+        if !self.refund_settled(&refund).await? {
+            return Err(Error::Pending);
+        }
+        refund.refunded_at = Some(now()?);
+        self.ledger.complete_refund(id, &refund)?;
+        Ok(self.ledger.get(id)?.ok_or(Error::Internal)?.order)
+    }
+    async fn refund_settled(&self, refund: &RefundJournal) -> Result<bool, Error> {
+        for verify in [
+            refund.issuer_verify.as_ref(),
+            refund.receiver_verify.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let Ok(body) = self.refund_fetch(verify).await else {
+                continue;
+            };
+            let Ok(result) = protocol::parse_verify(&body) else {
+                continue;
+            };
+            if !same_invoice(&result.pr, &refund.invoice) {
+                return Err(Error::Pending);
+            }
+            if result.settled {
+                if let Some(preimage) = result.preimage {
+                    let bytes = hex::decode(preimage).map_err(|_| Error::Pending)?;
+                    if bytes.len() != 32 || digest(&bytes) != refund.payment_hash {
+                        return Err(Error::Pending);
+                    }
+                }
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
     /// A user action performs one bounded settlement/recovery attempt. GET status
     /// never calls this method, and constructing Checkout starts no background job.
     pub async fn check(&self, p: &Principal, id: &str, commitment: &str) -> Result<Order, Error> {
@@ -519,6 +680,41 @@ fn policy() -> Policy {
         require_signatures: true,
         require_mint_pubkey: true,
     }
+}
+fn same_origin(left: &str, right: &str) -> Result<(), Error> {
+    let left = url::Url::parse(left).map_err(|_| Error::Invalid)?;
+    let right = url::Url::parse(right).map_err(|_| Error::Invalid)?;
+    if left.origin() != right.origin()
+        || !right.username().is_empty()
+        || right.password().is_some()
+        || right.fragment().is_some()
+    {
+        return Err(Error::Invalid);
+    }
+    Ok(())
+}
+fn same_invoice(left: &str, right: &str) -> bool {
+    left.trim().eq_ignore_ascii_case(right.trim())
+}
+fn validate_refund_invoice(quote: &Quote, invoice: &str) -> Result<String, Error> {
+    if invoice.len() > 8192 {
+        return Err(Error::Pending);
+    }
+    let parsed: Bolt11Invoice = invoice.parse().map_err(|_| Error::Pending)?;
+    let currency = match quote.network {
+        Network::Bitcoin => Currency::Bitcoin,
+        Network::Testnet => Currency::BitcoinTestnet,
+        Network::Regtest => Currency::Regtest,
+    };
+    if parsed.currency() != currency
+        || parsed.amount_milli_satoshis() != Some(quote.offer.price_msat)
+        || parsed
+            .expires_at()
+            .is_none_or(|expiry| expiry.as_secs() <= now().unwrap_or(u64::MAX))
+    {
+        return Err(Error::Pending);
+    }
+    Ok(parsed.payment_hash().to_string())
 }
 fn validate_invoice(quote: &Quote, invoice: &Invoice, allow_expired: bool) -> Result<(), Error> {
     if invoice.bolt11.len() > 8192 || invoice.payment_hash.len() != 64 {

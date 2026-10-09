@@ -64,7 +64,7 @@ bodies or authorisation headers.
 Quote request example (synthetic offer):
 
 ```json
-{"request_id":"buyer-generated-unique-id","offer_id":"small","rail":"lightning","issuer_id":null,"renews":null}
+{"request_id":"buyer-generated-unique-id","offer_id":"small","rail":"lnurlcash","issuer_id":"issuer","renews":null,"refund_to":"buyer@example.com"}
 ```
 
 `request_id` and offer IDs contain 1–128 ASCII letters, digits, `_` or `-`.
@@ -72,10 +72,14 @@ LNURLcash uses `"rail":"lnurlcash"` and a configured `issuer_id`. Each order fix
 one rail. The server derives its order ID from signer and request ID. Identical
 retries return the stored quote, even after pricing changes; different terms
 under the same request ID conflict. A new price requires a new request and consent.
+`refund_to` is an optional Lightning Address sent only to the selected node. It
+is bound into the immutable quote and enables the local operator refund command
+for an LNURLcash payment that settles but cannot activate storage. Older clients
+may omit it; those orders continue to require direct manual resolution.
 
 The version-1 quote contains seller identity/name, exact node origin, buyer's
 public key, network, rail, pinned issuer endpoint/callback/key, full offer,
-creation time, expiry and optional renewal target. The offer has a positive revision and fixes ciphertext
+creation time, expiry, optional renewal target and optional refund destination. The offer has a positive revision and fixes ciphertext
 capacity, duration, grace, integer milli-satoshi price, delivery allowance and
 explicit delivery, retention and refund policies. Prices must be whole sats for
 this initial two-rail integration. Holds last 60 seconds to 24 hours. There is
@@ -92,8 +96,10 @@ Public order state includes the immutable quote, consent digest, state, optional
 Lightning invoice and activated allowance receipt. Receipts include the stable
 allowance ID, capacity and activation/write/retention deadlines. They prove local
 activation, not independent replication, future custody or an independently
-verifiable payment. No input note, replacement spend, rotation URL or Lightning
-preimage is returned. Unknown orders and another signer's orders both return 404.
+verifiable payment. A refund receipt exposes only pending/completed status,
+amount, payment hash and completion time to the authenticated buyer. No input
+note, replacement spend, refund invoice, mutation URL or Lightning preimage is
+returned. Unknown orders and another signer's orders both return 404.
 
 ## Durable receiving and recovery
 
@@ -153,9 +159,15 @@ background polls. The caller must request recovery; pending operations can stay
 pending indefinitely if the issuer/backend cannot reconcile them. Even after
 quote expiry, an explicit check may reconcile/replay the original uncertain
 mutation. A late receipt that cannot activate its hold becomes `refund_required`,
-with the asset retained for the seller's direct refund handling. There is no
-automatic refund, customer balance or payout route. Do not redeem pending notes
-out of band before reconciliation.
+with the asset retained for the seller's direct refund handling. For an
+LNURLcash order with `refund_to`, the stopped-node operator tool resolves that
+address, requests one exact-value invoice, journals the invoice and exact melt
+before spending, and marks the order `refunded` only after matching settlement
+evidence. A lost response resumes from the journal and never creates a second
+invoice or changes the destination. This is an explicit operator action, not
+background spending, a customer balance or a payout service. Lightning-rail
+and address-free orders remain manual. Do not redeem pending notes out of band
+before reconciliation.
 
 Restore checkout and Shelter state as a consistent pair. Never transplant an
 order database to an unrelated store or reset pending state to retry payment.
@@ -292,6 +304,7 @@ checkout-operator --state /private/operator/checkout inspect --limit 50
 checkout-operator --state /private/operator/checkout inspect --after ORDER_ID --limit 50
 checkout-operator --state /private/operator/checkout recover-invoice ORDER_ID --profile /private/operator/recovery.json
 checkout-operator --state /private/operator/checkout reconcile ORDER_ID --profile /private/operator/recovery.json
+checkout-operator --state /private/operator/checkout refund ORDER_ID --profile /private/operator/recovery.json --confirm-destination
 ```
 
 `inspect` performs no receiving I/O and outputs only order ID, state, rail and
@@ -299,9 +312,12 @@ expiry. It accepts 1–100 entries and a keyset cursor. `recover-invoice` attach
 one validated original invoice and does not check settlement. `reconcile` runs
 one existing reconciliation operation, including replay of a previously
 journalled LNURLcash mutation when necessary, and prints only the resulting
-state. No command starts a new purchase, resets pending state, sends a refund or
-exports bearer assets. `refund_required` means the seller still owes resolution;
-it does not mean a refund was sent.
+state. `refund` works only for `refund_required` LNURLcash orders with a bound
+Lightning Address and a certified retained note. Review that private destination
+before passing `--confirm-destination`. The command resolves and pins public DNS
+for each HTTPS origin, rejects local and special-use addresses, follows no
+redirects, journals before spending and safely resumes the same invoice. No
+command starts a new purchase, resets pending state or exports bearer assets.
 
 The recovery profile is strict JSON with these fields:
 
@@ -322,8 +338,9 @@ files of at most 64 KiB, mode 0600 on Unix (no group/other access); on Windows
 supply private ACLs. Passwords are read from files, never command-line arguments.
 The tool emits static errors and starts no HTTP listener. Profile opening may
 run normal Shelter recovery/migration, so make a consistent offline backup of
-both private directories before using a new binary. Automated paired backup,
-restore verification and a refund workflow remain launch gates.
+both private directories before using a new binary. The version-1 checkout
+schema migrates in place to version 2 by adding the private refund journal.
+Automated paired backup and restore verification remain launch gates.
 
 Adapter increment validation on 4 October 2026: 23 checkout tests and one operator
 file-policy test passed, including real loopback HTTP invoice, note rotation,

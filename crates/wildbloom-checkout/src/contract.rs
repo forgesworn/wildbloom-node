@@ -152,6 +152,8 @@ pub struct QuoteRequest {
     pub rail: Rail,
     pub issuer_id: Option<String>,
     pub renews: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refund_to: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -170,6 +172,8 @@ pub struct Quote {
     pub created_at: u64,
     pub expires_at: u64,
     pub renews: Option<String>,
+    #[serde(default)]
+    pub refund_to: Option<String>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -183,6 +187,7 @@ pub enum State {
     Settled,
     Active,
     RefundRequired,
+    Refunded,
 }
 impl State {
     pub(crate) fn key(self) -> &'static str {
@@ -196,6 +201,7 @@ impl State {
             Self::Settled => "settled",
             Self::Active => "active",
             Self::RefundRequired => "refund_required",
+            Self::Refunded => "refunded",
         }
     }
 }
@@ -207,6 +213,19 @@ pub struct Receipt {
     pub writes_until: u64,
     pub retains_until: u64,
 }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RefundStatus {
+    Pending,
+    Completed,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefundReceipt {
+    pub status: RefundStatus,
+    pub amount_msat: u64,
+    pub payment_hash: String,
+    pub refunded_at: Option<u64>,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Order {
     pub quote: Quote,
@@ -214,6 +233,8 @@ pub struct Order {
     pub state: State,
     pub invoice: Option<String>,
     pub receipt: Option<Receipt>,
+    #[serde(default)]
+    pub refund: Option<RefundReceipt>,
 }
 
 /// Deliberately minimal local recovery inventory; no payment assets or buyer key.
