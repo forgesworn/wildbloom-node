@@ -501,7 +501,12 @@ impl Checkout {
             let pay_url = lnurlcash_core::resolve_mint_input(&destination).ok_or(Error::Invalid)?;
             let pay_body = self.refund_fetch(&pay_url).await?;
             let pay = protocol::parse_pay_request(&pay_body).map_err(|_| Error::Pending)?;
-            same_origin(&pay_url, &pay.callback)?;
+            // LNURL-pay providers may delegate invoice creation to a separate
+            // public origin. The refund transport independently resolves and
+            // pins each HTTPS origin while rejecting redirects and local or
+            // special-use addresses, so do not require the callback to share
+            // the Lightning Address origin.
+            refund_endpoint(&pay.callback)?;
             let amount = record.order.quote.offer.price_msat;
             if amount < pay.min_sendable || amount > pay.max_sendable {
                 return Err(Error::Unavailable);
@@ -513,7 +518,9 @@ impl Checkout {
                 protocol::parse_invoice(&invoice_body, amount).map_err(|_| Error::Pending)?;
             let payment_hash = validate_refund_invoice(&record.order.quote, &invoice.pr)?;
             if let Some(verify) = invoice.verify.as_deref() {
-                same_origin(&pay_url, verify)?;
+                // Do not allow a second origin hop supplied by the invoice
+                // response. Verification stays with the delegated callback.
+                same_origin(&pay.callback, verify)?;
             }
             let request = protocol::melt_request(
                 &record
@@ -688,6 +695,18 @@ fn same_origin(left: &str, right: &str) -> Result<(), Error> {
         || !right.username().is_empty()
         || right.password().is_some()
         || right.fragment().is_some()
+    {
+        return Err(Error::Invalid);
+    }
+    Ok(())
+}
+fn refund_endpoint(value: &str) -> Result<(), Error> {
+    let url = url::Url::parse(value).map_err(|_| Error::Invalid)?;
+    if !matches!(url.scheme(), "https" | "http")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
     {
         return Err(Error::Invalid);
     }

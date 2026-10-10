@@ -626,13 +626,13 @@ impl RefundTransport for RefundNet {
         let parsed = url::Url::parse(url.expose()).unwrap();
         let value = match (parsed.host_str().unwrap(), parsed.path()) {
             ("buyer.example", "/.well-known/lnurlp/customer") => serde_json::json!({
-                "tag":"payRequest", "callback":"https://buyer.example/callback",
+                "tag":"payRequest", "callback":"https://processor.example/callback",
                 "minSendable":10_000, "maxSendable":10_000, "metadata":"[]"
             }),
-            ("buyer.example", "/callback") => serde_json::json!({
-                "pr":self.invoice.bolt11, "verify":"https://buyer.example/verify/refund"
+            ("processor.example", "/callback") => serde_json::json!({
+                "pr":self.invoice.bolt11, "verify":"https://processor.example/verify/refund"
             }),
-            ("buyer.example" | "mint.example", "/verify/refund") => serde_json::json!({
+            ("processor.example" | "mint.example", "/verify/refund") => serde_json::json!({
                 "settled":self.settled.load(Ordering::SeqCst), "pr":self.invoice.bolt11,
                 "preimage":self.settled.load(Ordering::SeqCst).then(|| hex::encode([9;32]))
             }),
