@@ -169,6 +169,12 @@ background spending, a customer balance or a payout service. Lightning-rail
 and address-free orders remain manual. Do not redeem pending notes out of band
 before reconciliation.
 
+A Lightning Address may delegate invoice creation to a different HTTPS origin.
+The refund transport resolves, public-address filters and pins each origin
+independently; ambient proxies and redirects stay disabled. Any receiver
+verification URL must remain on the delegated callback origin, so the invoice
+response cannot introduce a second cross-origin hop.
+
 Restore checkout and Shelter state as a consistent pair. Never transplant an
 order database to an unrelated store or reset pending state to retry payment.
 Existing issuer configuration must remain available for pending-note recovery;
