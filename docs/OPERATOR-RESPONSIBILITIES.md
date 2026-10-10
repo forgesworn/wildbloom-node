@@ -1,76 +1,58 @@
 # Operator responsibilities
 
-> **DRAFT for legal review, 25 September 2026.** Not legal advice, and it has
-> not been reviewed by a lawyer. Drafted from the code on `main` (fa9ab72)
-> for whoever runs a Wildbloom Node to read before doing so. Text in
+> **DRAFT, 10 October 2026.** Not legal advice, and it has not been
+> reviewed by a lawyer. The capability facts below were drafted from the
+> code on `main` (fa9ab72) and rechecked against `main` (4474ce1). For
+> whoever runs a Wildbloom Node to read before doing so. Text in
 > `[square brackets]` is a decision or fact each operator must fill in for
 > their own instance.
 
-## You are the operator
+## ForgeSworn publishes software; it does not run nodes
 
-Wildbloom Node is software. ForgeSworn publishes the code; it does not run,
-own or control your node. If you start `wildbloomd`, whether headless or
-through the desktop app, **you are the operator** of that instance under UK
-law, in the same way you would be if you ran any other server that stores
-files on your own disk and serves them to other people.
+ForgeSworn publishes the Wildbloom Node software. It does not run or host
+nodes, for itself or for anyone else, and it does not control your node.
 
-This is true whatever transport you choose (loopback-only, a persistent Tor
-v3 onion, or your own HTTPS reverse proxy), and whatever retention tiers you
-configure (owner-only, friends, or open shelter for guests). Running the
-software is what makes you the operator, not any particular configuration
-flag.
+Whoever runs a node, or offers one to other people, is responsible for
+their own legal position in whatever jurisdiction applies, including how
+they handle reports of illegal content. Take your own legal advice before
+you open a node to other people. `[LEGAL REVIEW: each operator, for their
+own jurisdiction.]`
 
-If ForgeSworn itself runs a public Wildbloom Node, that instance is
-ForgeSworn's responsibility as operator, under the process in
-[`docs/legal/report-handling.md`](legal/report-handling.md). As of this
-document's date, nothing in this repository, or in the deployment
-configuration for wildbloom.forgesworn.dev, stands up a public Wildbloom
-Node: the hosted web app is static (see
-[Wildbloom's online safety position](https://github.com/forgesworn/wildbloom/blob/main/docs/legal/online-safety-position-draft.md)),
-and it runs no Blossom server. `[DECISION: if this changes, for example if
-ForgeSworn stands up a public wildbloomd instance, update this paragraph and
-treat that instance under the report-handling runbook.]`
+[`legal/report-handling.md`](legal/report-handling.md) sets out a generic
+way to handle reports, built on the facts below.
 
-## Why this matters under UK law
-
-A Wildbloom Node that accepts uploads from anyone other than yourself (a
-friend grant, or open shelter for guests) stores files chosen by other
-people and can serve them to whoever asks for the right hash. That is the
-shape of thing the Online Safety Act 2023 and UK GDPR regulate, and running
-one brings duties that do not go away because the software is small,
-self-hosted, or free.
-
-**Online Safety Act 2023.** If your node accepts content from users other
-than yourself, and that content can be encountered by other people (which is
-the point of running a Blossom server), it can be a "user-to-user service" or
-a "file-storage and file-sharing service" in Ofcom's risk-profile sense. That
-brings duties to: assess the risk of illegal content, have a way for people
-to report illegal content, act on reports, and keep records of what you did.
-See Ofcom's guidance at
-<https://www.ofcom.org.uk/online-safety/information-for-industry/guide-for-services/risk-assessments>.
-`[LEGAL REVIEW: whether a small, non-commercial, self-hosted node with a
-handful of friend grants meets the size and reach thresholds that trigger
-these duties in practice; the duties apply in principle regardless of size,
-but Ofcom's codes of practice scale by size and risk.]`
+## What changes when you admit other people
 
 An operator who only ever admits their own keys (`--allow-pubkey` with no
 `--friend-grant` and no `--open-shelter`) is storing only their own content.
-That is much closer to a personal backup than a service to other users, and
-the case for user-to-user duties is weaker. The moment you add a friend grant
-or open shelter, you are storing content other people chose and can serve it
-to third parties, and the analysis above applies. `[DECISION: each operator
-should record, for their own instance, which of these two situations they
-are in, and review it again if they change their configuration.]`
+The moment you add a friend grant or open shelter, the node stores files
+other people chose and can serve them to whoever asks for the right hash.
+That is the point to take advice. `[DECISION: each operator should record,
+for their own instance, which of these two situations they are in, and
+review it again if they change their configuration.]`
 
-**UK GDPR.** If your node's logs, database or configuration hold anything
-that identifies a real person, such as a Nostr public key tied to someone you
-know, an IP address in a reverse-proxy log, or contact details for a friend
-grant you noted down somewhere, you are a data controller for that
-information and have UK GDPR obligations towards the people it concerns:
-lawful basis, a way for them to ask what you hold, a way to correct or delete
-it, and appropriate security. `[LEGAL REVIEW: whether a purely personal or
-household activity exemption applies to a small self-hosted node run for
-friends; this is fact-specific and the exemption is narrow.]`
+This is so whatever transport you choose (loopback-only, a persistent Tor
+v3 onion, or your own HTTPS reverse proxy).
+
+## What the node holds and who can read it
+
+- **Files.** You, and anyone with root on the host, can read what the node
+  stores. Uploads sent with encryption turned off arrive and are kept as
+  plaintext, with their filename and type; encrypted uploads are kept as
+  the envelope the uploader sent.
+- **Records about people.** Claim records hold each signer's public key.
+  Reverse-proxy logs, if you keep them, hold IP addresses. Any notes you
+  keep about who holds a friend grant are yours too.
+- **Checkout, if you enable it.** Checkout routes are mounted only when you
+  start the daemon with `--checkout-profile`. Its private state database
+  holds orders bound to the buyer's public key, any Lightning refund address
+  the buyer sent, and spendable LNURLcash notes in plaintext: keep it
+  private, back it up securely and exclude it from diagnostics. Keep
+  reverse-proxy body and query logging off, because LNURLcash query strings
+  contain spendable assets. Give the Phoenixd adapter its limited-access
+  password, not the spending password. See [`CHECKOUT.md`](CHECKOUT.md).
+<!-- docs/CHECKOUT.md:3-7, 75-78, 109-111, 285-291; plaintext uploads:
+wildbloom src/main.ts:531-533. -->
 
 ## What the software can and cannot do for you
 
@@ -138,17 +120,15 @@ before promising anyone a fast per-uploader block.]`
   one abusive key without a restart, or without also blocking every other
   key in the same tier. Say so plainly in your own reporting process rather
   than promising a capability the software does not have.
+- The sure way to stop serving something is to stop the whole node: stop
+  `wildbloomd`, or the container or host it runs in, and keep it stopped
+  until the content is dealt with.
 
-## A report contact you must publish
+## A report contact
 
 If your node accepts anything other than your own keys, publish a contact
 address people can use to report illegal or abusive content, and check it.
-This is both good practice and, for content that may be illegal, part of what
-the Online Safety Act expects of services that accept user content.
-
-`[DECISION: each operator must choose and publish their own contact address.
-For a ForgeSworn-run node, see
-docs/legal/report-handling.md, which uses abuse@safety.forgesworn.dev.]`
+`[INPUT: the operator's report contact.]`
 
 ## Retention
 
@@ -164,22 +144,18 @@ docs/legal/report-handling.md, which uses abuse@safety.forgesworn.dev.]`
   anything you keep outside the application, such as reverse-proxy access
   logs or notes about who holds a friend grant.]`
 - **Reports.** Decide and document how long you keep records of reports you
-  receive and what you did about them; the Online Safety Act's
-  record-keeping expectations point towards keeping such records for a
-  meaningful period (compare Ofcom's guidance for larger services, which
-  suggests multi-year retention, though the exact expectation for a small
-  self-hosted node is unsettled). `[LEGAL REVIEW]`
+  receive and what you did about them, on your own legal advice.
+  `[DECISION, per operator]`
 
 ## Open items
 
-1. Whether the Online Safety Act's user-to-user or file-storage duties
-   formally apply to a small, non-commercial, friends-and-guests node, and
-   at what point size or reach changes that answer. `[LEGAL REVIEW]`
-2. Whether the household/personal-activity exemption from UK GDPR applies to
-   a small self-hosted node. `[LEGAL REVIEW]`
+1. Each operator's own legal position, in their own jurisdiction, before
+   opening a node to other people. `[LEGAL REVIEW, per operator]`
+2. Each operator's retention periods for logs, notes and report records.
+   `[DECISION, per operator]`
 3. No supported way to force-delete a blob by hash independent of the
    claiming key's own signature. `[GAP]`
 4. No supported runtime per-key block or ban list for any retention tier.
    `[GAP]`
 5. Each operator must choose, publish and check their own report contact.
-   `[DECISION, per operator]`
+   `[INPUT, per operator]`
