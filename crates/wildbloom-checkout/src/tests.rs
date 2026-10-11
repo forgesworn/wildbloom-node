@@ -1850,3 +1850,30 @@ fn offers_fit_the_browser_transport_without_precision_loss() {
         .collect();
     assert!(c.validate().is_err());
 }
+
+#[tokio::test]
+async fn seller_capacity_refuses_quote_before_payment() {
+    let mut f = Fixture::new();
+    f.checkout = f.checkout.with_sales_capacity(Some(100)).unwrap();
+    let first = f
+        .checkout
+        .quote(&principal(1), request("first", Rail::Lightning))
+        .await
+        .unwrap();
+    assert_eq!(first.state, State::Quoted);
+    assert!(matches!(
+        f.checkout
+            .quote(&principal(2), request("second", Rail::Lightning))
+            .await,
+        Err(Error::Capacity)
+    ));
+    assert_eq!(f.lightning.creates.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        f.checkout
+            .quote(&principal(1), request("first", Rail::Lightning))
+            .await
+            .unwrap()
+            .quote_digest,
+        first.quote_digest
+    );
+}

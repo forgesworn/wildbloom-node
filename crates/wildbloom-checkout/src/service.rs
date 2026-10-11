@@ -38,6 +38,7 @@ pub trait RefundTransport: Send + Sync {
 #[derive(Clone)]
 pub struct Checkout {
     config: Arc<Config>,
+    max_paid_bytes: Option<u64>,
     ledger: Ledger,
     store: Store,
     lightning: Option<Arc<dyn LightningBackend>>,
@@ -56,6 +57,7 @@ impl Checkout {
         config.validate()?;
         Ok(Self {
             config: Arc::new(config),
+            max_paid_bytes: None,
             ledger,
             store,
             lightning,
@@ -67,6 +69,14 @@ impl Checkout {
     pub fn with_refunds(mut self, refunds: Arc<dyn RefundTransport>) -> Self {
         self.refunds = Some(refunds);
         self
+    }
+    /// Set the seller allocation ceiling before exposing this checkout.
+    pub fn with_sales_capacity(mut self, max_paid_bytes: Option<u64>) -> Result<Self, Error> {
+        if max_paid_bytes.is_some_and(|limit| limit > self.store.quota_bytes()) {
+            return Err(Error::Invalid);
+        }
+        self.max_paid_bytes = max_paid_bytes;
+        Ok(self)
     }
     pub fn config(&self) -> &Config {
         &self.config
@@ -197,15 +207,18 @@ impl Checkout {
                 .state(&q.order_id, State::Reserving, State::Expired)?;
         } else {
             self.store
-                .reserve_paid_sale(&PaidSale {
-                    order_id: q.order_id.clone(),
-                    signer_pubkey: q.signer_pubkey.clone(),
-                    capacity_bytes: q.offer.capacity_bytes,
-                    duration_seconds: q.offer.duration_seconds,
-                    grace_seconds: q.offer.grace_seconds,
-                    hold_expires_at: q.expires_at,
-                    renews: q.renews.clone(),
-                })
+                .reserve_paid_sale_with_ceiling(
+                    &PaidSale {
+                        order_id: q.order_id.clone(),
+                        signer_pubkey: q.signer_pubkey.clone(),
+                        capacity_bytes: q.offer.capacity_bytes,
+                        duration_seconds: q.offer.duration_seconds,
+                        grace_seconds: q.offer.grace_seconds,
+                        hold_expires_at: q.expires_at,
+                        renews: q.renews.clone(),
+                    },
+                    self.max_paid_bytes.unwrap_or(i64::MAX as u64),
+                )
                 .map_err(|e| match e {
                     StoreError::QuotaExceeded => Error::Capacity,
                     StoreError::InvalidPaidSale | StoreError::PaidAllowanceUnavailable => {

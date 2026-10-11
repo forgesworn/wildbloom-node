@@ -13,6 +13,8 @@ use wildbloom_core::Store;
 pub struct RuntimeProfile {
     pub checkout: Config,
     pub state: PathBuf,
+    #[serde(default)]
+    pub max_paid_bytes: Option<u64>,
     pub browser_origins: Vec<String>,
     pub phoenixd: Option<PhoenixProfile>,
     #[serde(default)]
@@ -114,7 +116,8 @@ impl RuntimeProfile {
                     .collect(),
             )?) as Arc<dyn crate::NoteTransport>)
         };
-        let checkout = Checkout::new(self.checkout, ledger, store, lightning, notes)?;
+        let checkout = Checkout::new(self.checkout, ledger, store, lightning, notes)?
+            .with_sales_capacity(self.max_paid_bytes)?;
         if checkout.rails().is_empty() {
             return Err(Error::Invalid);
         }
