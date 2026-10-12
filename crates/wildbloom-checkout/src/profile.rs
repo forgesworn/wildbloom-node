@@ -83,6 +83,17 @@ impl RuntimeProfile {
     }
 
     pub fn open(self, store: Store, public_origin: &str) -> Result<axum::Router, Error> {
+        self.open_with_service(store, public_origin)
+            .map(|(routes, _)| routes)
+    }
+
+    /// Open once and expose the same checkout instance used by the HTTP routes.
+    /// Public discovery must derive its offers and enabled rails from this instance.
+    pub fn open_with_service(
+        self,
+        store: Store,
+        public_origin: &str,
+    ) -> Result<(axum::Router, Checkout), Error> {
         // No silent proxy/host rewrite or clearnet payment fallback for a Tor node.
         if self.checkout.origin != public_origin
             || self.state == store.config().root
@@ -131,6 +142,6 @@ impl RuntimeProfile {
                 axum::http::header::AUTHORIZATION,
                 axum::http::header::CONTENT_TYPE,
             ]);
-        Ok(crate::router(checkout).layer(cors))
+        Ok((crate::router(checkout.clone()).layer(cors), checkout))
     }
 }

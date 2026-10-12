@@ -9,6 +9,7 @@ use wildbloom_core::{
 
 mod proofs;
 mod replicas;
+mod services;
 mod tor;
 
 use tor::TorService;
@@ -66,6 +67,10 @@ struct Cli {
     /// Private operator checkout profile; enables direct-to-operator Lightning/LNURLcash sales.
     #[arg(long, env = "WILDBLOOM_CHECKOUT_PROFILE", requires = "no_tor")]
     checkout_profile: Option<PathBuf>,
+
+    /// Explicit public service listing and optional external-signer Nostr publication.
+    #[arg(long, env = "WILDBLOOM_SERVICE_PROFILE")]
+    service_profile: Option<PathBuf>,
 
     /// Enable bounded authenticated full-read storage challenges (not continuous-retention proofs).
     #[arg(long, env = "WILDBLOOM_STORAGE_PROOFS")]
@@ -271,8 +276,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         friend_grants: cli.friend_grants.into_iter().map(|grant| grant.0).collect(),
         open_shelter: cli.open_shelter,
         max_concurrent_writes: cli.max_concurrent_writes,
-        mirror_proxy,
+        mirror_proxy: mirror_proxy.clone(),
     };
+    let private_keys = config
+        .allowed_pubkeys
+        .iter()
+        .cloned()
+        .chain(
+            config
+                .friend_grants
+                .iter()
+                .map(|grant| grant.pubkey.clone()),
+        )
+        .collect::<Vec<_>>();
     let state = if cli.direct_https_mirrors {
         AppState::with_fetcher(store, config, Arc::new(DirectHttpsFetcher::new()?))?
     } else {
@@ -305,18 +321,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             public_url.to_string(),
         ));
     }
+    let mut checkout_service = None;
     if let Some(profile) = cli.checkout_profile {
-        let checkout = wildbloom_checkout::RuntimeProfile::read(&profile)
-            .and_then(|profile| profile.open(state.store().clone(), public_url.as_str()))
+        let (checkout, service) = wildbloom_checkout::RuntimeProfile::read(&profile)
+            .and_then(|profile| {
+                profile.open_with_service(state.store().clone(), public_url.as_str())
+            })
             .map_err(|error| error.to_string())?;
         routes = routes.merge(checkout);
+        checkout_service = Some(service);
     }
-    axum::serve(listener, routes)
+    let publisher = if let Some(profile) = cli.service_profile {
+        let services = services::Services::new(
+            services::Profile::read(&profile)?,
+            state.store().clone(),
+            checkout_service,
+            public_url.as_str(),
+            cli.open_shelter,
+            mirror_proxy.is_some() || cli.direct_https_mirrors,
+            &private_keys,
+            mirror_proxy.as_ref(),
+            cli.no_tor,
+        )?;
+        routes = routes.merge(services.router()?);
+        services.start(mirror_proxy)?
+    } else {
+        None
+    };
+    let served = axum::serve(listener, routes)
         .with_graceful_shutdown(shutdown_signal())
-        .await?;
+        .await;
+    if let Some(publisher) = publisher {
+        publisher.stop().await;
+    }
     if let Some(tor) = tor {
         tor.shutdown().await;
     }
+    served?;
     Ok(())
 }
 

@@ -68,7 +68,7 @@ fn valid_domain(host: &str) -> bool {
         })
 }
 
-fn valid_onion(host: &str) -> bool {
+pub(crate) fn valid_onion(host: &str) -> bool {
     let Some(label) = host.strip_suffix(".onion") else {
         return false;
     };
@@ -494,7 +494,7 @@ impl reqwest::dns::Resolve for PublicResolver {
     }
 }
 
-fn public_ip(ip: IpAddr) -> bool {
+pub(crate) fn public_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
             let [a, b, c, _] = ip.octets();
