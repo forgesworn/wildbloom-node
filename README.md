@@ -1,5 +1,12 @@
 # Wildbloom Node
 
+Public paid-storage and free/open-shelter discovery is explicitly opt-in via
+`--service-profile`. It exposes a bound `/services/v1` snapshot and can publish
+coarse availability and prices as kind 31402 using an external dedicated signer.
+See [public service discovery](docs/SERVICE-DISCOVERY.md) for the contract,
+private profile, direct/Tor relay routing, acknowledgement and withdrawal limits.
+Private owner/friend nodes remain unpublished by default.
+
 Run your own Blossom storage with Tor when you need easy private reachability,
 or use your own HTTPS setup when you do not.
 

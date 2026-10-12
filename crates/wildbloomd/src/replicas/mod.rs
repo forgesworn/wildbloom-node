@@ -5,15 +5,15 @@ mod enrol;
 mod policy;
 mod pool;
 mod pool_repair;
-mod signer;
-mod state;
+pub(crate) mod signer;
+pub(crate) mod state;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tests_directory;
 #[cfg(test)]
 mod tests_enrol;
-mod transport;
+pub(crate) mod transport;
 
 use clap::{Args, Subcommand};
 use engine::Clock;
