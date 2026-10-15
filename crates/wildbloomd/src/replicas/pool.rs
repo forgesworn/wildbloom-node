@@ -162,10 +162,10 @@ pub fn templates(
                 || !hosts.insert(host)
                 || ids.len() > 16
                 || assigned_groups.contains(&node.failure_group)
+                || !groups.insert(node.failure_group.clone())
             {
                 return Err(invalid());
             }
-            groups.insert(node.failure_group.clone());
             targets.push(policy::Target {
                 id: node.id.clone(),
                 origin: node.origin.clone(),
@@ -293,6 +293,13 @@ mod tests {
         }
         let mut m = original.clone();
         m["parts"][1]["targets"][0]["failure_group"] = json!("site-0");
+        assert!(templates(&signed(&keys, &m), &owner, 1, NOW + 3600, NOW, false).is_err());
+        // Two destinations of one part must not share a failure group either.
+        let mut m = original.clone();
+        m["parts"][1]["targets"] = json!([
+            {"id":"node-1", "origin":"https://n1.example/", "failure_group":"site-1", "weight":1},
+            {"id":"node-1b", "origin":"https://n1b.example/", "failure_group":"site-1", "weight":1}
+        ]);
         assert!(templates(&signed(&keys, &m), &owner, 1, NOW + 3600, NOW, false).is_err());
         let bytes = signed(&keys, &original);
         assert!(templates(&bytes, &owner, 1, NOW + 3600, NOW, true).is_err());

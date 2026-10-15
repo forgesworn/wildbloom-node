@@ -240,6 +240,9 @@ impl Checkout {
         if record.order.state == State::InvoicePending {
             return Err(Error::Pending);
         }
+        if record.order.state == State::Expired {
+            return Err(Error::Expired);
+        }
         if record.order.state != State::Quoted {
             return Err(Error::Conflict);
         }
@@ -288,6 +291,9 @@ impl Checkout {
         }
         // Never accept another asset during an uncertain mutation. Explicit check
         // replays the journal; it cannot replace the input or replacement secret.
+        if record.order.state == State::Expired {
+            return Err(Error::Expired);
+        }
         if record.order.state != State::Quoted {
             return Err(Error::Conflict);
         }
