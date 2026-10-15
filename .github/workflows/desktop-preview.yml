@@ -24,7 +24,7 @@ jobs:
           for platform in linux-x86_64 macos-aarch64 macos-x86_64 windows-x86_64; do
             scripts/prepare-tor-runtime.sh "$platform" "$RUNNER_TEMP/tor-$platform"
           done
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: verified-tor-downloads
           path: ${{ runner.temp }}/verified-tor-downloads
@@ -125,7 +125,7 @@ jobs:
             --candidate-adhoc --require-upgrade --output "$RUNNER_TEMP/macos-install.json"
       - name: Retain macOS installation evidence
         if: always() && runner.os == 'macOS'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-install-${{ matrix.target }}
           path: ${{ runner.temp }}/macos-install.json
@@ -136,7 +136,7 @@ jobs:
         shell: pwsh
         run: scripts/accept-desktop-windows.ps1 "desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
       - name: Upload unsigned preview installers
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wildbloom-node-${{ matrix.target }}-unsigned-preview
           path: desktop/src-tauri/target/${{ matrix.target }}/release/bundle
