@@ -125,6 +125,22 @@ pub trait Transport: Send + Sync {
         blob: &'a Blob,
         authorization: &'a str,
     ) -> BoxFuture<'a, Result<(), NetworkFailure>>;
+    /// Stream a fully verified part to a caller-owned private temporary file.
+    fn download<'a>(
+        &'a self,
+        target: &'a Target,
+        blob: &'a Blob,
+        path: &'a std::path::Path,
+    ) -> BoxFuture<'a, Result<(), DownloadError>>;
+    /// Upload a regenerated part with exact BUD-11 authority. Acknowledgement
+    /// alone is never custody evidence; the caller must verify a complete GET.
+    fn upload<'a>(
+        &'a self,
+        target: &'a Target,
+        blob: &'a Blob,
+        path: &'a std::path::Path,
+        authorization: &'a str,
+    ) -> BoxFuture<'a, Result<(), NetworkFailure>>;
 }
 
 // A signed stop policy must be recordable without configuring any network
@@ -143,6 +159,23 @@ impl Transport for DisabledTransport {
         _: &'a Target,
         _: &'a Target,
         _: &'a Blob,
+        _: &'a str,
+    ) -> BoxFuture<'a, Result<(), NetworkFailure>> {
+        Box::pin(async { Err(NetworkFailure::Refused) })
+    }
+    fn download<'a>(
+        &'a self,
+        _: &'a Target,
+        _: &'a Blob,
+        _: &'a std::path::Path,
+    ) -> BoxFuture<'a, Result<(), DownloadError>> {
+        Box::pin(async { Err(NetworkFailure::Refused.into()) })
+    }
+    fn upload<'a>(
+        &'a self,
+        _: &'a Target,
+        _: &'a Blob,
+        _: &'a std::path::Path,
         _: &'a str,
     ) -> BoxFuture<'a, Result<(), NetworkFailure>> {
         Box::pin(async { Err(NetworkFailure::Refused) })
@@ -229,7 +262,7 @@ impl HttpTransport {
 
 /// A local disk failure must stop owner repair, not discredit a remote node.
 #[derive(Debug, PartialEq, Eq)]
-pub(super) enum DownloadError {
+pub enum DownloadError {
     Remote(NetworkFailure),
     LocalStorage,
 }
@@ -484,6 +517,25 @@ impl Transport for HttpTransport {
             }
             Ok(())
         })
+    }
+
+    fn download<'a>(
+        &'a self,
+        target: &'a Target,
+        blob: &'a Blob,
+        path: &'a std::path::Path,
+    ) -> BoxFuture<'a, Result<(), DownloadError>> {
+        Box::pin(async move { self.download(target, blob, path).await })
+    }
+
+    fn upload<'a>(
+        &'a self,
+        target: &'a Target,
+        blob: &'a Blob,
+        path: &'a std::path::Path,
+        authorization: &'a str,
+    ) -> BoxFuture<'a, Result<(), NetworkFailure>> {
+        Box::pin(async move { self.upload(target, blob, path, authorization).await })
     }
 }
 
