@@ -113,13 +113,22 @@ function launchApp() {
 }
 // WebKitGTK and WebView2 have their own children. Count only real daemon
 // children, so webview subprocesses neither fail nor satisfy supervision checks.
-function descendants(parent) {
+async function descendants(parent) {
   assert.ok(Number.isSafeInteger(parent) && parent > 0);
   if (process.platform === 'win32') {
-    const output = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-      `Get-CimInstance Win32_Process -Filter "ParentProcessId = ${parent} AND Name = 'wildbloomd.exe'" | ForEach-Object { $_.ProcessId }`],
-    { encoding: 'utf8', timeout: 10000 }).trim();
-    return output ? output.split(/\s+/).map(Number) : [];
+    // A busy Windows runner can keep a CIM query past 10s; that is harness
+    // slowness, not a supervision verdict.
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        const output = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+          `Get-CimInstance Win32_Process -Filter "ParentProcessId = ${parent} AND Name = 'wildbloomd.exe'" | ForEach-Object { $_.ProcessId }`],
+        { encoding: 'utf8', timeout: 60000 }).trim();
+        return output ? output.split(/\s+/).map(Number) : [];
+      } catch (error) {
+        if (attempt === 2) throw error;
+        await pause(1000);
+      }
+    }
   }
   return execFileSync('ps', ['-axo', 'pid=,ppid=,comm='], { encoding: 'utf8' }).trim().split('\n')
     .map((line) => line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/))
@@ -163,8 +172,12 @@ try {
     assert.ok(response.ok, `Fixture upload returned ${response.status}`);
   }
   async function verifyPart(index) {
-    const res = await fetch(`${nodes[index].origin}${manifest.parts[index].sha256}`, { signal: AbortSignal.timeout(2000) });
-    return res.ok && sha(Buffer.from(await res.arrayBuffer())) === manifest.parts[index].sha256;
+    // A slowly booting node is 'not verifiable yet', never a harness crash:
+    // callers are readiness polls and missing-part assertions.
+    try {
+      const res = await fetch(`${nodes[index].origin}${manifest.parts[index].sha256}`, { signal: AbortSignal.timeout(2000) });
+      return res.ok && sha(Buffer.from(await res.arrayBuffer())) === manifest.parts[index].sha256;
+    } catch { return false; }
   }
   async function boot() {
     app = launchApp();
@@ -179,7 +192,7 @@ try {
   const dataDir = await boot();
   evidence.webview_user_agent = await app.evaluate('navigator.userAgent');
   await pause(500);
-  assert.equal(descendants(app.child.pid).length, 0, 'Fresh app must not start a node/repair automatically');
+  assert.equal((await descendants(app.child.pid)).length, 0, 'Fresh app must not start a node/repair automatically');
   assert.equal(signatures(), 0);
   passed('native app starts without storage, signer or repair children');
 
@@ -223,7 +236,7 @@ try {
   })()`), true);
   await until(async () => await app.evaluate('document.querySelector("#pool-action-status").textContent.includes("Authority must expire within the next year")') === true, 'expired authority rejected');
   assert.equal(signatures(), 0);
-  assert.equal(descendants(app.child.pid).length, 0);
+  assert.equal((await descendants(app.child.pid)).length, 0);
   assert.equal(await verifyPart(0), false);
   assert.equal(await verifyPart(1), false);
   passed('native IPC rejects expired authority without starting a worker, signing or repairing');
@@ -236,18 +249,18 @@ try {
   await until(async () => await app.evaluate('document.querySelector("#pool-action-status").textContent.includes("Automatic repair started")') === true, 'repair action accepted');
   await until(async () => await verifyPart(0) && await verifyPart(1), 'desktop owner repair', 45000);
   assert.ok(signatures() >= 2);
-  await until(async () => descendants(app.child.pid).length === 1, 'one supervised repair child');
+  await until(async () => (await descendants(app.child.pid)).length === 1, 'one supervised repair child');
   passed('desktop starts the real owner service and restores both missing parts');
 
   await clickControl('pool-stop');
   await until(async () => await app.evaluate('document.querySelector("#pool-action-status").textContent === "Pool process stopped."') === true, 'explicit stop action');
-  assert.equal(descendants(app.child.pid).length, 0);
+  assert.equal((await descendants(app.child.pid)).length, 0);
   assert.equal(await app.evaluate('document.querySelector("#pool-consent").checked'), false);
   passed('desktop Stop action terminates the real child and revokes repair consent');
   await until(async () => await app.evaluate('!document.querySelector("#pool-check").disabled') === true, 'stopped controls');
   await app.evaluate('(()=>{const c=document.querySelector("#pool-consent");c.checked=true;c.dispatchEvent(new Event("change",{bubbles:true}));document.querySelector("#pool-start").click();return true})()');
   await until(async () => await app.evaluate('document.querySelector("#pool-action-status").textContent.includes("Automatic repair started")') === true, 'explicit restart');
-  await until(() => descendants(app.child.pid).length === 1, 'restarted owner child');
+  await until(async () => (await descendants(app.child.pid)).length === 1, 'restarted owner child');
 
   assert.equal((await app.command('close')).ok, true);
   await until(async () => (await app.command('status')).visible === false, 'close-to-tray');
@@ -258,7 +271,7 @@ try {
   assert.equal((await app.command('status')).visible, false);
   assert.ok(alive(app.child.pid));
   passed('real window close hides to tray; resident repair restores another lost part');
-  const ownerChildren = descendants(app.child.pid); assert.equal(ownerChildren.length, 1);
+  const ownerChildren = await descendants(app.child.pid); assert.equal(ownerChildren.length, 1);
   const exited = once(app.child, 'exit');
   await app.command('quit');
   const [exitCode] = await bounded(exited, 'Desktop quit hung');
@@ -278,7 +291,7 @@ try {
   await pause(6500);
   assert.equal(signatures(), signaturesAtQuit);
   assert.equal(await verifyPart(0), false);
-  assert.equal(descendants(app.child.pid).length, 0);
+  assert.equal((await descendants(app.child.pid)).length, 0);
   assert.deepEqual(JSON.parse(readFileSync(saved)), receipt);
   passed('reopening retains the receipt but no signer, consent, child or automatic repair authority');
   // A fresh read-only check also proves quit released the work-directory lock.
@@ -310,7 +323,7 @@ try {
   assert.deepEqual(readFileSync(join(work, 'pool-report.json')), reportBeforeCleanup);
   assert.deepEqual(JSON.parse(readFileSync(saved)), receipt);
   assert.equal(signatures(), signaturesAtQuit);
-  assert.equal(descendants(app.child.pid).length, 0);
+  assert.equal((await descendants(app.child.pid)).length, 0);
   assert.equal(await app.evaluate('document.querySelector("#pool-consent").checked'), false);
   passed('native cleanup requires review and confirmation, refuses changed files, preserves receipt/report and stays stopped');
   await clickControl('pool-check');

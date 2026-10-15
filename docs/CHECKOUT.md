@@ -132,7 +132,9 @@ no public recovery/settlement assertion endpoint. Never simply issue another
 invoice. A conforming backend must create an invoice expiring within the hold;
 the shared interface does not accept a requested expiry. The Phoenixd adapter
   reads the matching durable order and requests an expiry 15 seconds before its
-  deadline; the signed invoice is still validated before being returned.
+  deadline; the signed invoice is still validated before being returned. Its
+  BOLT-11 description must be exactly the order ID; an invoice with any other
+  description, or only a description hash, is never accepted or attached.
 
 Only the stored invoice hash is checked at the receiving backend. `paid=true`
 without a 32-byte preimage hashing to that exact hash does not activate storage.
@@ -303,7 +305,9 @@ and its [JSON models](https://github.com/ACINQ/phoenixd/blob/9df2610be057de61ffe
 It is not evidence of a tested deployed Phoenixd version.
 
 Build the local tool with `cargo build -p wildbloom-checkout --bin checkout-operator`.
-Stop the owning checkout/Node process first; both stores retain exclusive locks.
+Stop the owning checkout/Node process first; both stores retain exclusive locks,
+so a running owner exits the tool with "checkout state directory is locked by
+its owning process" rather than a payment-conflict message.
 Use the existing checkout directory and its **matching** Shelter store. Never
 point recovery at a different store or create a new store to bypass a lock.
 

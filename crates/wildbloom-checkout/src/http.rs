@@ -154,7 +154,7 @@ impl IntoResponse for Error {
             Self::Conflict | Self::Pending => StatusCode::CONFLICT,
             Self::Capacity => StatusCode::SERVICE_UNAVAILABLE,
             Self::Unavailable => StatusCode::BAD_GATEWAY,
-            Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Locked | Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (
             code,

@@ -39,6 +39,8 @@ pub enum Error {
     Pending,
     #[error("receiving backend unavailable")]
     Unavailable,
+    #[error("checkout state directory is locked by its owning process")]
+    Locked,
     #[error("checkout state unavailable")]
     Internal,
 }
