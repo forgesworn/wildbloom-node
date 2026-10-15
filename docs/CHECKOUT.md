@@ -303,7 +303,9 @@ and its [JSON models](https://github.com/ACINQ/phoenixd/blob/9df2610be057de61ffe
 It is not evidence of a tested deployed Phoenixd version.
 
 Build the local tool with `cargo build -p wildbloom-checkout --bin checkout-operator`.
-Stop the owning checkout/Node process first; both stores retain exclusive locks.
+Stop the owning checkout/Node process first; both stores retain exclusive locks,
+so a running owner exits the tool with "checkout state directory is locked by
+its owning process" rather than a payment-conflict message.
 Use the existing checkout directory and its **matching** Shelter store. Never
 point recovery at a different store or create a new store to bypass a lock.
 

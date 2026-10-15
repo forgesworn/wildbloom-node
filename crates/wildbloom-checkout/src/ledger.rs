@@ -109,7 +109,7 @@ impl Ledger {
             Ok(file)
         };
         let lock = open_private("checkout.lock")?;
-        lock.try_lock_exclusive().map_err(|_| Error::Conflict)?;
+        lock.try_lock_exclusive().map_err(|_| Error::Locked)?;
         drop(open_private("checkout.sqlite3")?);
         // SQLite opens these companions itself. Refuse pre-existing symlinks.
         for name in [

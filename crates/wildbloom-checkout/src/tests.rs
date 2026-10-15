@@ -885,7 +885,7 @@ fn private_ledger_lock_permissions_and_future_schema_are_enforced() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("ledger");
     let ledger = Ledger::open(&path).unwrap();
-    assert!(matches!(Ledger::open(&path), Err(Error::Conflict)));
+    assert!(matches!(Ledger::open(&path), Err(Error::Locked)));
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
