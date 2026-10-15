@@ -3,7 +3,7 @@ use crate::{
     Config, Error, Ledger, Network, Order, Principal, Quote, QuoteRequest, Rail, Receipt, State,
     digest, id, now,
 };
-use lightning_invoice::{Bolt11Invoice, Currency};
+use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescriptionRef, Currency};
 use lnurlcash_core::protocol::{self, MutationKind, Policy};
 use std::{fmt, sync::Arc, time::Duration};
 use toll_booth::{backends::LightningBackend, types::Invoice};
@@ -752,6 +752,14 @@ fn validate_invoice(quote: &Quote, invoice: &Invoice, allow_expired: bool) -> Re
         Network::Regtest => Currency::Regtest,
     };
     let expiry = parsed.expires_at().ok_or(Error::Pending)?.as_secs();
+    // The invoice must be the one this order's issuance requested: a plain
+    // description equal to the order ID, never a hash-only or foreign invoice.
+    if !matches!(
+        parsed.description(),
+        Bolt11InvoiceDescriptionRef::Direct(d) if d.as_inner().0 == quote.order_id
+    ) {
+        return Err(Error::Pending);
+    }
     if (!allow_expired && expiry <= now()?)
         || parsed.currency() != currency
         || parsed.amount_milli_satoshis() != Some(quote.offer.price_msat)

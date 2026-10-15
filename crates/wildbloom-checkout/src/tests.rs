@@ -106,10 +106,16 @@ fn request(id: &str, rail: Rail) -> QuoteRequest {
         refund_to: None,
     }
 }
-fn invoice(amount: u64, network: Currency, expiry: u64, preimage: [u8; 32]) -> Invoice {
+fn invoice(
+    description: &str,
+    amount: u64,
+    network: Currency,
+    expiry: u64,
+    preimage: [u8; 32],
+) -> Invoice {
     let hash = sha256::Hash::hash(&preimage);
     let signed = InvoiceBuilder::new(network)
-        .description("synthetic storage".into())
+        .description(description.into())
         .amount_milli_satoshis(amount)
         .payment_hash(hash)
         .payment_secret(PaymentSecret([42; 32]))
@@ -123,8 +129,20 @@ fn invoice(amount: u64, network: Currency, expiry: u64, preimage: [u8; 32]) -> I
         payment_hash: hash.to_string(),
     }
 }
+/// The fixture backend honours the issuance memo like the real Phoenixd
+/// adapter: every invoice carries the order ID as its signed description.
+enum Issued {
+    Valid {
+        amount: u64,
+        network: Currency,
+        expiry: u64,
+        preimage: [u8; 32],
+        description: Option<String>,
+    },
+    Raw(Invoice),
+}
 struct Lightning {
-    invoice: Mutex<Invoice>,
+    issue: Mutex<Issued>,
     status: Mutex<InvoiceStatus>,
     creates: AtomicUsize,
     checks: AtomicUsize,
@@ -133,7 +151,13 @@ struct Lightning {
 impl Lightning {
     fn new() -> Self {
         Self {
-            invoice: Mutex::new(invoice(10_000, Currency::Bitcoin, 300, [3; 32])),
+            issue: Mutex::new(Issued::Valid {
+                amount: 10_000,
+                network: Currency::Bitcoin,
+                expiry: 300,
+                preimage: [3; 32],
+                description: None,
+            }),
             status: Mutex::new(InvoiceStatus {
                 paid: true,
                 preimage: Some(hex::encode([3; 32])),
@@ -143,20 +167,39 @@ impl Lightning {
             fail: false,
         }
     }
+    fn original_for(&self, order: &str) -> Invoice {
+        match &*self.issue.lock().unwrap() {
+            Issued::Valid {
+                amount,
+                network,
+                expiry,
+                preimage,
+                description,
+            } => invoice(
+                description.as_deref().unwrap_or(order),
+                *amount,
+                network.clone(),
+                *expiry,
+                *preimage,
+            ),
+            Issued::Raw(invoice) => invoice.clone(),
+        }
+    }
 }
 #[async_trait::async_trait]
 impl LightningBackend for Lightning {
     async fn create_invoice(
         &self,
         amount: u64,
-        _memo: Option<&str>,
+        memo: Option<&str>,
     ) -> Result<Invoice, BackendError> {
         assert_eq!(amount, 10);
         self.creates.fetch_add(1, Ordering::SeqCst);
         if self.fail {
             return Err(BackendError::Request("secret backend diagnostic".into()));
         }
-        Ok(self.invoice.lock().unwrap().clone())
+        Ok(self
+            .original_for(memo.ok_or_else(|| BackendError::Request("missing order memo".into()))?))
     }
     async fn check_invoice(&self, _hash: &str) -> Result<InvoiceStatus, BackendError> {
         self.checks.fetch_add(1, Ordering::SeqCst);
@@ -420,7 +463,7 @@ async fn ambiguous_invoice_creation_never_creates_a_second_invoice() {
         Err(Error::Pending)
     ));
     assert_eq!(f.lightning.creates.load(Ordering::SeqCst), 1);
-    let recovered_invoice = f.lightning.invoice.lock().unwrap().clone();
+    let recovered_invoice = f.lightning.original_for(id);
     f.checkout
         .recover_invoice(id, recovered_invoice)
         .await
@@ -435,18 +478,43 @@ async fn ambiguous_invoice_creation_never_creates_a_second_invoice() {
     );
 }
 #[tokio::test]
-async fn rejects_wrong_invoice_amount_network_hash_expiry_and_bad_preimage() {
+async fn rejects_wrong_invoice_terms_description_and_bad_preimage() {
     for bad in [
-        invoice(20_000, Currency::Bitcoin, 300, [3; 32]),
-        invoice(10_000, Currency::BitcoinTestnet, 300, [3; 32]),
-        invoice(10_000, Currency::Bitcoin, 3600, [3; 32]),
-        Invoice {
+        Issued::Valid {
+            amount: 20_000,
+            network: Currency::Bitcoin,
+            expiry: 300,
+            preimage: [3; 32],
+            description: None,
+        },
+        Issued::Valid {
+            amount: 10_000,
+            network: Currency::BitcoinTestnet,
+            expiry: 300,
+            preimage: [3; 32],
+            description: None,
+        },
+        Issued::Valid {
+            amount: 10_000,
+            network: Currency::Bitcoin,
+            expiry: 3600,
+            preimage: [3; 32],
+            description: None,
+        },
+        Issued::Valid {
+            amount: 10_000,
+            network: Currency::Bitcoin,
+            expiry: 300,
+            preimage: [3; 32],
+            description: Some("other-order".into()),
+        },
+        Issued::Raw(Invoice {
             bolt11: "lnbc10_invalid".into(),
             payment_hash: "ab".repeat(32),
-        },
+        }),
     ] {
         let backend = Lightning::new();
-        *backend.invoice.lock().unwrap() = bad;
+        *backend.issue.lock().unwrap() = bad;
         let f = Fixture::with_lightning(backend);
         let (p, o) = f.quoted().await;
         assert!(matches!(
@@ -651,7 +719,13 @@ async fn failed_lnurlcash_fulfilment_refunds_once_from_the_journalled_asset() {
     mint.drop_refund_response.store(true, Ordering::SeqCst);
     let refund_net = Arc::new(RefundNet {
         settled,
-        invoice: invoice(10_000, Currency::Bitcoin, 300, [9; 32]),
+        invoice: invoice(
+            "synthetic buyer refund",
+            10_000,
+            Currency::Bitcoin,
+            300,
+            [9; 32],
+        ),
         requests: Mutex::new(Vec::new()),
     });
     let checkout = checkout.with_refunds(refund_net.clone());
@@ -1325,7 +1399,13 @@ async fn renewal_uses_new_settlement_and_preserves_the_stable_allowance() {
         .unwrap()
         .receipt
         .unwrap();
-    *f.lightning.invoice.lock().unwrap() = invoice(10_000, Currency::Bitcoin, 300, [4; 32]);
+    *f.lightning.issue.lock().unwrap() = Issued::Valid {
+        amount: 10_000,
+        network: Currency::Bitcoin,
+        expiry: 300,
+        preimage: [4; 32],
+        description: None,
+    };
     f.lightning.status.lock().unwrap().preimage = Some(hex::encode([4; 32]));
     let mut req = request("renewal", Rail::Lightning);
     req.renews = Some(first.allowance_id.clone());
@@ -1509,10 +1589,9 @@ async fn phoenix_http_issues_order_bound_invoice_and_reconciles_once() {
         routing::{get, post},
     };
     let f = Fixture::new();
-    let signed = invoice(10_000, Currency::Bitcoin, 300, [3; 32]);
-    let generated =
-        serde_json::json!({"serialized":signed.bolt11,"paymentHash":signed.payment_hash});
-    let incoming = serde_json::json!({"paymentHash":signed.payment_hash,"preimage":hex::encode([3;32]),"isPaid":true});
+    // The mock issues per request with the order-ID memo as the description,
+    // exactly like the real Phoenixd adapter contract.
+    let incoming = serde_json::json!({"paymentHash":sha256::Hash::hash(&[3; 32]).to_string(),"preimage":hex::encode([3;32]),"isPaid":true});
     let requests = Arc::new(Mutex::new(Vec::new()));
     let seen = requests.clone();
     let router = axum::Router::new()
@@ -1520,16 +1599,19 @@ async fn phoenix_http_issues_order_bound_invoice_and_reconciles_once() {
             "/createinvoice",
             post(move |headers: HeaderMap, body: Bytes| {
                 let seen = seen.clone();
-                let value = generated.clone();
                 async move {
                     assert_eq!(
                         headers.get("authorization").unwrap(),
                         "Basic OnN5bnRoZXRpYy1saW1pdGVk"
                     );
-                    seen.lock()
-                        .unwrap()
-                        .push(String::from_utf8(body.to_vec()).unwrap());
-                    axum::Json(value)
+                    let text = String::from_utf8(body.to_vec()).unwrap();
+                    seen.lock().unwrap().push(text.clone());
+                    let fields: std::collections::HashMap<_, _> =
+                        url::form_urlencoded::parse(text.as_bytes())
+                            .into_owned()
+                            .collect();
+                    let issued = invoice(&fields["externalId"], 10_000, Currency::Bitcoin, 300, [3; 32]);
+                    axum::Json(serde_json::json!({"serialized":issued.bolt11,"paymentHash":issued.payment_hash}))
                 }
             }),
         )
@@ -1589,7 +1671,7 @@ async fn phoenix_http_issues_order_bound_invoice_and_reconciles_once() {
     let summary = f.ledger.inspect("", 1).unwrap();
     assert_eq!(summary.len(), 1);
     let json = serde_json::to_string(&summary).unwrap();
-    assert!(!json.contains(&signed.bolt11));
+    assert!(!json.contains("lnbc"));
     assert!(!json.contains(&p.pubkey));
     assert!(
         f.ledger
@@ -1610,7 +1692,7 @@ async fn phoenix_lost_response_finds_original_without_reissuing() {
     f.ledger
         .state(&id, State::Quoted, State::InvoicePending)
         .unwrap();
-    let signed = invoice(10_000, Currency::Bitcoin, 300, [3; 32]);
+    let signed = invoice(&id, 10_000, Currency::Bitcoin, 300, [3; 32]);
     let row = serde_json::json!({"paymentHash":signed.payment_hash,"invoice":signed.bolt11,"externalId":id,"isPaid":false});
     let rows = Arc::new(Mutex::new(vec![row.clone()]));
     let served = rows.clone();

@@ -132,7 +132,9 @@ no public recovery/settlement assertion endpoint. Never simply issue another
 invoice. A conforming backend must create an invoice expiring within the hold;
 the shared interface does not accept a requested expiry. The Phoenixd adapter
   reads the matching durable order and requests an expiry 15 seconds before its
-  deadline; the signed invoice is still validated before being returned.
+  deadline; the signed invoice is still validated before being returned. Its
+  BOLT-11 description must be exactly the order ID; an invoice with any other
+  description, or only a description hash, is never accepted or attached.
 
 Only the stored invoice hash is checked at the receiving backend. `paid=true`
 without a 32-byte preimage hashing to that exact hash does not activate storage.
