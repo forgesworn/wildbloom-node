@@ -49,7 +49,9 @@ header. Existing Blossom routes retain their independent BUD-11 authorisation.
 All order routes use the published [NIP-98 draft](https://github.com/nostr-protocol/nips/blob/master/98.md),
 kind `27235`, in `Authorization: Nostr <standard-base64-event>`. This profile
 requires empty content, exactly one two-element `u` and `method` tag, an exact
-configured-origin URL match, and a valid event ID and signature. POST requires
+configured-origin URL match, and a valid event ID and signature. The `method`
+tag is the uppercase `GET` or `POST`; lowercase-signing clients are rejected.
+POST requires
 one `payload` tag containing SHA-256 of the exact body bytes. GET has no body or
 payload tag. Queries and duplicate authorisation headers are rejected. Freshness
 is at most 60 seconds old or 30 seconds ahead. A valid event can be replayed

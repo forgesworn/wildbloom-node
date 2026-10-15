@@ -982,6 +982,36 @@ async fn capacity_saga_recovers_and_expired_quotes_do_not_contact_backend() {
     assert_eq!(f.lightning.creates.load(Ordering::SeqCst), 0);
 }
 #[tokio::test]
+async fn payment_attempts_on_expired_orders_report_expired_without_backend_io() {
+    let f = Fixture::new();
+    let (p, o) = f.quoted().await;
+    f.ledger
+        .state(&o.quote.order_id, State::Quoted, State::Expired)
+        .unwrap();
+    assert!(matches!(
+        f.checkout
+            .lightning(&p, &o.quote.order_id, &o.quote_digest)
+            .await,
+        Err(Error::Expired)
+    ));
+    let (c, _mint) = notes(&f, MintMode::Normal);
+    let buyer = principal(2);
+    let order = c
+        .quote(&buyer, request("expired-note", Rail::Lnurlcash))
+        .await
+        .unwrap();
+    f.ledger
+        .state(&order.quote.order_id, State::Quoted, State::Expired)
+        .unwrap();
+    assert!(matches!(
+        c.lnurlcash(&buyer, &order.quote.order_id, &order.quote_digest, &note())
+            .await,
+        Err(Error::Expired)
+    ));
+    assert_eq!(f.lightning.creates.load(Ordering::SeqCst), 0);
+    assert!(_mint.requests.lock().unwrap().is_empty());
+}
+#[tokio::test]
 async fn late_settlement_requires_refund_without_granting_storage() {
     let f = Fixture::new();
     let (p, o) = f.quoted().await;

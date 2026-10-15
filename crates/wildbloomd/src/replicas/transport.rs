@@ -322,15 +322,26 @@ impl HttpTransport {
         {
             return Err(NetworkFailure::InvalidBytes);
         }
-        let stream = futures_util::stream::try_unfold(file, |mut file| async move {
-            let mut bytes = vec![0; 64 * 1024];
-            let count = file.read(&mut bytes).await?;
-            bytes.truncate(count);
-            Ok::<_, std::io::Error>(if count == 0 {
-                None
-            } else {
-                Some((bytes, file))
-            })
+        let observed = std::sync::Arc::new(std::sync::Mutex::new(Sha256::new()));
+        let stream = futures_util::stream::try_unfold(file, {
+            let observed = observed.clone();
+            move |mut file| {
+                let observed = observed.clone();
+                async move {
+                    let mut bytes = vec![0; 64 * 1024];
+                    let count = file.read(&mut bytes).await?;
+                    bytes.truncate(count);
+                    Ok::<_, std::io::Error>(if count == 0 {
+                        None
+                    } else {
+                        observed
+                            .lock()
+                            .map_err(|_| std::io::Error::other("upload hash state"))?
+                            .update(&bytes);
+                        Some((bytes, file))
+                    })
+                }
+            }
         });
         let mut header = reqwest::header::HeaderValue::from_str(authorization)
             .map_err(|_| NetworkFailure::Refused)?;
@@ -348,6 +359,11 @@ impl HttpTransport {
             .map_err(|_| NetworkFailure::Unreachable)?;
         if !matches!(response.status().as_u16(), 200 | 201) {
             return Err(NetworkFailure::Refused);
+        }
+        // Fail a locally mutated file here, not after a wasted round-trip.
+        let hash = observed.lock().map_err(|_| NetworkFailure::InvalidBytes)?;
+        if hex::encode(hash.clone().finalize()) != blob.sha256 {
+            return Err(NetworkFailure::InvalidBytes);
         }
         // Drop the untrusted descriptor; read-back uses only the signed origin/hash.
         Ok(())
@@ -724,6 +740,74 @@ mod tests {
             Err(DownloadError::LocalStorage)
         );
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn upload_streams_exact_bytes_and_rejects_local_mutation() {
+        let bytes = b"synthetic part bytes";
+        let blob = Blob {
+            sha256: hex::encode(Sha256::digest(bytes)),
+            size: bytes.len() as u64,
+        };
+        let client = HttpTransport::new(Profile::LoopbackDevelopment, None, true).unwrap();
+        for (payload, expected) in [
+            (bytes.as_slice(), Ok(())),
+            (
+                b"synthetic part bytex".as_slice(),
+                Err(NetworkFailure::InvalidBytes),
+            ),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut body = None;
+                while body.is_none() {
+                    let mut part = [0; 4096];
+                    let received = stream.read(&mut part).await.unwrap();
+                    assert!(received > 0);
+                    request.extend_from_slice(&part[..received]);
+                    body = request
+                        .windows(4)
+                        .position(|window| window == b"\r\n\r\n")
+                        .map(|start| start + 4);
+                }
+                let start = body.unwrap();
+                let headers = std::str::from_utf8(&request[..start])
+                    .unwrap()
+                    .to_lowercase();
+                assert!(headers.contains("authorization: nostr synthetic"));
+                assert!(headers.contains("x-sha-256"));
+                while request.len() - start < bytes.len() {
+                    let mut part = [0; 4096];
+                    let received = stream.read(&mut part).await.unwrap();
+                    assert!(received > 0);
+                    request.extend_from_slice(&part[..received]);
+                }
+                stream
+                    .write_all(
+                        b"HTTP/1.1 201 Created\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .await
+                    .unwrap();
+            });
+            let target = Target {
+                id: "fixture".into(),
+                origin: format!("http://{address}/"),
+                failure_group: "fixture".into(),
+                retention: super::super::policy::Retention::Owner,
+            };
+            let file = tempfile::NamedTempFile::new().unwrap();
+            tokio::fs::write(file.path(), payload).await.unwrap();
+            assert_eq!(
+                client
+                    .upload(&target, &blob, file.path(), "Nostr synthetic")
+                    .await,
+                expected
+            );
+            server.await.unwrap();
+        }
     }
 
     #[tokio::test]
