@@ -66,6 +66,17 @@ fn invalid() -> Error {
     Error::Configuration("invalid pool receipt, placement or transport profile")
 }
 
+/// Every consumer of a receipt must resolve the manifest profile and the
+/// loopback consent identically; keep one derivation or they drift apart.
+fn derive_profile(manifest: &Manifest, permit_loopback: bool) -> Result<Profile, Error> {
+    match manifest.profile.as_str() {
+        "tor" if !permit_loopback => Ok(Profile::TorOnly),
+        "direct" if permit_loopback => Ok(Profile::LoopbackDevelopment),
+        "direct" => Ok(Profile::DirectHttps),
+        _ => Err(invalid()),
+    }
+}
+
 /// Produce exact unsigned maintenance policies for an external signer. This
 /// function never contacts a node/signer or modifies coordinator state.
 pub fn templates(
@@ -120,12 +131,7 @@ pub fn templates(
     {
         return Err(invalid());
     }
-    let profile = match manifest.profile.as_str() {
-        "tor" if !permit_loopback => Profile::TorOnly,
-        "direct" if permit_loopback => Profile::LoopbackDevelopment,
-        "direct" => Profile::DirectHttps,
-        _ => return Err(invalid()),
-    };
+    let profile = derive_profile(&manifest, permit_loopback)?;
     let mut ids = BTreeSet::new();
     let mut origins = BTreeSet::new();
     let mut hosts = BTreeSet::new();
@@ -222,13 +228,7 @@ pub(super) fn receipt(
     }
     let event = policy::signed_event(bytes, owner, 128 * 1024)?;
     let manifest: Manifest = serde_json::from_str(&event.content).map_err(|_| invalid())?;
-    let profile = if permit_loopback {
-        Profile::LoopbackDevelopment
-    } else if manifest.profile == "tor" {
-        Profile::TorOnly
-    } else {
-        Profile::DirectHttps
-    };
+    let profile = derive_profile(&manifest, permit_loopback)?;
     Ok((manifest, profile))
 }
 
@@ -316,5 +316,26 @@ mod tests {
         );
         assert!(templates(&bytes, &owner, 0, NOW + 3600, NOW, false).is_err());
         assert!(templates(&bytes, &owner, 1, NOW, NOW, false).is_err());
+    }
+    #[test]
+    fn receipt_derives_the_same_profile_as_templates() {
+        let (keys, manifest) = fixture();
+        let owner = keys.public_key().to_hex();
+        // Development consent must never re-map a Tor manifest to loopback.
+        let mut tor = manifest.clone();
+        tor["profile"] = json!("tor");
+        let tor = signed(&keys, &tor);
+        assert!(templates(&tor, &owner, 1, NOW + 3600, NOW, true).is_err());
+        assert!(receipt(&tor, &owner, &"ab".repeat(32), NOW, true).is_err());
+        // The owner path returns the exact profile templates validated.
+        let direct = signed(&keys, &manifest);
+        let id = policy::signed_event(&direct, &owner, 128 * 1024)
+            .unwrap()
+            .id
+            .to_hex();
+        let (_, profile) = receipt(&direct, &owner, &id, NOW, false).unwrap();
+        assert_eq!(profile, Profile::DirectHttps);
+        // Loopback consent still refuses every non-loopback origin.
+        assert!(receipt(&direct, &owner, &id, NOW, true).is_err());
     }
 }

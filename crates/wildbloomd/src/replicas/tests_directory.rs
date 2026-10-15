@@ -3,7 +3,7 @@ use super::{
     engine::{Clock, Limits},
     policy::{Blob, Policy, Retention, Target, VerifiedPolicy, policy_template},
     state::StateDirectory,
-    transport::{NetworkFailure, Profile, Transport},
+    transport::{DownloadError, NetworkFailure, Profile, Transport},
 };
 use futures_util::future::BoxFuture;
 use nostr::prelude::{FinalizeEvent, Keys};
@@ -46,6 +46,23 @@ impl Transport for Net {
         _: &'a str,
     ) -> BoxFuture<'a, Result<(), NetworkFailure>> {
         Box::pin(async { Ok(()) })
+    }
+    fn download<'a>(
+        &'a self,
+        _: &'a Target,
+        _: &'a Blob,
+        _: &'a std::path::Path,
+    ) -> BoxFuture<'a, Result<(), DownloadError>> {
+        Box::pin(async { Err(NetworkFailure::Refused.into()) })
+    }
+    fn upload<'a>(
+        &'a self,
+        _: &'a Target,
+        _: &'a Blob,
+        _: &'a std::path::Path,
+        _: &'a str,
+    ) -> BoxFuture<'a, Result<(), NetworkFailure>> {
+        Box::pin(async { Err(NetworkFailure::Refused) })
     }
 }
 

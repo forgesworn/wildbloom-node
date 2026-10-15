@@ -158,7 +158,7 @@ fn upload_template(
 async fn pass(
     guard: &Guard<'_>,
     manifest: &pool::Manifest,
-    transport: &HttpTransport,
+    transport: &dyn Transport,
     signer: &dyn Signer,
 ) -> Result<Report, Error> {
     guard.check()?;

@@ -1,7 +1,10 @@
 //! Real HTTP and disk fault tests for the production repair pass. Only the
 //! external signer is replaced with a synthetic in-process key.
 use super::*;
-use crate::replicas::{signer::SignerError, transport::Profile};
+use crate::replicas::{
+    signer::SignerError,
+    transport::{NetworkFailure, Profile},
+};
 use axum::{
     Router,
     body::Bytes,
@@ -14,7 +17,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 #[derive(Default)]
@@ -244,14 +247,18 @@ impl Fixture {
         }
     }
     async fn pass(&self) -> Result<Report, Error> {
+        let transport = HttpTransport::new(Profile::LoopbackDevelopment, None, true).unwrap();
+        self.pass_with(&transport).await
+    }
+    // Any scripted transport now drives the identical production repair pass.
+    async fn pass_with(&self, transport: &dyn Transport) -> Result<Report, Error> {
         let guard = Guard {
             args: &self.args,
             bytes: &self.receipt,
         };
-        let transport = HttpTransport::new(Profile::LoopbackDevelopment, None, true).unwrap();
         let result = tokio::time::timeout(
             Duration::from_secs(10),
-            pass(&guard, &self.manifest, &transport, &self.signer),
+            pass(&guard, &self.manifest, transport, &self.signer),
         )
         .await
         .expect("bounded repair pass");
@@ -374,5 +381,143 @@ async fn signature_return_after_authority_expiry_never_uploads() {
     let reads = f.reads.load(Ordering::SeqCst);
     assert!(f.pass().await.is_err());
     assert_eq!(f.reads.load(Ordering::SeqCst), reads);
+    assert_eq!(f.signer.calls.load(Ordering::SeqCst), 1);
+}
+
+/// Connection refusal is a class a live test server cannot offer.
+struct AllDown;
+impl Transport for AllDown {
+    fn verify<'a>(
+        &'a self,
+        _: &'a policy::Target,
+        _: &'a policy::Blob,
+    ) -> BoxFuture<'a, Result<(), NetworkFailure>> {
+        Box::pin(async { Err(NetworkFailure::Unreachable) })
+    }
+    fn mirror<'a>(
+        &'a self,
+        _: &'a policy::Target,
+        _: &'a policy::Target,
+        _: &'a policy::Blob,
+        _: &'a str,
+    ) -> BoxFuture<'a, Result<(), NetworkFailure>> {
+        Box::pin(async { Err(NetworkFailure::Refused) })
+    }
+    fn download<'a>(
+        &'a self,
+        _: &'a policy::Target,
+        _: &'a policy::Blob,
+        _: &'a std::path::Path,
+    ) -> BoxFuture<'a, Result<(), DownloadError>> {
+        Box::pin(async { Err(NetworkFailure::Unreachable.into()) })
+    }
+    fn upload<'a>(
+        &'a self,
+        _: &'a policy::Target,
+        _: &'a policy::Blob,
+        _: &'a std::path::Path,
+        _: &'a str,
+    ) -> BoxFuture<'a, Result<(), NetworkFailure>> {
+        Box::pin(async { unreachable!("no source part means no upload attempt") })
+    }
+}
+
+/// Serves real part bytes but fails read-back until marked healthy again.
+struct FlakyStore {
+    parts: Vec<(String, Vec<u8>)>,
+    healthy: AtomicBool,
+    uploads: AtomicUsize,
+}
+impl Transport for FlakyStore {
+    fn verify<'a>(
+        &'a self,
+        _: &'a policy::Target,
+        _: &'a policy::Blob,
+    ) -> BoxFuture<'a, Result<(), NetworkFailure>> {
+        Box::pin(async move {
+            if self.healthy.load(Ordering::SeqCst) {
+                Ok(())
+            } else {
+                Err(NetworkFailure::InvalidResponse)
+            }
+        })
+    }
+    fn mirror<'a>(
+        &'a self,
+        _: &'a policy::Target,
+        _: &'a policy::Target,
+        _: &'a policy::Blob,
+        _: &'a str,
+    ) -> BoxFuture<'a, Result<(), NetworkFailure>> {
+        Box::pin(async { Err(NetworkFailure::Refused) })
+    }
+    fn download<'a>(
+        &'a self,
+        _: &'a policy::Target,
+        blob: &'a policy::Blob,
+        path: &'a std::path::Path,
+    ) -> BoxFuture<'a, Result<(), DownloadError>> {
+        Box::pin(async move {
+            let index = self
+                .parts
+                .iter()
+                .position(|(sha256, _)| sha256 == &blob.sha256)
+                .unwrap();
+            if index == 3 && !self.healthy.load(Ordering::SeqCst) {
+                return Err(NetworkFailure::Unreachable.into());
+            }
+            std::fs::write(path, &self.parts[index].1).map_err(|_| DownloadError::LocalStorage)
+        })
+    }
+    fn upload<'a>(
+        &'a self,
+        _: &'a policy::Target,
+        _: &'a policy::Blob,
+        _: &'a std::path::Path,
+        _: &'a str,
+    ) -> BoxFuture<'a, Result<(), NetworkFailure>> {
+        Box::pin(async move {
+            self.uploads.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn unreachable_nodes_degrade_without_signing_or_uploading() {
+    let f = Fixture::new().await;
+    let report = f.pass_with(&AllDown).await.unwrap();
+    assert!(!report.protected && !report.recoverable && !report.reconstructed);
+    assert_eq!(report.verified_groups, vec![0; 4]);
+    assert!(report.nodes.iter().all(|node| node.state == "unavailable"));
+    assert_eq!(report.uploads_attempted, 0);
+    assert_eq!(f.signer.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn failed_readback_never_credits_and_a_healthy_retry_protects() {
+    let f = Fixture::new().await;
+    let store = FlakyStore {
+        parts: f
+            .manifest
+            .parts
+            .iter()
+            .zip(&f.original)
+            .map(|(part, bytes)| (part.sha256.clone(), bytes.clone()))
+            .collect(),
+        healthy: AtomicBool::new(false),
+        uploads: AtomicUsize::new(0),
+    };
+    let report = f.pass_with(&store).await.unwrap();
+    assert!(!report.protected && report.recoverable && report.reconstructed);
+    assert_eq!(report.verified_groups, vec![1, 1, 1, 0]);
+    assert_eq!(report.uploads_attempted, 1);
+    assert_eq!(store.uploads.load(Ordering::SeqCst), 1);
+    assert_eq!(f.signer.calls.load(Ordering::SeqCst), 1);
+    store.healthy.store(true, Ordering::SeqCst);
+    let report = f.pass_with(&store).await.unwrap();
+    assert!(report.protected && !report.reconstructed);
+    assert_eq!(report.uploads_attempted, 0);
+    assert_eq!(store.uploads.load(Ordering::SeqCst), 1);
     assert_eq!(f.signer.calls.load(Ordering::SeqCst), 1);
 }
