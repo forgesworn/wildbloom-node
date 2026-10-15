@@ -236,7 +236,7 @@ try {
   })()`), true);
   await until(async () => await app.evaluate('document.querySelector("#pool-action-status").textContent.includes("Authority must expire within the next year")') === true, 'expired authority rejected');
   assert.equal(signatures(), 0);
-  assert.equal(descendants(app.child.pid).length, 0);
+  assert.equal((await descendants(app.child.pid)).length, 0);
   assert.equal(await verifyPart(0), false);
   assert.equal(await verifyPart(1), false);
   passed('native IPC rejects expired authority without starting a worker, signing or repairing');
@@ -249,18 +249,18 @@ try {
   await until(async () => await app.evaluate('document.querySelector("#pool-action-status").textContent.includes("Automatic repair started")') === true, 'repair action accepted');
   await until(async () => await verifyPart(0) && await verifyPart(1), 'desktop owner repair', 45000);
   assert.ok(signatures() >= 2);
-  await until(async () => descendants(app.child.pid).length === 1, 'one supervised repair child');
+  await until(async () => (await descendants(app.child.pid)).length === 1, 'one supervised repair child');
   passed('desktop starts the real owner service and restores both missing parts');
 
   await clickControl('pool-stop');
   await until(async () => await app.evaluate('document.querySelector("#pool-action-status").textContent === "Pool process stopped."') === true, 'explicit stop action');
-  assert.equal(descendants(app.child.pid).length, 0);
+  assert.equal((await descendants(app.child.pid)).length, 0);
   assert.equal(await app.evaluate('document.querySelector("#pool-consent").checked'), false);
   passed('desktop Stop action terminates the real child and revokes repair consent');
   await until(async () => await app.evaluate('!document.querySelector("#pool-check").disabled') === true, 'stopped controls');
   await app.evaluate('(()=>{const c=document.querySelector("#pool-consent");c.checked=true;c.dispatchEvent(new Event("change",{bubbles:true}));document.querySelector("#pool-start").click();return true})()');
   await until(async () => await app.evaluate('document.querySelector("#pool-action-status").textContent.includes("Automatic repair started")') === true, 'explicit restart');
-  await until(() => descendants(app.child.pid).length === 1, 'restarted owner child');
+  await until(async () => (await descendants(app.child.pid)).length === 1, 'restarted owner child');
 
   assert.equal((await app.command('close')).ok, true);
   await until(async () => (await app.command('status')).visible === false, 'close-to-tray');
