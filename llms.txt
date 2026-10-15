@@ -29,6 +29,15 @@ This binds the listener to loopback by default and starts a managed Tor
 process unless `--no-tor` is given. Once ready, the log prints the stable
 `.onion` Blossom URL to give to a Blossom-capable client.
 
+Default mode needs the Tor Expert Bundle `tor` executable on `PATH` (or
+`--tor-bin <PATH>`). If it is missing, `wildbloomd` exits during start-up with
+an I/O `NotFound` error (on Unix, `Error: State(Os { code: 2, kind: NotFound, ... })`)
+that does not name tor. For a local test without Tor, run
+`./target/release/wildbloomd --no-tor --allow-pubkey <hex>`.
+
+To upload and read back a blob by hand, see "Test a node by hand" in
+[README.md](README.md#test-a-node-by-hand).
+
 ## Key Concepts
 
 - Content-addressed storage: blobs are indexed by the SHA-256 of the bytes
@@ -52,17 +61,56 @@ process unless `--no-tor` is given. Once ready, the log prints the stable
 `wildbloomd` exposes standard Blossom HTTP endpoints:
 
 - `GET` / `HEAD` on a blob's hash (BUD-01), with optional file extensions and
-  single byte ranges.
+  single byte ranges. No authorisation is needed to read; an unknown hash is
+  404.
 - `PUT /upload` (BUD-02): streaming upload with `Content-Length` and
-  `X-SHA-256`, authorised by a BUD-11 event in `Authorization: Nostr <event>`.
+  `X-SHA-256`, authorised by a BUD-11 event in
+  `Authorization: Nostr <base64-event>` (standard base64 per BUD-01; URL-safe
+  and unpadded forms are also accepted). Any authorisation failure is 401.
 - `PUT /mirror` (BUD-04): pulls a blob from another Blossom origin (onion via
   the private Tor SOCKS listener, or public HTTPS in direct mode).
 - Authorised, self-only listing and claim-aware deletion (BUD-12), with
   bounded cursor pagination.
 
-Key CLI flags: `--bind`, `--data-dir`, `--allow-pubkey`, `--friend-grant`,
-`--open-shelter`, `--quota-bytes`, `--max-blob-bytes`, `--no-tor`,
-`--public-url`, `--direct-https-mirrors`, `--verify-storage`.
+Key CLI flags (each also has a `WILDBLOOM_*` environment variable; see
+`wildbloomd --help`):
+
+- `--bind <IP:PORT>`: local listener, default `127.0.0.1:3742`.
+- `--data-dir <PATH>`: data directory (`WILDBLOOM_DATA_DIR`), default per-user
+  app data.
+- `--quota-bytes <BYTES>`: total blob quota, default 10 GiB.
+- `--max-blob-bytes <BYTES>`: largest single blob, default 1 GiB.
+- `--allow-pubkey <HEX>`: owner public key, repeatable.
+- `--friend-grant <PUBKEY:BYTE_LIMIT:EXPIRES_AT>`: friend key, byte ceiling and
+  Unix expiry, repeatable.
+- `--open-shelter`: admit unknown signed mirrors as guest data.
+- `--max-concurrent-writes <N>`: concurrent upload and mirror streams, default 4.
+- `--repair-interval <SECONDS>`: integrity scan and repair interval, default
+  3600; 0 disables repair.
+- `--verify-storage`: verify every stored byte and exit.
+- `--no-tor`: do not start managed Tor.
+- `--tor-bin <PATH>`: Tor executable, default `tor`.
+- `--public-url <URL>`: public origin for blob descriptors; needs `--no-tor`.
+- `--direct-https-mirrors`: fetch public HTTPS mirrors directly; needs `--no-tor`.
+- `--service-profile <PATH>`: opt-in public service listing.
+- `--checkout-profile <PATH>`: opt-in paid checkout; needs `--no-tor`.
+
+## Features
+
+- Desktop app: native tray app with a Tor or direct choice and owner-directed
+  storage pools. See [docs/DESKTOP-POOLS.md](docs/DESKTOP-POOLS.md).
+- Storage pools: private signed receipts, part health checks and owner-side
+  repair via `wildbloomd replicas pool-repair`. See
+  [docs/POOL-STORAGE.md](docs/POOL-STORAGE.md).
+- Service discovery: opt-in `GET /services/v1` snapshot and kind 31402
+  publication via `--service-profile`. See
+  [docs/SERVICE-DISCOVERY.md](docs/SERVICE-DISCOVERY.md).
+- Paid checkout: Lightning and LNURLcash sales via `--checkout-profile`, off by
+  default. See [docs/CHECKOUT.md](docs/CHECKOUT.md).
+- Replica coordinator: `wildbloomd replicas run --policy <signed-policy.json>
+  --state-dir <DIR> --owner <HEX>`, or `--policy-dir <DIR> --state-root <DIR>`
+  for a directory of policies. See
+  [docs/REPLICA-POLICY.md](docs/REPLICA-POLICY.md).
 
 ## Optional
 
