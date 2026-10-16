@@ -306,6 +306,7 @@
     let generation = 0;
     let sequenceIndex = 0;
     let restoring = false;
+    let waiting = false;
     let recoveryKey = '';
     const stepNumber = { node: 1, approve: 2, recovery: 3 };
 
@@ -439,6 +440,7 @@
         if (disposed || myGeneration !== generation) return;
         if (facts.state === 'waiting' && view.phase === 'idle') return renderApprove({ phase: 'waiting', facts });
       }
+      waiting = view.phase === 'waiting';
       const inputId = uid('bunker');
       const hintId = uid('hint');
       const errorId = uid('error');
@@ -461,6 +463,7 @@
         const message = view.phase === 'done' ? `Approved by ${shortNpub(facts.byNpub)}.` : 'Waiting for your signer. Check your Heartwood device.';
         show(...lead, h('p', { class: 'msg ok', role: 'status' }, message), view.phase === 'waiting' ? h('div', { class: 'stack' }, h('button', { class: 'btn secondary block', type: 'button', onclick: async () => {
           generation++;
+          waiting = false;
           try { await call('cancel_approval'); } catch { /* already finished */ }
           if (!disposed) renderApprove({ phase: 'idle' });
         } }, 'Cancel')) : null);
@@ -477,10 +480,12 @@
           renderApprove({ phase: 'idle', facts, error: approvalErrorText.bad_link(), focusInput: true });
           return;
         }
+        waiting = true; // a dismissal while the request is in flight must still cancel it
         try {
           await call(opts.renew ? 'renew_approval' : 'approve_device', { bunkerUrl: link });
           if (!disposed) renderApprove({ phase: 'waiting', facts });
         } catch (e) {
+          waiting = false;
           if (disposed || guardKeychain(e)) return;
           const text = (approvalErrorText[e.code] || (() => `Your online node didn't accept the approval: ${e.message || 'no reason given'}.`))({ ...e, detail: e.detail || e.message });
           renderApprove({ phase: 'idle', facts, error: text, focusInput: true });
@@ -498,10 +503,12 @@
       error,
       h('div', { class: 'stack' }, submit,
         opts.browserApproval ? secondary('Approve in your browser instead', async () => {
+          waiting = true;
           try {
             await call(opts.renew ? 'renew_approval' : 'approve_device', { bunkerUrl: null, browser: true });
             if (!disposed) renderApprove({ phase: 'waiting', facts });
           } catch (e) {
+            waiting = false;
             if (!guardKeychain(e)) renderApprove({ phase: 'idle', facts, error: e.message || 'Something went wrong.' });
           }
         }) : null,
@@ -521,6 +528,7 @@
           return;
         }
         if (disposed || myGeneration !== generation) return;
+        if (status.state !== 'waiting') waiting = false;
         if (status.state === 'approved') {
           renderApprove({ phase: 'done', facts: status });
           await delay(600);
@@ -757,7 +765,7 @@
         generation++;
         recoveryKey = '';
         draft.key = '';
-        if (step === 'approve') call('cancel_approval').catch(() => {});
+        if (waiting) call('cancel_approval').catch(() => {});
         host.replaceChildren();
       },
     };
@@ -954,7 +962,7 @@
 
   function buildRow(row, animate) {
     const d = describe(row);
-    const name = h('h3', { class: 'row-name', title: row.name, 'aria-label': row.name }, middleTruncate(row.name));
+    const name = h('h3', { class: 'row-name', title: row.name, 'aria-label': row.name }, row.name);
     const actions = h('div', { class: 'row-actions' });
     const menu = menuFor(row);
     if (canShare(row)) {
@@ -1057,6 +1065,36 @@
       if (!mine) upsertRow(row);
     }
   }
+  /** Two lines at most, then cut from the middle so the extension always stays visible. */
+  function fitName(heading) {
+    const full = heading.getAttribute('title') || '';
+    heading.textContent = full;
+    if (heading.offsetParent === null || full.length < 24) return;
+    const limit = Math.round(parseFloat(getComputedStyle(heading).lineHeight) * 2) + 1;
+    if (heading.scrollHeight <= limit) return;
+    let low = 12;
+    let high = full.length;
+    while (low < high) {
+      const mid = (low + high + 1) >> 1;
+      heading.textContent = middleTruncate(full, mid);
+      if (heading.scrollHeight <= limit) low = mid;
+      else high = mid - 1;
+    }
+    heading.textContent = middleTruncate(full, low);
+  }
+  function fitNames() {
+    for (const heading of el.files.querySelectorAll('.row-name')) fitName(heading);
+  }
+  let fitWidth = 0;
+  function watchWidth() {
+    if (!window.ResizeObserver) return;
+    new ResizeObserver(() => {
+      const width = el.files.clientWidth;
+      if (width === fitWidth) return;
+      fitWidth = width;
+      fitNames();
+    }).observe(el.files);
+  }
   function layoutChanged() {
     const sorted = [...rows.values()].sort((a, b) => (b.added || 0) - (a.added || 0));
     let previous = null;
@@ -1070,6 +1108,7 @@
     renderStatusLine();
     renderZone();
     renderFooter();
+    fitNames();
   }
   function applyFilter() {
     const query = el.findInput.value.trim().toLowerCase();
@@ -1086,6 +1125,7 @@
     el.files.hidden = rows.size === 0;
     el.filesHeading.hidden = rows.size === 0;
     el.listRegion.hidden = rows.size === 0;
+    if (query) fitNames();
   }
 
   /* ---------- status line (section 6.1) ---------- */
@@ -1371,6 +1411,7 @@
     document.addEventListener('keydown', onKeydown);
     window.addEventListener('focus', () => { if (loaded && !state.firstRun) renderStatusLine(); });
     bindDrag();
+    watchWidth();
   }
 
   async function start() {

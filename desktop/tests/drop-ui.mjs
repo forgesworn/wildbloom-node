@@ -159,6 +159,19 @@ scenario('rows: every state shows the exact copy, actions and menu items (macOS 
   assert.match(truncated, /…/);
   assert.match(truncated, /\.zip$/);
   assert.equal(await page.locator('li.row img').count(), 0, 'hostile file name is not markup');
+  for (const [width, height] of [[400, 600], [340, 420]]) {
+    await page.setViewportSize({ width, height });
+    await page.waitForTimeout(150);
+    const fit = await page.evaluate(() => {
+      const heading = [...document.querySelectorAll('li.row h3')].find((node) => node.getAttribute('title').startsWith('holiday-photos'));
+      const lineHeight = parseFloat(getComputedStyle(heading).lineHeight);
+      return { text: heading.textContent, lines: Math.round(heading.getBoundingClientRect().height / lineHeight), scroll: heading.scrollHeight, client: heading.clientHeight };
+    });
+    assert.ok(fit.lines <= 2, `long name takes ${fit.lines} lines at ${width}`);
+    assert.ok(fit.scroll <= fit.client + 1, 'nothing is clipped');
+    assert.match(fit.text, /^holiday-photos.*….*final-version-2026\.zip$|^holiday-photos.*….*\.zip$/, `extension stays visible at ${width}: ${fit.text}`);
+  }
+  await page.setViewportSize({ width: 400, height: 600 });
   assert.equal(await page.locator('li.row h3', { hasText: '<img src=x onerror=alert(1)>.pdf' }).count(), 1);
   assert.equal(await page.evaluate(() => window.__stub.windows.length), 0);
   await done(page);
@@ -1028,7 +1041,7 @@ scenario('settings: section order, values, actions and sheets', async () => {
   assert.equal(await page.evaluate(() => document.activeElement.id), 'drop-node-change');
   await section.locator('#drop-node-change').click();
   await confirm.locator('button', { hasText: 'Continue' }).click();
-  const sheet = page.locator('dialog.flow-sheet[open]');
+  const sheet = page.locator('dialog.flow-sheet'); // closed dialogs are removed in the close handler, so detached means disposed
   assert.equal(await text(sheet.locator('h2')), 'Set up Wildbloom Drop');
   assert.equal(await sheet.locator('.eyebrow').count(), 0);
   assert.deepEqual(await sheet.locator('button').allTextContents(), ['Continue', 'Cancel'], 'no first-run extras in a sheet');
@@ -1041,6 +1054,7 @@ scenario('settings: section order, values, actions and sheets', async () => {
   await page.evaluate(() => { window.__stub.approval = { state: 'approved', byNpub: window.__stub.npub }; });
   await sheet.waitFor({ state: 'detached', timeout: 6000 });
   assert.equal(await page.evaluate(() => document.activeElement.id), 'drop-node-change');
+  assert.equal((await calls(page, 'cancel_approval')).length, 0, 'a finished approval is never cancelled when the sheet closes');
 
   await section.locator('#drop-renew').click();
   await page.evaluate(() => { window.__stub.approval = { state: 'idle' }; });
@@ -1051,7 +1065,7 @@ scenario('settings: section order, values, actions and sheets', async () => {
   assert.deepEqual((await calls(page, 'renew_approval')).at(-1).args, { bunkerUrl: 'bunker://relay.example/pair?secret=abc' });
   await page.keyboard.press('Escape');
   await sheet.waitFor({ state: 'detached' });
-  assert.equal((await calls(page, 'cancel_approval')).length >= 1, true, 'dismissing a waiting sheet cancels the approval');
+  assert.equal((await calls(page, 'cancel_approval')).length, 1, 'dismissing a waiting sheet cancels the approval');
 
   await section.locator('#drop-recovery').click();
   await sheet.locator('.key').waitFor();
