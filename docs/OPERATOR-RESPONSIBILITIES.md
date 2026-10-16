@@ -113,6 +113,10 @@ including in response to a legal notice.]`
   time-boxed, size-capped allowance. It naturally lapses at its `expiry`.
   There is no command to revoke a friend grant before its expiry without
   restarting with a changed configuration.
+- With `--device-grants`, an owner can grant and revoke a device key at
+  runtime with an owner-signed event (see [PROTOCOL.md](PROTOCOL.md)). A
+  revoked or expired device stops writing at once; its stored files move to
+  the owner, who can delete them.
 - `--open-shelter` is a single on/off switch for admitting unknown signed
   guest mirrors. There is no per-key denylist under open shelter: you cannot
   block one specific abusive key while leaving open shelter on for everyone

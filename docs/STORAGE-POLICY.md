@@ -148,6 +148,89 @@ removal and blocks re-admission.  Revoking a friend grant may demote its claims
 to `guest`; it must not silently present demotion as deletion from every other
 replica.
 
+## Owner-delegated claims
+
+[Device grants](PROTOCOL.md#owner-authorised-device-grants) let an owner hand a
+device key and a recovery identity bounded write authority.  The core has no
+delegated tier, so `wildbloomd` composes one from public core APIs:
+
+- While a grant is active, both keys are registered in the core as friend
+  grants with a stable grant id.  The per-key byte ceiling, streaming bounds,
+  deduplication charging and concurrent reservations are therefore enforced by
+  the core.  The core-side grant carries a far-future expiry (`i64::MAX`)
+  rather than the real one.  The real expiry is enforced by `wildbloomd`, so a
+  node that was stopped across the expiry does not have the core reap those
+  claims at start-up before the grants are reloaded.
+- A grant ends when it expires, is revoked, or its issuing owner is no longer a
+  configured `--allow-pubkey`.  A layer in front of the Blossom router refuses
+  uploads, mirrors, preflights and deletes by an ended key at once.
+- A sweep (shortly after each grant or revocation, at start-up and every
+  minute) then waits briefly for that key's in-flight writes (a key still busy
+  is retried on the next pass, so one slow upload delays only its own key),
+  moves every friend claim the ended key holds to an owner-tier claim for the
+  issuing owner, records the move, and only then removes the key from the
+  core's trusted set.  From then on refusal is core-enforced.  Revocation
+  replies as soon as it is committed; it does not wait for the sweep.
+- Claims a delegated key holds under a separate paid allowance are not moved:
+  they keep their paid retention and allowance.
+- **Expiry and revocation do not demote stored claims.**  They are kept at
+  owner retention, and the owner can list them and delete them with ordinary
+  BUD-12 requests.  A revoked device cannot delete the owner's backups.
+- A recovery identity stays active while any grant naming it is active.
+- Each move is recorded before the owner claim is made, with whether the
+  owner already held that blob.  An owner's own upload or mirror is recorded
+  by the gate before it reaches the core, so a later owner write is never
+  mistaken for the move's.
+- While a key is active again under the same owner, sweeps hand its moved
+  claims back within its current ceiling, and the owner claim the move made is
+  dropped again unless the owner held the blob before the move or has
+  uploaded or mirrored it since.  A delete by the key of a moved claim not yet
+  handed back drops that owner claim the same way.  So after a lapse and a
+  re-grant, the device's delete (for example Stop sharing) still removes the
+  bytes.  An owner upload or mirror made after the move, or during the hour
+  before it, keeps the owner claim; so does any other key's move of the same
+  blob to the same owner until that move is resolved.  The one-hour window
+  errs towards keeping bytes: an owner write in the hour before a move whose
+  claim the owner then deleted before the move still keeps the moved claim.
+- A moved claim the owner deleted, and has not uploaded again, is not handed
+  back.  Claims over the ceiling stay recorded and are retried when the key's
+  ceiling changes or one of its deletes frees space.  This is how a new
+  computer can list the recovery identity's key list after the lost one was
+  revoked.
+
+Moved claims keep their size, type and class; their BUD-12 `uploaded` time
+becomes the time of the move.  Removing an owner from `--allow-pubkey` ends
+that owner's device grants too, and the moved claims are then demoted with the
+rest of that owner's claims, exactly as for any former owner.  Persisted grants
+are honoured whenever `device-grants.sqlite3` exists in the data directory,
+even if `--device-grants` is later turned off, so disabling the routes never
+demotes stored claims.  That file is therefore part of retention state: back it
+up with the store.  If it is lost, the next start knows nothing of those keys
+and their claims stay demoted to `guest`.  A key that was ever delegated cannot
+later be configured as an owner, `--friend-grant` or service key; start-up
+refuses that configuration.  A move is recorded after the owner claim exists and
+the key's claim is removed, so a crash between those steps leaves the owner
+holding the blob without a restore record: nothing is lost, but that claim is
+not handed back on a later grant.
+
+Rolling back to a binary without device grant support is safe for the bytes but
+not for the tier: that binary's start-up reconcile demotes every delegated
+friend claim to `guest` and clears its grant id.  When a binary with device
+grants starts again, it re-adopts every such claim of a key still recorded in
+the grant database (within its ceiling) before the first sweep.  Only claims
+made since the key joined the trusted set are adopted, so guest claims the key
+made before it was granted (for example open-shelter mirrors) stay guest.  While the older
+binary runs, those claims are evictable guests, so do not run it on a node close
+to its quota.  All lifecycle walks page through the core's listing API without
+a cap.  Grant databases written by unreleased previews (schema 1) are migrated
+to schema 2 at start-up; their move records are discarded, so those claims stay
+with the owner and are not handed back.  A newer schema is refused.
+
+A future core with a native delegated tier should replace this composition.
+Until then, two facts are load-bearing: friend claims are not evicted, and the
+`owner`-tier move uses a mirror-style claim so it never lifts an operator
+tombstone.
+
 ## Shared-core boundary
 
 The reusable Rust core owns:

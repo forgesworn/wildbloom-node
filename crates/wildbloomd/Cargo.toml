@@ -21,6 +21,7 @@ futures-util.workspace = true
 hex.workspace = true
 nostr.workspace = true
 reqwest.workspace = true
+rusqlite = { version = "0.40.0", features = ["bundled"] }
 rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -38,6 +39,7 @@ tokio-tungstenite = { version = "0.30.0", default-features = false, features = [
 [dev-dependencies]
 async-trait = "0.1.92"
 tower = { version = "0.5.3", features = ["util"] }
+tokio = { workspace = true, features = ["test-util"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc.workspace = true

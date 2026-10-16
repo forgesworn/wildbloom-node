@@ -61,7 +61,7 @@ process unless `--no-tor` is given. Once ready, the log prints the stable
   bounded cursor pagination.
 
 Key CLI flags: `--bind`, `--data-dir`, `--allow-pubkey`, `--friend-grant`,
-`--open-shelter`, `--quota-bytes`, `--max-blob-bytes`, `--no-tor`,
+`--open-shelter`, `--device-grants`, `--pairing-issuer`, `--quota-bytes`, `--max-blob-bytes`, `--no-tor`,
 `--public-url`, `--direct-https-mirrors`, `--verify-storage`.
 
 ## Optional

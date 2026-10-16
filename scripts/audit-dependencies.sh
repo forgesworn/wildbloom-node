@@ -25,8 +25,21 @@ desktop_ignores=(
   RUSTSEC-2025-0098
   RUSTSEC-2025-0100
 )
-audit_arguments=(--file desktop/src-tauri/Cargo.lock --deny warnings)
+audit_arguments=(--file desktop/src-tauri/Cargo.lock --deny unmaintained --deny unsound)
 for advisory in "${desktop_ignores[@]}"; do
   audit_arguments+=(--ignore "$advisory")
 done
 cargo audit "${audit_arguments[@]}"
+
+# Yanked crates cannot be ignored per advisory, so they are checked as an exact
+# list instead.  Every zip 4.x release is yanked and every published
+# tauri-plugin-updater still requires zip ^4; there is no RustSec advisory
+# against it.  Any other yanked crate, or a different zip version, still fails.
+# See docs/DEPENDENCY-RISK.md.
+allowed_yanked="zip 4.6.1"
+yanked="$(cargo audit "${audit_arguments[@]}" --json 2>/dev/null \
+  | jq -r '[.warnings.yanked[]? | "\(.package.name) \(.package.version)"] | sort | join("\n")')"
+if [[ -n "$yanked" && "$yanked" != "$allowed_yanked" ]]; then
+  printf 'Unexpected yanked desktop dependencies:\n%s\n' "$yanked" >&2
+  exit 1
+fi

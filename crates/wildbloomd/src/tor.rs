@@ -142,6 +142,7 @@ fn managed_tor_command(
 ) -> Command {
     let mut command = Command::new(binary);
     command
+        .env_remove(crate::grants::issuer::TOKEN_ENV)
         .arg("-f")
         .arg(torrc)
         .arg("--DataDirectory")

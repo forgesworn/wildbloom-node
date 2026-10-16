@@ -80,6 +80,110 @@ Primary specifications:
 [BUD-11](https://github.com/hzrd149/blossom/blob/master/buds/11.md), and
 [BUD-12](https://github.com/hzrd149/blossom/blob/master/buds/12.md).
 
+## Owner-authorised device grants
+
+`wildbloomd --device-grants` lets a configured `--allow-pubkey` owner delegate
+bounded, expiring write authority to a device key at runtime, without
+restarting the node.  It is off by default and refuses to start without an
+owner.  This is an experimental Wildbloom profile, not a NIP.
+
+| Endpoint | Authority | Result |
+| --- | --- | --- |
+| `POST /grants/v1` | Body: one owner-signed kind `27540` `grant` event (JSON, at most 16 KiB) | `201` new or `200` replaced, with the grant status |
+| `DELETE /grants/v1/<device>` | `Authorization: Nostr <base64 event>`: one owner-signed kind `27540` `revoke` event | `200` with the revoked status |
+| `GET /grants/v1/<device>` | NIP-98 `GET` signed by that device, its recovery identity or an owner | `200` status; `state` is `active`, `expired`, `revoked` or `withdrawn` (issuer no longer an owner) |
+
+Grant event:
+
+```json
+["t", "grant"]
+["device", "<64 lower-case hex device public key>"]
+["recovery", "<64 lower-case hex recovery identity public key>"]
+["bytes", "<per-key byte ceiling, canonical decimal, at least 1>"]
+["until", "<Unix time the grant ends>"]
+["server", "<exact configured server name>"]
+["expiration", "<NIP-40 Unix time this event stops being accepted>"]
+```
+
+Revoke event:
+
+```json
+["t", "revoke"]
+["device", "<64 lower-case hex device public key, equal to the path>"]
+["server", "<exact configured server name>"]
+["expiration", "<NIP-40 Unix time this event stops being accepted>"]
+```
+
+Kind `27540` sits in the ephemeral range, so a relay that is handed one by
+mistake does not store it.  It is not a registered NIP kind, and it stays
+clear of Blossom's `24242`, NIP-46's `24133` and NIP-98's `27235`.  The
+content is free text of at most 512 bytes (a signer can show it to the owner)
+and is never interpreted.
+
+Every listed tag must appear exactly once with exactly one value, and any other
+tag refuses the event.  The signature and id must verify and the signer must be
+a configured owner.  The `server` tag is compared exactly with the node's
+configured server names.  The event is accepted only while `created_at` is at
+most 30 seconds in the future, `expiration` is in the future, and `expiration`
+is at most ten minutes after `created_at`.  `until` must be in the future and at
+most two years away.  The device and recovery keys must differ, must not be an
+owner or a `--friend-grant` key, and a key cannot be a device in one grant and
+a recovery identity in another.  A recovery identity may be named by several
+grants (one per computer) from the same owner.
+
+Replay protection: every accepted grant or revoke event id is single use, and
+each event for a device must have a strictly later `created_at` than the last
+one accepted for that device.  A captured, never-submitted older grant
+therefore cannot undo a later revocation.  Two events for one device in the
+same second are therefore not both accepted: the second is refused with `409`,
+and a client should wait a second and sign again.  A revocation for a device
+that has no grant yet is accepted and recorded, so an older grant posted later
+cannot land.  A new grant for a device replaces its previous one; that is how
+renewal works.  The node's service announcement key, owners and
+`--friend-grant` keys can never be delegated.
+
+While a grant is active, the device and the recovery identity may upload,
+mirror, preflight and delete as ordinary BUD-11 signers.  The byte ceiling
+applies to each key separately, so one grant can hold at most twice `bytes`.
+A recovery identity named by several active grants takes the largest of their
+ceilings.  BUD-12 listing and deletion stay self-only.  A delegated write body
+must keep arriving: at most 60 seconds between chunks, and each chunk no later
+than two hours plus one second per 16 KiB already received after the upload
+began.  A body that averages at least 16 KiB/s after that grace never times
+out.  A delete by an active key of a blob whose claim was moved to the owner
+and not yet handed back succeeds as if the key still held it.  Once a grant has
+ended, every request from its keys other than `GET`, `OPTIONS` and non-preflight `HEAD` is refused with `403`.  What happens when the
+grant ends (expiry, revocation or its owner leaving the owner set) is set out
+in [STORAGE-POLICY.md](STORAGE-POLICY.md#owner-delegated-claims).
+
+### Pairing creation-grant issuer
+
+`--pairing-issuer --pairing-relay-url <foregather base>` (with
+`--device-grants`) adds one route:
+
+| Endpoint | Authority | Result |
+| --- | --- | --- |
+| `POST /pairing/v1/live-grants` | NIP-98 `POST`, empty body, signed by a device with an active grant | `201 {token,resource,expires,remaining,max_invitation_lifetime}` |
+
+The node calls Foregather's `POST /v1/creation-grants` with exactly
+`{"resource":"live","expires":<now+300>,"max_uses":1,"max_invitation_lifetime":600}`
+and the operator token as `Authorization: Bearer`.  The token comes from
+`--pairing-operator-token-file` (an absolute, mode `0600` file; recommended)
+or the `WILDBLOOM_PAIRING_OPERATOR_TOKEN` environment variable, never a
+command-line argument.  The variable is removed from the environment of the
+Tor and signer child processes.  The token must be Foregather's canonical
+32-byte unpadded base64url form.
+It is never logged or returned.  The relay URL must be HTTPS, or plain HTTP to
+loopback.  Redirects and ambient proxies are disabled.
+
+The NIP-98 profile is the checkout one: exact `u` and `method`, a `payload`
+tag for the empty body, at most 60 seconds old.  Each NIP-98 event id is single
+use, the recovery identity and owners cannot request grants, and each device may
+obtain at most 30 grants in any rolling hour.  The budget is checked before the
+event id is spent, so a refused request spends neither.  The upstream reply is checked for a live,
+one-use, 600-second grant before the token is passed on; the management `id` is
+not returned.  Upstream failures are redacted to `502` or `503`.
+
 ## Experimental private storage offer
 
 An operator may send the following JSON as the plaintext of a NIP-17 private

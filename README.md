@@ -201,6 +201,10 @@ Useful controls:
 --allow-pubkey <HEX>           owner public key, repeatable
 --friend-grant <P:L:E>         friend pubkey, byte limit and Unix expiry
 --open-shelter                 admit unknown signed mirrors as guest data
+--device-grants                accept owner-signed device grants on /grants/v1
+--pairing-issuer               issue one-use Foregather live grants to devices
+--pairing-relay-url <URL>      Foregather API base for --pairing-issuer
+--pairing-operator-token-file <PATH>  private file holding its operator token
 --max-concurrent-writes <N>    concurrent upload/mirror limit, default 4
 --repair-interval <SECONDS>    integrity and repair interval, default 3600
 --verify-storage               verify every stored byte and exit

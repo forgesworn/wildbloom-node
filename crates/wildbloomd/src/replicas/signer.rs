@@ -36,6 +36,7 @@ impl Signer for CommandSigner {
                 return Err(SignerError);
             }
             let mut child = tokio::process::Command::new(&self.executable)
+                .env_remove(crate::grants::issuer::TOKEN_ENV)
                 .args(&self.arguments)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())

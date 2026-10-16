@@ -17,3 +17,16 @@ non-use.  The durable fix is an upstream Tauri/Wry Linux shell which no longer
 depends on this GTK3 chain.  We should remove exceptions as soon as locked
 upgrades permit it and re-evaluate the Linux desktop release if the unsoundness
 becomes exploitable through ordinary WebView or tray behaviour.
+
+## Yanked `zip` 4.6.1
+
+The desktop lock also contains `zip` 4.6.1, pulled in by `tauri-plugin-updater`.
+Every `zip` 4.x release has since been yanked, and every published updater,
+including 2.14.0 and the 3.0 alphas, still requires `zip` ^4, so no locked
+upgrade removes it.  There is no RustSec advisory against it.
+
+Yanked crates cannot be ignored by advisory ID, so the audit script denies
+unmaintained and unsound warnings as before and then compares the yanked list
+with exactly `zip 4.6.1`.  Any other yanked crate, or a different `zip`
+version, still fails CI.  Remove the exception once an updater release moves
+off `zip` 4.

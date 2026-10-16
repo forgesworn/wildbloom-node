@@ -2986,6 +2986,7 @@ dependencies = [
  "libc",
  "nostr",
  "reqwest",
+ "rusqlite",
  "rustls",
  "serde",
  "serde_json",
