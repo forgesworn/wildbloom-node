@@ -261,16 +261,17 @@ impl Grants {
             }),
         };
         grants.reload()?;
-        let snapshot = grants.snapshot();
+        // Any key this node ever delegated stays subject to the gate, so it
+        // cannot also be configured as an owner or friend.
         let cli_keys = grants
             .inner
             .cli_friend_grants
             .iter()
             .map(|grant| grant.pubkey.as_str())
             .collect::<BTreeSet<_>>();
-        if snapshot
-            .members
-            .keys()
+        if grants
+            .known_keys()
+            .iter()
             .any(|key| grants.inner.owners.contains(key) || cli_keys.contains(key.as_str()))
         {
             return Err(GrantsError::Conflict);

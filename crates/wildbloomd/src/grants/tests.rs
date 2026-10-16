@@ -1136,3 +1136,33 @@ async fn tokens_and_authorisation_events_never_reach_the_logs() {
         assert!(!logs.contains(&secret), "a secret value reached the logs");
     }
 }
+
+#[tokio::test]
+async fn a_former_delegated_key_cannot_be_reconfigured_as_a_friend() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("data");
+    let node = node_at(root.clone(), Arc::new(AtomicI64::new(0))).await;
+    let now = node.now();
+    node.call(post_grant(grant_event(&keys(1), &standard_grant(), now)))
+        .await;
+    node.call(revoke_request(&keys(1), &keys(10), now + 1))
+        .await;
+    drop(node);
+    let reopened = Grants::open(
+        &root,
+        GrantsConfig {
+            owners: vec![hex(&keys(1))],
+            server_names: vec![SERVER.into()],
+            origin: ORIGIN.into(),
+            cli_friend_grants: vec![wildbloom_core::FriendGrant {
+                pubkey: hex(&keys(10)),
+                byte_limit: MIB,
+                expires_at: now + 3600,
+                grant_id: "local".into(),
+                issuer: None,
+            }],
+        },
+        super::system_clock(),
+    );
+    assert!(matches!(reopened, Err(super::GrantsError::Conflict)));
+}

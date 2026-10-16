@@ -184,7 +184,14 @@ that owner's device grants too, and the moved claims are then demoted with the
 rest of that owner's claims, exactly as for any former owner.  Persisted grants
 are honoured whenever `device-grants.sqlite3` exists in the data directory,
 even if `--device-grants` is later turned off, so disabling the routes never
-demotes stored claims.
+demotes stored claims.  That file is therefore part of retention state: back it
+up with the store.  If it is lost, or restored from an older backup than the
+store, the next start reconciles without those keys and demotes their active
+claims to `guest`.  A key that was ever delegated cannot later be configured as
+an owner or `--friend-grant`; start-up refuses that configuration.  A move is
+recorded after the owner claim exists and the key's claim is removed, so a crash
+between those steps leaves the owner holding the blob without a restore record:
+nothing is lost, but that claim is not handed back on a later grant.
 
 A future core with a native delegated tier should replace this composition.
 Until then, two facts are load-bearing: friend claims are not evicted, and the
