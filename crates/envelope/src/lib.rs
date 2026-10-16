@@ -21,11 +21,20 @@
 //! secret).  The fresh per-envelope salt is what keeps a reused vault key
 //! nonce-safe, so no production path here can fix the salt.
 //!
-//! Scope: this crate writes and reads `FSWNENC2` only.  `FSWNENC1` and
-//! `WBLMENC1` are refused with [`Error::Magic`]; nothing Wildbloom Node writes
-//! uses them.  Decryption never surfaces plaintext before every record has
-//! authenticated and every semantic check has passed: the file helper deletes its
-//! private temp file on any error, and the byte helper returns nothing.
+//! # Conformance and scope
+//!
+//! This crate writes and reads `FSWNENC2` only, and is therefore **not** a
+//! fully conformant decoder in the sense of `ENCRYPTION.md`, which requires
+//! reading `FSWNENC1` and legacy `WBLMENC1` as well.  Both are refused with
+//! [`Error::Magic`]; nothing Wildbloom Node writes uses them.  A caller that
+//! must open historical envelopes needs a different reader.
+//!
+//! Decryption never returns plaintext before every record has authenticated and
+//! every semantic check has passed: the file helper deletes its private temp
+//! file on any error or panic, and the byte helper returns nothing.  A hard kill
+//! skips that cleanup, so callers run [`sweep_stale_temp_files`] on the temp
+//! directory at start-up.  That directory must not be in a synced or backed-up
+//! folder.
 
 mod key;
 mod name;
@@ -37,7 +46,7 @@ pub use key::{InputKey, KeyError, WBK1_PREFIX, derive_envelope_key};
 pub use name::{normalise_media_type, sanitise_name};
 pub use stream::{
     Progress, Sealed, decrypt_file_to_private_temp, encrypt, encrypt_file_to_private_temp,
-    envelope_bytes, open_bytes, seal_bytes,
+    envelope_bytes, open_bytes, seal_bytes, sweep_stale_temp_files,
 };
 
 use serde::{Deserialize, Serialize};

@@ -11,7 +11,10 @@ publish = false
 # frame this crate is extracted from: aes-gcm 0.10, hkdf 0.12 and the digest-0.10
 # sha2.  General-purpose crates follow the workspace's caret convention.
 [dependencies]
-aes-gcm = { version = "=0.10.3", default-features = false, features = ["aes"] }
+aes-gcm = { version = "=0.10.3", default-features = false, features = ["aes", "zeroize"] }
+# Not used directly: enables wiping of the AES key schedule and GHASH key.
+aes = { version = "=0.8.4", features = ["zeroize"] }
+ghash = { version = "=0.5.1", features = ["zeroize"] }
 base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
 getrandom = "0.3.4"
 hkdf = "=0.12.4"

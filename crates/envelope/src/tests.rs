@@ -570,3 +570,69 @@ fn metadata_length_is_bounded() {
         180
     );
 }
+
+#[test]
+fn a_startup_sweep_removes_stale_temp_files_only() {
+    let work = tempfile::tempdir().unwrap();
+    let dir = work.path().join("private");
+    assert_eq!(sweep_stale_temp_files(&dir).unwrap(), 0, "missing dir");
+
+    // A temp file the crate made and a hard kill left behind.
+    let key = counting(3);
+    let source = work.path().join("source");
+    std::fs::write(&source, b"bytes").unwrap();
+    let (_, envelope) =
+        encrypt_file_to_private_temp(&key, &source, "s", "", Limits::BROWSER, &dir, &mut go())
+            .unwrap();
+    let (_, stale) = envelope.keep().unwrap();
+    // Persisted output and unrelated files survive.
+    let kept = dir.join("persisted.wbenc");
+    std::fs::write(&kept, b"kept").unwrap();
+    std::fs::write(dir.join(".wildbloom-notes.txt"), b"kept").unwrap();
+    std::fs::create_dir(dir.join(".wildbloom-dir.part")).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&kept, dir.join(".wildbloom-link.part")).unwrap();
+
+    assert_eq!(sweep_stale_temp_files(&dir).unwrap(), 1);
+    assert!(!stale.exists());
+    assert!(kept.exists());
+    assert!(dir.join(".wildbloom-notes.txt").exists());
+    assert!(dir.join(".wildbloom-dir.part").is_dir());
+    #[cfg(unix)]
+    assert!(std::fs::symlink_metadata(dir.join(".wildbloom-link.part")).is_ok());
+    assert_eq!(sweep_stale_temp_files(&dir).unwrap(), 0);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(matches!(
+            sweep_stale_temp_files(&dir),
+            Err(Error::PrivateState(_))
+        ));
+    }
+}
+
+#[test]
+fn a_panic_mid_decryption_leaves_no_plaintext_behind() {
+    let work = tempfile::tempdir().unwrap();
+    let dir = work.path().join("private");
+    let key = counting(4);
+    let envelope = seal(&key, "big.bin", "", &vec![7u8; 1_200_000]);
+    let path = work.path().join("envelope");
+    std::fs::write(&path, &envelope).unwrap();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = decrypt_file_to_private_temp(&key, &path, Limits::BROWSER, &dir, &mut |done, _| {
+            if done > HEADER_BYTES as u64 {
+                panic!("simulated failure after the first record");
+            }
+            ControlFlow::Continue(())
+        });
+    }));
+    assert!(result.is_err());
+    assert_eq!(
+        std::fs::read_dir(&dir).unwrap().count(),
+        0,
+        "temp file left"
+    );
+}

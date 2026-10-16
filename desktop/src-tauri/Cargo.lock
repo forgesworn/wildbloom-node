@@ -27,6 +27,7 @@ dependencies = [
  "cfg-if",
  "cipher 0.4.4",
  "cpufeatures 0.2.17",
+ "zeroize",
 ]
 
 [[package]]
@@ -52,6 +53,7 @@ dependencies = [
  "ctr",
  "ghash",
  "subtle",
+ "zeroize",
 ]
 
 [[package]]
@@ -1737,6 +1739,7 @@ checksum = "f0d8a4362ccb29cb0b265253fb0a2728f592895ee6854fd9bc13f2ffda266ff1"
 dependencies = [
  "opaque-debug",
  "polyval",
+ "zeroize",
 ]
 
 [[package]]
@@ -5705,9 +5708,11 @@ dependencies = [
 name = "wildbloom-envelope"
 version = "0.1.0"
 dependencies = [
+ "aes 0.8.4",
  "aes-gcm",
  "base64 0.22.1",
  "getrandom 0.3.4",
+ "ghash",
  "hkdf 0.12.4",
  "serde",
  "serde_json",

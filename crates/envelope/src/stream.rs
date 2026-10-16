@@ -422,11 +422,15 @@ pub(crate) fn decrypt<R: Read, W: Write>(
     Ok(opened.expect("count is at least one").0)
 }
 
+/// Temp files this crate creates are named `.wildbloom-<random>.part`.
+const TEMP_PREFIX: &str = ".wildbloom-";
+const TEMP_SUFFIX: &str = ".part";
+
 fn private_temp(dir: &Path) -> Result<NamedTempFile, Error> {
     wildbloom_private_state::private_directory(dir).map_err(Error::PrivateState)?;
     let temp = tempfile::Builder::new()
-        .prefix(".wildbloom-")
-        .suffix(".part")
+        .prefix(TEMP_PREFIX)
+        .suffix(TEMP_SUFFIX)
         .tempfile_in(dir)?;
     wildbloom_private_state::check_file(temp.as_file()).map_err(Error::PrivateState)?;
     Ok(temp)
@@ -446,8 +450,10 @@ fn open_regular(path: &Path) -> Result<(File, u64), Error> {
 
 /// Encrypts the file at `source` into a new private temp file in `temp_dir`
 /// (created private if missing; refused if it already has broad access).
-/// The temp file is deleted on error and when the returned handle drops, so the
-/// caller persists or uploads it before letting go.
+/// The temp file is deleted on any error or panic and when the returned handle
+/// drops, so the caller persists (renames) or uploads it before letting go.
+/// Persist under a name that is not `.wildbloom-*.part`, or
+/// [`sweep_stale_temp_files`] will remove it.
 pub fn encrypt_file_to_private_temp(
     key: &InputKey,
     source: &Path,
@@ -478,9 +484,50 @@ pub fn encrypt_file_to_private_temp(
     Ok((sealed, temp))
 }
 
+/// Deletes stale `.wildbloom-*.part` files left in `temp_dir` by a process that
+/// was killed mid-operation.  A hard kill skips the temp file's cleanup, so a
+/// partial decryption can leave authenticated plaintext behind; call this at
+/// start-up, before any operation that uses `temp_dir`, and never while one is
+/// running.  Returns how many files were removed.  A missing directory is
+/// nothing to sweep; a directory with broad access is refused.  Only ordinary
+/// files are removed: symlinks and directories are left alone.
+pub fn sweep_stale_temp_files(temp_dir: &Path) -> Result<usize, Error> {
+    match std::fs::symlink_metadata(temp_dir) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => return Err(Error::Io(e)),
+        Ok(_) => {}
+    }
+    wildbloom_private_state::check_directory(temp_dir).map_err(Error::PrivateState)?;
+    let mut removed = 0;
+    for entry in std::fs::read_dir(temp_dir)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !(name.starts_with(TEMP_PREFIX) && name.ends_with(TEMP_SUFFIX)) {
+            continue;
+        }
+        if !std::fs::symlink_metadata(entry.path())?
+            .file_type()
+            .is_file()
+        {
+            continue;
+        }
+        match std::fs::remove_file(entry.path()) {
+            Ok(()) => removed += 1,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(Error::Io(e)),
+        }
+    }
+    Ok(removed)
+}
+
 /// Decrypts the envelope at `envelope` into a new private temp file in
 /// `temp_dir`.  The file is returned only after every record authenticated and
-/// every check passed; on any error it is deleted before this returns.
+/// every check passed; on any error or panic it is deleted as this returns or
+/// unwinds.  A hard kill cannot run that cleanup: see [`sweep_stale_temp_files`].
+///
+/// `temp_dir` must not be inside a synced or backed-up folder, because the
+/// partial plaintext of a decryption in progress lives there.
 pub fn decrypt_file_to_private_temp(
     key: &InputKey,
     envelope: &Path,
@@ -490,12 +537,9 @@ pub fn decrypt_file_to_private_temp(
 ) -> Result<(Metadata, NamedTempFile), Error> {
     let (file, len) = open_regular(envelope)?;
     let temp = private_temp(temp_dir)?;
-    let metadata = {
-        let mut writer = BufWriter::with_capacity(64 * 1024, temp.as_file());
-        let metadata = decrypt(key, file, len, limits, &mut writer, progress)?;
-        writer.flush()?;
-        metadata
-    };
+    // Unbuffered: records arrive in writes of up to 1 MiB, and a buffer would
+    // be one more plaintext copy that cannot be wiped.
+    let metadata = decrypt(key, file, len, limits, temp.as_file(), progress)?;
     temp.as_file().sync_all()?;
     Ok((metadata, temp))
 }
