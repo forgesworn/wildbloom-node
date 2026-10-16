@@ -1,19 +1,15 @@
-//! Wildbloom Drop: desktop encryption and key handling.
-//!
-//! This step provides the internal Rust API only.  Tauri commands, the grant
-//! event, NIP-46, mirroring, sharing, the watcher and the UI are later steps
-//! and call into these modules:
+//! Wildbloom Drop: keep two encrypted copies of a dropped file and share
+//! them with a link and four spoken words.
 //!
 //! - [`envelope`]: streaming FSWNENC2 to private temp files, via the shared
 //!   `wildbloom-envelope` crate.  `encrypt_new_file` mints a fresh per-file key
 //!   and refuses empty files; `drop_limits` and `SHARE_LIMITS` carry the Q13
-//!   size caps.  At start-up take `TempDirLock` on the temp directory, hold it
-//!   until exit, and call `sweep_stale_temp_files` with it before any Drop
-//!   operation.
+//!   size caps.  The engine takes `TempDirLock` on the temp directory at
+//!   start-up, holds it until exit, and calls `sweep_stale_temp_files` with it
+//!   before any Drop operation.
 //! - [`keychain`]: the OS keychain behind the `SecretStore` trait.  `DropKeychain`
 //!   holds the device secret, the recovery secret and per-file keys.  A missing
-//!   Linux Secret Service is the typed `KeychainError::SecretServiceMissing`,
-//!   which says whether the app must restart once a keyring is running.
+//!   Linux Secret Service is the typed `KeychainError::SecretServiceMissing`.
 //! - [`device`]: single-flight first run, load (a missing secret means restore,
 //!   never regenerate) and restore; the device keypair, the `wbk1_` recovery
 //!   secret, the HKDF-derived recovery identity, and the versioned, sequenced key
@@ -21,17 +17,35 @@
 //!   secret.
 //! - [`descriptor`]: the `wildbloom-share/1` share descriptor builder and strict
 //!   validator.
+//! - [`engine`]: everything behind the IPC commands, independent of Tauri;
+//!   [`index`] (the private SQLite file index), [`client`] (node HTTP),
+//!   [`mirror`] (online copies and checks), [`approve`] (NIP-46 approval),
+//!   [`keysync`] (key list and restore), [`share`] and [`relay`] (sharing),
+//!   [`watch`] (the Wildbloom folder) and [`status`] (the status line).
+//! - [`commands`]: the Tauri commands and the host that emits events.
 //!
 //! Secrets are zeroised on drop where the types allow it, and no `Debug` or
 //! error value in these modules carries key bytes.
 
-// Nothing outside this module calls it until the commands land in a later step.
+// The reviewed key modules expose more API than the app uses yet.
 #![allow(dead_code)]
 
+pub mod approve;
+pub mod client;
+pub mod commands;
 pub mod descriptor;
 pub mod device;
+pub mod engine;
 pub mod envelope;
+pub mod index;
 pub mod keychain;
+pub mod keysync;
+pub mod mirror;
+pub mod relay;
+pub mod share;
+pub mod status;
+pub mod types;
+pub mod watch;
 
 use std::fmt;
 

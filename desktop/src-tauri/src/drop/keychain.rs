@@ -72,11 +72,18 @@ impl OsKeychain {
     /// A provider that goes away later surfaces on an operation instead, so
     /// first run should also call [`Self::probe`].
     pub fn new() -> Result<Self, KeychainError> {
+        Self::with_service(SERVICE)
+    }
+
+    /// The same store under another service name: the app's configured
+    /// identifier, so a disposable test identity never shares entries with
+    /// the installed app.
+    pub fn with_service(service: &str) -> Result<Self, KeychainError> {
         if keyring::Entry::store_status().is_err() {
             return Err(store_init_failure());
         }
         Ok(Self {
-            service: SERVICE.to_string(),
+            service: service.to_string(),
         })
     }
 

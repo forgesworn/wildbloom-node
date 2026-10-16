@@ -14,9 +14,11 @@ assert.ok(['darwin', 'linux', 'win32'].includes(process.platform), 'Unsupported 
 const exe = process.platform === 'win32' ? '.exe' : '';
 const platformName = { darwin: 'macOS', linux: 'Linux', win32: 'Windows' }[process.platform];
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const appBinary = join(repo, `desktop/src-tauri/target/debug/wildbloom-desktop${exe}`);
+// A shared CARGO_TARGET_DIR holds both workspaces' outputs.
+const sharedTarget = process.env.CARGO_TARGET_DIR ? resolve(process.env.CARGO_TARGET_DIR) : null;
+const appBinary = join(sharedTarget ?? join(repo, 'desktop/src-tauri/target'), `debug/wildbloom-desktop${exe}`);
 const daemon = join(dirname(appBinary), `wildbloomd${exe}`);
-const signer = join(repo, `target/debug/examples/acceptance_signer${exe}`);
+const signer = join(sharedTarget ?? join(repo, 'target'), `debug/examples/acceptance_signer${exe}`);
 for (const file of [appBinary, daemon, signer]) assert.ok(existsSync(file), 'Build the native acceptance binaries first.');
 const root = mkdtempSync(join(tmpdir(), 'wildbloom-native-pools-'));
 // Always exercise a digit-leading ID; its app-identifier segment needs a letter prefix on D-Bus.
