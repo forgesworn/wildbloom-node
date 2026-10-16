@@ -51,6 +51,9 @@ session remains for live browser media rather than storage.
 ## What works
 
 - BUD-01 `GET` and `HEAD`, optional file extensions and single byte ranges.
+  Reads need no authorisation: anyone who knows a blob's hash can fetch it, and
+  an unknown hash returns 404. Only writes, listing and deletion need a signed
+  kind `24242` event.
 - BUD-02 streaming `PUT /upload` with `Content-Length` and `X-SHA-256`.
 - BUD-04 `PUT /mirror` from hash-addressed onion origins through the private
   Tor SOCKS listener, or from public HTTPS origins through direct mode.
@@ -75,7 +78,14 @@ session remains for live browser media rather than storage.
   BUD-04 repairs across explicitly configured targets. It can maintain a
   whole directory of policies from one process, and enrol a changing set of
   blobs from an operator-supplied inventory into intake and chunked archive
-  policies. See the [replica maintenance guide](docs/REPLICA-POLICY.md).
+  policies. Start it with
+  `wildbloomd replicas run --policy <signed-policy.json> --state-dir <DIR> --owner <HEX>`
+  (add `--once` for a single pass), or
+  `wildbloomd replicas run --policy-dir <DIR> --state-root <DIR> --owner <HEX>`
+  for a directory of policies. The owner-side pool process is a separate
+  command, `wildbloomd replicas pool-repair`; see the
+  [replica maintenance guide](docs/REPLICA-POLICY.md) and
+  [pool storage](docs/POOL-STORAGE.md) for the full arguments.
 - Claim-aware owner, friend and guest retention over one deduplicated CAS.
   Friends have expiring per-key byte ceilings; signed guest mirrors use only
   spare capacity and are evicted first.
@@ -198,9 +208,14 @@ Useful controls:
 ```text
 --quota-bytes <BYTES>          total stored blob quota, default 10 GiB
 --max-blob-bytes <BYTES>       maximum single blob, default 1 GiB
+--data-dir <PATH>              persistent data directory, default per-user app data
+--public-url <URL>             public origin placed in blob descriptors; needs --no-tor
+--server-name <HOST>           exact BUD-11 server tag value, repeatable or comma-separated
 --allow-pubkey <HEX>           owner public key, repeatable
---friend-grant <P:L:E>         friend pubkey, byte limit and Unix expiry
+--friend-grant <P:L:E>         PUBKEY:BYTE_LIMIT:EXPIRES_AT, Unix expiry, repeatable
 --open-shelter                 admit unknown signed mirrors as guest data
+--service-profile <PATH>       opt-in public service listing (docs/SERVICE-DISCOVERY.md)
+--checkout-profile <PATH>      opt-in paid checkout, needs --no-tor (docs/CHECKOUT.md)
 --max-concurrent-writes <N>    concurrent upload/mirror limit, default 4
 --repair-interval <SECONDS>    integrity and repair interval, default 3600
 --verify-storage               verify every stored byte and exit
@@ -209,6 +224,12 @@ Useful controls:
 --no-tor                       do not start managed Tor
 --direct-https-mirrors         fetch public HTTPS mirrors directly
 ```
+
+Each flag also has a `WILDBLOOM_*` environment variable, listed by
+`wildbloomd --help`, for example `WILDBLOOM_DATA_DIR` for `--data-dir`.
+`--public-url` is refused in Tor mode, where the onion address is the public
+origin.  With `--no-tor` and no `--public-url`, the accepted server name is
+`localhost`.
 
 Do not put the local listener on the public internet merely because the flag
 exists.  If a conventional HTTPS reverse proxy is genuinely required, read the
@@ -222,11 +243,48 @@ another Blossom server:
 1. Hash the exact bytes with SHA-256.
 2. Sign a short-lived kind `24242` `upload` event for that hash and this node's
    exact hostname.
-3. `PUT /upload` with the event in `Authorization: Nostr <base64url-event>`.
+3. `PUT /upload` with `Content-Length`, `X-SHA-256` and the event in
+   `Authorization: Nostr <base64-event>`. BUD-01 specifies standard base64; the
+   node also accepts URL-safe and unpadded forms.
 4. Keep the returned descriptor URL or publish it through the application's
    normal Nostr records.
 5. To add another replica, sign for the destination node and call its
    `PUT /mirror` with the source descriptor URL.
+
+### Test a node by hand
+
+Any NIP-01 signer can produce the event; the node never sees a private key and
+the repository ships no application signer. The node accepts only this shape:
+kind `24242`; non-empty `content` of at most 1024 bytes; exactly one `t` tag set
+to `upload`; an `x` tag holding the lower-case hex hash; a `server` tag naming
+the node's host; and an `expiration` tag no more than five minutes after
+`created_at`. A `created_at` more than 30 seconds in the future is refused.
+
+The `server` tag is the `.onion` hostname in Tor mode, the `--public-url` host
+in direct mode, or `localhost` for a plain `--no-tor` node, even when curl
+targets `127.0.0.1`. `--server-name` overrides it. Sign this unsigned template
+with your own signer and keep the signed JSON in `$EVENT_JSON`:
+
+```json
+{"kind":24242,"created_at":<now>,"content":"Upload file.bin","tags":[["t","upload"],["x","<sha256>"],["server","localhost"],["expiration","<now+300>"]]}
+```
+
+```sh
+HASH=$(shasum -a 256 file.bin | cut -d' ' -f1)
+AUTH=$(printf '%s' "$EVENT_JSON" | base64 | tr '+/' '-_' | tr -d '=\n')
+curl -X PUT http://127.0.0.1:3742/upload \
+  -H "Authorization: Nostr $AUTH" \
+  -H "X-SHA-256: $HASH" \
+  -H 'Content-Type: application/octet-stream' \
+  --data-binary @file.bin
+curl -I http://127.0.0.1:3742/$HASH
+```
+
+A new blob returns `201` and a JSON descriptor with `url`, `sha256`, `size`,
+`type`, `uploaded` and `class`; a blob the node already holds returns `200`. Any
+authorisation failure, including a key the node does not recognise, returns
+`401`. The read-back needs no authorisation and returns `200` with `ETag` and
+`Content-Length` headers.
 
 An operator may add an invited key with
 `--friend-grant <pubkey>:<byte-limit>:<expires-at>`.  `--open-shelter` is a
