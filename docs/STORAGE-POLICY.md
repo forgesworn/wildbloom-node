@@ -187,7 +187,11 @@ delegated tier, so `wildbloomd` composes one from public core APIs:
   uploaded or mirrored it since.  A delete by the key of a moved claim not yet
   handed back drops that owner claim the same way.  So after a lapse and a
   re-grant, the device's delete (for example Stop sharing) still removes the
-  bytes, and an owner-initiated upload is never removed.
+  bytes.  An owner upload or mirror made after the move, or during the hour
+  before it, keeps the owner claim; so does any other key's move of the same
+  blob to the same owner until that move is resolved.  The one-hour window
+  errs towards keeping bytes: an owner write in the hour before a move whose
+  claim the owner then deleted before the move still keeps the moved claim.
 - A moved claim the owner deleted, and has not uploaded again, is not handed
   back.  Claims over the ceiling stay recorded and are retried when the key's
   ceiling changes or one of its deletes frees space.  This is how a new

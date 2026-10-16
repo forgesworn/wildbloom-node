@@ -63,10 +63,10 @@ const IN_FLIGHT_WAIT: Duration = Duration::from_secs(5);
 /// How long an owner's own write of a blob is remembered, so a move recorded
 /// around the same time never treats the owner's claim as the move's.
 pub const OWNER_WRITE_WINDOW: u64 = 60 * 60;
-/// Slowest sustained delegated upload rate the total body deadline allows.
+/// Slowest average delegated upload rate allowed once the grace has passed.
 pub const WRITE_MIN_RATE: u64 = 16 * 1024;
-/// A delegated write body must keep arriving and must finish in bounded time:
-/// two hours, or longer for a large body at `WRITE_MIN_RATE`.
+/// A delegated write body must keep arriving and, after a two-hour grace,
+/// keep up an average of at least `WRITE_MIN_RATE`.
 pub const WRITE_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 pub const WRITE_TOTAL_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 
@@ -137,6 +137,11 @@ pub struct Grants {
 }
 
 struct Inner {
+    /// Grant state.  A hand-back or release holds this lock across one core
+    /// `delete_claim` (on the blocking pool) so it cannot race an owner write.
+    /// The per-request owner-write path therefore takes it on the blocking
+    /// pool too; grant, revoke, issuer and sweep commits take it briefly on
+    /// async workers and may wait behind that one delete.
     db: Mutex<Connection>,
     owners: BTreeSet<String>,
     reserved: BTreeSet<String>,
@@ -285,7 +290,7 @@ impl Grants {
         create_private_file(&path)?;
         let connection = Connection::open(&path)?;
         connection.busy_timeout(Duration::from_secs(5))?;
-        let (version, discarded) = db::initialise(&connection)?;
+        let (version, discarded) = db::initialise(&connection, clock())?;
         if version != db::SCHEMA_VERSION {
             return Err(GrantsError::Schema(version));
         }
@@ -491,16 +496,30 @@ impl Grants {
 
     /// Record an owner's own write of these hashes before it reaches the
     /// core, so no move hand-back ever drops that owner claim.
-    fn mark_owner_writes(&self, owner: &str, hashes: &[String]) -> Result<(), ApiError> {
+    ///
+    /// Runs on the blocking pool: the database lock can be held by a hand-back
+    /// doing core store I/O, which must not stall an async worker.
+    async fn mark_owner_writes(&self, owner: &str, hashes: Vec<String>) -> Result<(), ApiError> {
         if hashes.is_empty() {
             return Ok(());
         }
         let now = self.now();
-        let db = self.inner.db.lock().map_err(|_| ApiError::unavailable())?;
-        for hash in hashes {
-            db::mark_owner_write(&db, owner, hash, now).map_err(|_| ApiError::unavailable())?;
-        }
-        Ok(())
+        let grants = self.clone();
+        let owner = owner.to_owned();
+        spawn_blocking(move || -> Result<(), ApiError> {
+            let db = grants
+                .inner
+                .db
+                .lock()
+                .map_err(|_| ApiError::unavailable())?;
+            for hash in &hashes {
+                db::mark_owner_write(&db, &owner, hash, now)
+                    .map_err(|_| ApiError::unavailable())?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|_| ApiError::unavailable())?
     }
 
     /// Count a delegated write as in flight if its key is active.  The count
@@ -1181,23 +1200,29 @@ fn is_read(method: &Method, path: &str) -> bool {
     }
 }
 
-/// Total time allowed for a delegated body of `length` bytes.
-fn write_deadline(length: Option<u64>) -> Duration {
-    let scaled = Duration::from_secs(length.unwrap_or(0) / WRITE_MIN_RATE);
-    WRITE_TOTAL_TIMEOUT.max(scaled)
+/// Latest moment the next chunk may arrive: a grace period plus the time the
+/// bytes received so far would take at `WRITE_MIN_RATE`.  This enforces a
+/// running average rather than trusting the declared length.
+fn write_deadline(start: Instant, received: u64) -> Instant {
+    start + WRITE_TOTAL_TIMEOUT + Duration::from_secs(received / WRITE_MIN_RATE)
 }
 
-/// Bound a delegated write body: it must keep arriving and finish in time.
-fn bounded_body(body: Body, length: Option<u64>) -> Body {
-    let deadline = Instant::now() + write_deadline(length);
-    let stream =
-        futures_util::stream::unfold(Some(body.into_data_stream()), move |state| async move {
-            let mut stream = state?;
-            let wait = deadline
+/// Bound a delegated write body: it must keep arriving and keep up a minimum
+/// average rate after the grace period.
+fn bounded_body(body: Body) -> Body {
+    let start = Instant::now();
+    let stream = futures_util::stream::unfold(
+        Some((body.into_data_stream(), 0_u64)),
+        move |state| async move {
+            let (mut stream, received) = state?;
+            let wait = write_deadline(start, received)
                 .saturating_duration_since(Instant::now())
                 .min(WRITE_IDLE_TIMEOUT);
             match tokio::time::timeout(wait, stream.next()).await {
-                Ok(Some(Ok(bytes))) => Some((Ok::<Bytes, std::io::Error>(bytes), Some(stream))),
+                Ok(Some(Ok(bytes))) => {
+                    let received = received.saturating_add(bytes.len() as u64);
+                    Some((Ok::<Bytes, std::io::Error>(bytes), Some((stream, received))))
+                }
                 Ok(Some(Err(_))) => {
                     Some((Err(std::io::Error::other("upload stream failed")), None))
                 }
@@ -1210,7 +1235,8 @@ fn bounded_body(body: Body, length: Option<u64>) -> Body {
                     None,
                 )),
             }
-        });
+        },
+    );
     Body::from_stream(stream)
 }
 
@@ -1238,7 +1264,7 @@ pub async fn gate(State(grants): State<Grants>, request: Request, next: Next) ->
         let path = request.uri().path();
         if request.method() == Method::PUT && (path == "/upload" || path == "/mirror") {
             // The event's `x` tags cover every hash the core could claim.
-            if let Err(error) = grants.mark_owner_writes(&signer, &hashes) {
+            if let Err(error) = grants.mark_owner_writes(&signer, hashes).await {
                 return error.into_response();
             }
         }
@@ -1265,14 +1291,9 @@ pub async fn gate(State(grants): State<Grants>, request: Request, next: Next) ->
         grants.inner.wake.notify_one();
         return response;
     }
-    let length = request
-        .headers()
-        .get(header::CONTENT_LENGTH)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok());
     let (parts, body) = request.into_parts();
     let response = next
-        .run(Request::from_parts(parts, bounded_body(body, length)))
+        .run(Request::from_parts(parts, bounded_body(body)))
         .await;
     if is_delete && response.status().is_success() {
         // Freed space may let pending hand-backs fit.

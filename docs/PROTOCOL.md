@@ -147,11 +147,12 @@ mirror, preflight and delete as ordinary BUD-11 signers.  The byte ceiling
 applies to each key separately, so one grant can hold at most twice `bytes`.
 A recovery identity named by several active grants takes the largest of their
 ceilings.  BUD-12 listing and deletion stay self-only.  A delegated write body
-must keep arriving (at most 60 seconds between chunks) and finish within two
-hours, or within `Content-Length / 16 KiB` seconds when that is longer.  A
-delete by an active key of a blob whose claim was moved to the owner and not
-yet handed back succeeds as if the key still held it.  Once a grant has ended, every request from its keys other than `GET`,
-`OPTIONS` and non-preflight `HEAD` is refused with `403`.  What happens when the
+must keep arriving: at most 60 seconds between chunks, and each chunk no later
+than two hours plus one second per 16 KiB already received after the upload
+began.  A body that averages at least 16 KiB/s after that grace never times
+out.  A delete by an active key of a blob whose claim was moved to the owner
+and not yet handed back succeeds as if the key still held it.  Once a grant has
+ended, every request from its keys other than `GET`, `OPTIONS` and non-preflight `HEAD` is refused with `403`.  What happens when the
 grant ends (expiry, revocation or its owner leaving the owner set) is set out
 in [STORAGE-POLICY.md](STORAGE-POLICY.md#owner-delegated-claims).
 

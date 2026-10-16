@@ -111,7 +111,7 @@ const TABLES: &str = "
 
 /// Create or migrate the schema.  Returns the resulting version, or the
 /// unsupported version found, and whether recorded moves were discarded.
-pub(super) fn initialise(connection: &Connection) -> rusqlite::Result<(i64, bool)> {
+pub(super) fn initialise(connection: &Connection, now: u64) -> rusqlite::Result<(i64, bool)> {
     let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     if version > SCHEMA_VERSION {
         return Ok((version, false));
@@ -142,6 +142,9 @@ pub(super) fn initialise(connection: &Connection) -> rusqlite::Result<(i64, bool
                 "ALTER TABLE core_members ADD COLUMN since INTEGER NOT NULL DEFAULT 0;",
             )?;
         }
+        // Preview members carry no join time; date them from the migration
+        // so re-adoption never promotes guest claims older than that.
+        tx.execute("UPDATE core_members SET since = ?1", [int(now)])?;
     }
     tx.execute_batch(TABLES)?;
     tx.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
@@ -368,6 +371,34 @@ pub(super) fn insert_move(
         ],
     )?;
     Ok(())
+}
+
+/// Other keys' move records for `(owner, hash)`: how many, and whether any
+/// of them found the owner holding the blob in its own right or writing it.
+pub(super) struct OtherMoves {
+    pub count: u64,
+    pub independent: bool,
+    pub adopted: bool,
+}
+
+pub(super) fn other_moves(
+    connection: &Connection,
+    owner: &str,
+    hash: &str,
+    except: &str,
+) -> rusqlite::Result<OtherMoves> {
+    connection.query_row(
+        "SELECT COUNT(*), COALESCE(MAX(independent), 0), COALESCE(MAX(adopted), 0)
+         FROM moved_claims WHERE owner = ?1 AND hash = ?2 AND pubkey != ?3",
+        params![owner, hash, except],
+        |row| {
+            Ok(OtherMoves {
+                count: row_u64(row, 0)?,
+                independent: row.get(1)?,
+                adopted: row.get(2)?,
+            })
+        },
+    )
 }
 
 pub(super) fn forget_move(connection: &Connection, key: &str, hash: &str) -> rusqlite::Result<()> {

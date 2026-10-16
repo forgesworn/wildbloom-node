@@ -1947,3 +1947,88 @@ async fn re_adoption_leaves_guest_claims_from_before_the_grant() {
     let node = node_at(root, offset).await;
     assert!(list(&node, &keys(10)).await.is_empty());
 }
+
+#[tokio::test]
+async fn a_hand_back_keeps_an_owner_claim_another_keys_move_relies_on() {
+    let (_dir, node) = node().await;
+    let owner = keys(1);
+    let now = node.now();
+    // Two computers, each with its own recovery identity, hold the same blob.
+    let (a, b) = (
+        Grant {
+            device: 10,
+            recovery: 11,
+            ..standard_grant()
+        },
+        Grant {
+            device: 20,
+            recovery: 21,
+            ..standard_grant()
+        },
+    );
+    node.call(post_grant(grant_event(&owner, &a, now))).await;
+    node.call(post_grant(grant_event(&owner, &b, now))).await;
+    let blob: &[u8] = b"held by two devices";
+    for device in [10, 20] {
+        let status = upload(&node, &keys(device), blob).await;
+        assert!(status.is_success(), "{status}");
+    }
+    node.call(revoke_request(&owner, &keys(10), now + 1)).await;
+    node.call(revoke_request(&owner, &keys(20), now + 1)).await;
+    node.sweep().await;
+    assert_eq!(list(&node, &owner).await, vec![sha(blob)]);
+    // The key the sweep moved first is the one whose move created the owner
+    // claim; hand that one back first.
+    let (first, second) = if hex(&keys(10)) < hex(&keys(20)) {
+        ((10, a), (20, b))
+    } else {
+        ((20, b), (10, a))
+    };
+    node.call(post_grant(grant_event(&owner, &first.1, now + 2)))
+        .await;
+    node.sweep().await;
+    assert_eq!(list(&node, &keys(first.0)).await, vec![sha(blob)]);
+    // The other key's move still relies on the owner claim.
+    assert_eq!(list(&node, &owner).await, vec![sha(blob)]);
+    assert_eq!(
+        delete(&node, &keys(first.0), &sha(blob)).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        get_status(&node, &format!("/{}", sha(blob))).await,
+        StatusCode::OK
+    );
+    // Once the second key takes it back, the move-created owner claim goes
+    // and that key's delete removes the bytes.
+    node.call(post_grant(grant_event(&owner, &second.1, now + 2)))
+        .await;
+    node.sweep().await;
+    assert!(list(&node, &owner).await.is_empty());
+    assert_eq!(
+        delete(&node, &keys(second.0), &sha(blob)).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        get_status(&node, &format!("/{}", sha(blob))).await,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[test]
+fn migrated_preview_members_join_at_the_migration_time() {
+    let connection = rusqlite::Connection::open_in_memory().unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE core_members (pubkey TEXT PRIMARY KEY NOT NULL, issuer TEXT NOT NULL,
+                byte_limit INTEGER NOT NULL CHECK (byte_limit > 0));
+             INSERT INTO core_members VALUES ('k', 'o', 10);
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+    assert_eq!(
+        super::db::initialise(&connection, 12_345).unwrap(),
+        (2, false)
+    );
+    let rows = super::db::read_rows(&connection).unwrap();
+    assert_eq!(rows.members["k"].since, 12_345);
+}

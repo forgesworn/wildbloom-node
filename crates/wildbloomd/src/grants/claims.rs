@@ -110,7 +110,8 @@ fn database<E>(_: E) -> String {
 }
 
 /// Drop the owner claim a move created, unless the owner held the blob
-/// before the move or has written it since.  Runs under the database lock,
+/// before the move, has written it since, or another key's move still
+/// relies on it.  Runs under the database lock,
 /// which owner writes also take to record themselves before they reach the
 /// core, so an owner upload is either seen here or lands after this delete.
 fn drop_owner_claim_if_ours(
@@ -122,7 +123,10 @@ fn drop_owner_claim_if_ours(
     let Some(record) = db::moved_row(connection, key, hash).map_err(database)? else {
         return Ok(());
     };
-    if record.owner_claim_is_ours() {
+    // Another key's move may rely on the same owner claim: keep it until the
+    // last move record for this owner and blob is resolved.
+    let others = db::other_moves(connection, &record.owner, hash, key).map_err(database)?;
+    if record.owner_claim_is_ours() && others.count == 0 {
         match store.delete_claim(hash, &record.owner) {
             Ok(_) | Err(StoreError::NotClaimant | StoreError::MissingBlob) => {}
             Err(error) => return Err(error.to_string()),
@@ -170,20 +174,27 @@ pub(super) fn transfer(
                     .map_err(database)?
                     .is_none()
                 {
+                    // An owner claim that exists only because another key's
+                    // move created it is not the owner's own.
+                    let others = db::other_moves(&connection, owner, &claim.sha256, key)
+                        .map_err(database)?;
+                    let independent = holds_claim(store, owner, &claim.sha256)?
+                        && (others.count == 0 || others.independent);
                     let record = MovedClaim {
                         hash: claim.sha256.clone(),
                         owner: owner.to_owned(),
                         size: claim.size,
                         declared_type: declared.clone(),
                         class: claim.class.clone(),
-                        independent: holds_claim(store, owner, &claim.sha256)?,
-                        adopted: db::recent_owner_write(
-                            &connection,
-                            owner,
-                            &claim.sha256,
-                            now.saturating_sub(super::OWNER_WRITE_WINDOW),
-                        )
-                        .map_err(database)?,
+                        independent,
+                        adopted: others.adopted
+                            || db::recent_owner_write(
+                                &connection,
+                                owner,
+                                &claim.sha256,
+                                now.saturating_sub(super::OWNER_WRITE_WINDOW),
+                            )
+                            .map_err(database)?,
                         moved_at: now,
                     };
                     db::insert_move(&connection, key, &record).map_err(database)?;

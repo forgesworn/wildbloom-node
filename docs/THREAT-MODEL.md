@@ -60,8 +60,8 @@
   one-use live creation grants in any rolling hour; each grant is usable for
   five minutes and allocates sessions of at most ten minutes.
 - Revocation is committed and enforced by the gate at once; it waits for no
-  upload.  Delegated write bodies must keep arriving and finish within a
-  bounded time, and a sweep waits only briefly for one ended key's in-flight
+  upload.  Delegated write bodies must keep arriving and keep up a minimum
+  average rate after a grace period, and a sweep waits only briefly for one ended key's in-flight
   writes before retrying it later.  Pushing a changed delegated set into the
   core (a new grant's reply, and a key's final removal after its claims move)
   waits for every in-flight core write to finish, so a slow owner, guest or
