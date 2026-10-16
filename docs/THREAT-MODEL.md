@@ -54,9 +54,14 @@
   removed from the core's trusted set after its claims move to the owner.
   Grant state is a private `0600` SQLite file beside the store.
 - The optional pairing issuer holds a Foregather operator token read from a
-  `0600` file or the environment, sends it only to the configured relay over
-  HTTPS or loopback HTTP, and never logs or returns it.  A granted device can
-  spend at most 30 one-use, ten-minute live creation grants an hour.
+  `0600` file (recommended) or the environment, removes it from child process
+  environments, sends it only to the configured relay over HTTPS or loopback
+  HTTP, and never logs or returns it.  A granted device can obtain at most 30
+  one-use live creation grants in any rolling hour; each grant is usable for
+  five minutes and allocates sessions of at most ten minutes.
+- Delegated write bodies must keep arriving and finish within two hours, and a
+  sweep waits only briefly for one ended key's in-flight writes, so a slow
+  upload cannot hold up revocation or other keys.
 - Owner and friend reservations may evict only best-effort guest blobs.  Guest
   requests cannot consume the protected reserve or evict a stronger claim.
 - Friend-only and guest-only responses are opaque attachments with `nosniff`.

@@ -134,14 +134,22 @@ grants (one per computer) from the same owner.
 Replay protection: every accepted grant or revoke event id is single use, and
 each event for a device must have a strictly later `created_at` than the last
 one accepted for that device.  A captured, never-submitted older grant
-therefore cannot undo a later revocation.  A new grant for a device replaces its
-previous one; that is how renewal works.
+therefore cannot undo a later revocation.  Two events for one device in the
+same second are therefore not both accepted: the second is refused with `409`,
+and a client should wait a second and sign again.  A revocation for a device
+that has no grant yet is accepted and recorded, so an older grant posted later
+cannot land.  A new grant for a device replaces its previous one; that is how
+renewal works.  The node's service announcement key, owners and
+`--friend-grant` keys can never be delegated.
 
 While a grant is active, the device and the recovery identity may upload,
 mirror, preflight and delete as ordinary BUD-11 signers.  The byte ceiling
 applies to each key separately, so one grant can hold at most twice `bytes`.
 A recovery identity named by several active grants takes the largest of their
-ceilings.  BUD-12 listing and deletion stay self-only.  What happens when the
+ceilings.  BUD-12 listing and deletion stay self-only.  A delegated write body
+must keep arriving (at most 60 seconds between chunks) and finish within two
+hours.  Once a grant has ended, every request from its keys other than `GET`,
+`OPTIONS` and non-preflight `HEAD` is refused with `403`.  What happens when the
 grant ends (expiry, revocation or its owner leaving the owner set) is set out
 in [STORAGE-POLICY.md](STORAGE-POLICY.md#owner-delegated-claims).
 
@@ -157,16 +165,18 @@ in [STORAGE-POLICY.md](STORAGE-POLICY.md#owner-delegated-claims).
 The node calls Foregather's `POST /v1/creation-grants` with exactly
 `{"resource":"live","expires":<now+300>,"max_uses":1,"max_invitation_lifetime":600}`
 and the operator token as `Authorization: Bearer`.  The token comes from
-`--pairing-operator-token-file` (an absolute, mode `0600` file) or the
-`WILDBLOOM_PAIRING_OPERATOR_TOKEN` environment variable, never a command-line
-argument, and must be Foregather's canonical 32-byte unpadded base64url form.
+`--pairing-operator-token-file` (an absolute, mode `0600` file; recommended)
+or the `WILDBLOOM_PAIRING_OPERATOR_TOKEN` environment variable, never a
+command-line argument.  The variable is removed from the environment of the
+Tor and signer child processes.  The token and must be Foregather's canonical 32-byte unpadded base64url form.
 It is never logged or returned.  The relay URL must be HTTPS, or plain HTTP to
 loopback.  Redirects and ambient proxies are disabled.
 
 The NIP-98 profile is the checkout one: exact `u` and `method`, a `payload`
 tag for the empty body, at most 60 seconds old.  Each NIP-98 event id is single
 use, the recovery identity and owners cannot request grants, and each device may
-obtain at most 30 grants an hour.  The upstream reply is checked for a live,
+obtain at most 30 grants in any rolling hour.  The budget is checked before the
+event id is spent, so a refused request spends neither.  The upstream reply is checked for a live,
 one-use, 600-second grant before the token is passed on; the management `id` is
 not returned.  Upstream failures are redacted to `502` or `503`.
 

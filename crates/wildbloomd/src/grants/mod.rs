@@ -8,39 +8,41 @@
 //!   core-enforced.  The core grant never lapses on its own (a far-future
 //!   sentinel); this module owns the real expiry.  That stops a node which was
 //!   down across the expiry from having the core reap the claims at start-up.
-//! * When a key's authority ends (expiry, revocation, or its owner leaving the
-//!   configured owner set) every claim it holds is moved to an owner-tier
-//!   claim for the issuing owner, and only then is the key removed from the
-//!   core's trusted set.  The owner can list or delete those claims with
-//!   ordinary BUD-12 requests, and refusal of further writes is core-enforced.
-//! * Between the real expiry and that sweep, a gate in front of the core
-//!   router refuses writes from ended keys.
-//! * Each move is recorded.  If the same key is granted again, its moved
-//!   claims are handed back (so a recovery identity can list its key list
-//!   after a lost device was revoked), unless the owner deleted them first.
+//! * A gate in front of the core router refuses every non-read request from a
+//!   delegated key whose grant has ended, the moment it ends.
+//! * The maintenance sweep then waits (briefly, per key) for that key's
+//!   in-flight writes, moves its friend claims to owner-tier claims for the
+//!   issuing owner, records each move, and only then removes the key from the
+//!   core's trusted set.  Refusal is then core-enforced too.
+//! * While a key is active again under the same owner, each sweep hands its
+//!   recorded moves back beside the owner's claim.
+//! * At start-up, claims of delegated keys that an older binary demoted to
+//!   guest are re-adopted.
 use crate::grants::event::{Action, Authorised, EventError, GrantTerms};
 use axum::{
     Json, Router,
-    body::{Body, to_bytes},
+    body::{Body, Bytes, to_bytes},
     extract::{Path as AxumPath, Request, State},
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware::Next,
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use rusqlite::{Connection, params};
+use db::{GrantRow, Member, Rows};
+use futures_util::StreamExt;
+use rusqlite::Connection;
 use serde::Serialize;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeSet, HashMap},
     path::Path,
     sync::{Arc, Mutex, OnceLock, RwLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tokio::task::spawn_blocking;
-use wildbloom_core::{
-    AppState, ClaimSpec, FriendGrant, RetentionTier, Store, StoreError, store::UploadStart,
-};
+use tokio::{sync::Notify, task::spawn_blocking, time::Instant};
+use wildbloom_core::{AppState, FriendGrant};
 
+mod claims;
+mod db;
 pub mod event;
 pub mod issuer;
 #[cfg(test)]
@@ -50,9 +52,12 @@ mod tests;
 pub const CORE_GRANT_SENTINEL: u64 = i64::MAX as u64;
 pub const DATABASE_FILE: &str = "device-grants.sqlite3";
 const SWEEP_INTERVAL: Duration = Duration::from_secs(60);
-const LIST_PAGE: usize = 100;
-/// Bounds the claims one key can have collected in memory during a sweep.
-const MAX_SWEEP_CLAIMS: usize = 1_000_000;
+/// Longest a sweep waits for one pass's ended keys to finish in-flight writes;
+/// a key still busy is retried on the next pass.
+const IN_FLIGHT_WAIT: Duration = Duration::from_secs(5);
+/// A delegated write body must keep arriving and must finish in bounded time.
+pub const WRITE_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+pub const WRITE_TOTAL_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 
 pub type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
 
@@ -71,34 +76,13 @@ pub struct GrantsConfig {
     /// Public origin with a trailing slash, used for exact NIP-98 URLs.
     pub origin: String,
     pub cli_friend_grants: Vec<FriendGrant>,
+    /// Keys that may never be delegated, such as the service announcement key.
+    pub reserved_keys: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct GrantRow {
-    device: String,
-    recovery: String,
-    issuer: String,
-    byte_limit: u64,
-    until: u64,
-    granted_at: u64,
-    last_event_at: u64,
-    revoked_at: Option<u64>,
-}
+type Snapshot = Rows;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Member {
-    issuer: String,
-    byte_limit: u64,
-}
-
-#[derive(Debug, Default)]
-struct Snapshot {
-    grants: BTreeMap<String, GrantRow>,
-    /// Keys currently registered in the core as delegated friend grants.
-    members: BTreeMap<String, Member>,
-}
-
-impl Snapshot {
+impl Rows {
     fn grant_active(&self, row: &GrantRow, owners: &BTreeSet<String>, now: u64) -> bool {
         row.revoked_at.is_none() && row.until > now && owners.contains(&row.issuer)
     }
@@ -128,6 +112,12 @@ impl Snapshot {
             .map(|row| row.byte_limit)
             .max()
     }
+
+    fn last_event_at(&self, device: &str) -> Option<u64> {
+        let row = self.grants.get(device).map(|row| row.last_event_at);
+        let marker = self.markers.get(device).copied();
+        row.max(marker)
+    }
 }
 
 #[derive(Clone)]
@@ -138,16 +128,19 @@ pub struct Grants {
 struct Inner {
     db: Mutex<Connection>,
     owners: BTreeSet<String>,
+    reserved: BTreeSet<String>,
     server_names: Vec<String>,
     origin: String,
     cli_friend_grants: Vec<FriendGrant>,
     clock: Clock,
     snapshot: RwLock<Arc<Snapshot>>,
-    /// Delegated writes hold a read guard for their whole request; a sweep
-    /// takes the write guard so no delegated write is in flight while claims
-    /// are copied and the key leaves the core's trusted set.
-    sweep_lock: tokio::sync::RwLock<()>,
-    /// Serialises grant, revoke and sweep decisions.
+    /// In-flight write count per delegated key, for the sweep to wait on.
+    in_flight: Mutex<HashMap<String, usize>>,
+    in_flight_changed: Notify,
+    /// Wakes maintenance after a grant or revocation is committed.
+    wake: Notify,
+    /// Serialises grant, revoke and sweep state changes (never held while
+    /// verifying signatures or streaming a body).
     updates: tokio::sync::Mutex<()>,
     app: OnceLock<AppState>,
 }
@@ -161,7 +154,7 @@ pub enum GrantsError {
     #[error("device grant database has an unsupported schema version {0}")]
     Schema(i64),
     #[error(
-        "a persisted device or recovery key is now also a configured owner or friend; remove the conflicting --allow-pubkey or --friend-grant"
+        "a persisted device or recovery key is now also a configured owner, friend or service key; remove the conflicting configuration"
     )]
     Conflict,
 }
@@ -229,10 +222,37 @@ fn no_store(response: &mut Response) {
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct GrantStatus {
     pub device: String,
-    pub recovery: String,
-    pub bytes: u64,
-    pub until: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub until: Option<u64>,
     pub state: &'static str,
+}
+
+/// Decrements a key's in-flight count when a delegated write finishes.
+struct InFlight {
+    grants: Grants,
+    key: String,
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        if let Ok(mut counts) = self.grants.inner.in_flight.lock()
+            && let Some(count) = counts.get_mut(&self.key)
+        {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                counts.remove(&self.key);
+            }
+        }
+        self.grants.inner.in_flight_changed.notify_waiters();
+    }
+}
+
+fn db_error<E>(_: E) -> String {
+    "device grant database".to_owned()
 }
 
 impl Grants {
@@ -245,38 +265,47 @@ impl Grants {
         create_private_file(&path)?;
         let connection = Connection::open(&path)?;
         connection.busy_timeout(Duration::from_secs(5))?;
-        initialise(&connection)?;
+        let version = db::initialise(&connection)?;
+        if version != 1 {
+            return Err(GrantsError::Schema(version));
+        }
         let grants = Self {
             inner: Arc::new(Inner {
                 db: Mutex::new(connection),
                 owners: config.owners.into_iter().collect(),
+                reserved: config.reserved_keys.into_iter().collect(),
                 server_names: config.server_names,
                 origin: config.origin,
                 cli_friend_grants: config.cli_friend_grants,
                 clock,
                 snapshot: RwLock::new(Arc::new(Snapshot::default())),
-                sweep_lock: tokio::sync::RwLock::new(()),
+                in_flight: Mutex::new(HashMap::new()),
+                in_flight_changed: Notify::new(),
+                wake: Notify::new(),
                 updates: tokio::sync::Mutex::new(()),
                 app: OnceLock::new(),
             }),
         };
         grants.reload()?;
         // Any key this node ever delegated stays subject to the gate, so it
-        // cannot also be configured as an owner or friend.
-        let cli_keys = grants
-            .inner
-            .cli_friend_grants
-            .iter()
-            .map(|grant| grant.pubkey.as_str())
-            .collect::<BTreeSet<_>>();
-        if grants
-            .known_keys()
-            .iter()
-            .any(|key| grants.inner.owners.contains(key) || cli_keys.contains(key.as_str()))
-        {
+        // cannot also be configured as an owner, friend or service key.
+        let cli_keys = grants.cli_keys();
+        if grants.known_keys().iter().any(|key| {
+            grants.inner.owners.contains(key)
+                || cli_keys.contains(key)
+                || grants.inner.reserved.contains(key)
+        }) {
             return Err(GrantsError::Conflict);
         }
         Ok(grants)
+    }
+
+    fn cli_keys(&self) -> BTreeSet<String> {
+        self.inner
+            .cli_friend_grants
+            .iter()
+            .map(|grant| grant.pubkey.clone())
+            .collect()
     }
 
     /// CLI friend grants plus every delegated key the core must currently
@@ -297,8 +326,7 @@ impl Grants {
             .collect()
     }
 
-    /// Every delegated key this node has recorded, for services that must not
-    /// treat them as public identities.
+    /// Every delegated key this node has recorded.
     pub fn known_keys(&self) -> Vec<String> {
         let snapshot = self.snapshot();
         let mut keys = snapshot.members.keys().cloned().collect::<BTreeSet<_>>();
@@ -314,13 +342,45 @@ impl Grants {
         let _ = self.inner.app.set(state);
     }
 
+    /// Re-adopt demoted delegated claims, then run one sweep.
+    pub async fn startup(&self) -> Result<(), String> {
+        let _update = self.inner.updates.lock().await;
+        let Some(app) = self.inner.app.get() else {
+            return Ok(());
+        };
+        let snapshot = self.snapshot();
+        for (key, member) in &snapshot.members {
+            let store = app.store().clone();
+            let (key, member) = (key.clone(), member.clone());
+            let result =
+                spawn_blocking(move || claims::adopt(&store, &key, &member, &core_grant_id(&key)))
+                    .await
+                    .unwrap_or_else(|_| Err("claim adoption task failed".to_owned()));
+            match result {
+                Ok((0, 0)) => {}
+                Ok((adopted, refused)) => tracing::warn!(
+                    adopted,
+                    refused,
+                    "re-adopted delegated claims that an earlier binary had demoted"
+                ),
+                Err(error) => {
+                    tracing::warn!(reason = %error, "could not re-adopt delegated claims")
+                }
+            }
+        }
+        self.sweep_locked().await
+    }
+
     pub fn spawn_maintenance(&self) -> tokio::task::JoinHandle<()> {
         let grants = self.clone();
         tokio::spawn(async move {
             let mut timer = tokio::time::interval(SWEEP_INTERVAL);
             timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
-                timer.tick().await;
+                tokio::select! {
+                    _ = timer.tick() => {}
+                    () = grants.inner.wake.notified() => {}
+                }
                 if let Err(error) = grants.sweep_ended().await {
                     tracing::warn!(reason = %error, "device grant sweep will retry");
                 }
@@ -350,14 +410,10 @@ impl Grants {
             .unwrap_or_default()
     }
 
-    fn app(&self) -> Result<&AppState, ApiError> {
-        self.inner.app.get().ok_or_else(ApiError::unavailable)
-    }
-
     fn reload(&self) -> Result<(), GrantsError> {
         let next = {
             let db = self.inner.db.lock().map_err(|_| poisoned())?;
-            read_snapshot(&db)?
+            db::read_rows(&db)?
         };
         if let Ok(mut guard) = self.inner.snapshot.write() {
             *guard = Arc::new(next);
@@ -381,32 +437,61 @@ impl Grants {
     /// Record a single-use event id; `false` means it was already used.
     pub(crate) fn consume_event(&self, event_id: &str, expires_at: u64) -> Result<bool, ApiError> {
         let db = self.inner.db.lock().map_err(|_| ApiError::unavailable())?;
-        let inserted = db
-            .execute(
-                "INSERT OR IGNORE INTO used_events (event_id, expires_at) VALUES (?1, ?2)",
-                params![event_id, as_i64(expires_at)?],
-            )
-            .map_err(|_| ApiError::unavailable())?;
-        Ok(inserted == 1)
+        db::consume_event(&db, event_id, expires_at).map_err(|_| ApiError::unavailable())
     }
 
     fn prune_used_events(&self) {
         let now = self.now();
         if let Ok(db) = self.inner.db.lock() {
-            let _ = db.execute(
-                "DELETE FROM used_events WHERE expires_at < ?1",
-                [i64::try_from(now).unwrap_or(i64::MAX)],
-            );
+            let _ = db::prune_used_events(&db, now);
+        }
+    }
+
+    /// Count a delegated write as in flight if its key is active.  The count
+    /// is taken before the check, so a sweep that sees zero in flight after a
+    /// key ended cannot race a write that saw the key active.
+    fn begin_write(&self, key: &str) -> Option<InFlight> {
+        if let Ok(mut counts) = self.inner.in_flight.lock() {
+            *counts.entry(key.to_owned()).or_default() += 1;
+        }
+        let flight = InFlight {
+            grants: self.clone(),
+            key: key.to_owned(),
+        };
+        self.is_active(key).then_some(flight)
+    }
+
+    fn in_flight(&self, key: &str) -> usize {
+        self.inner
+            .in_flight
+            .lock()
+            .map(|counts| counts.get(key).copied().unwrap_or(0))
+            .unwrap_or(usize::MAX)
+    }
+
+    async fn wait_idle(&self, key: &str, deadline: Instant) -> bool {
+        loop {
+            let notified = self.inner.in_flight_changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.in_flight(key) == 0 {
+                return true;
+            }
+            if tokio::time::timeout_at(deadline, notified).await.is_err() {
+                return self.in_flight(key) == 0;
+            }
         }
     }
 
     async fn apply_grant(&self, body: &[u8]) -> Result<(StatusCode, GrantStatus), ApiError> {
-        let _update = self.inner.updates.lock().await;
+        // Signature and structure first, outside the state lock.
         let now = self.now();
         let authorised = event::verify(body, &self.inner.owners, &self.inner.server_names, now)?;
         let Action::Grant(terms) = authorised.action.clone() else {
             return Err(ApiError::bad_request("expected a grant event"));
         };
+        let _update = self.inner.updates.lock().await;
+        let now = self.now();
         let snapshot = self.snapshot();
         self.check_grant_conflicts(&snapshot, &authorised, &terms)?;
         let previous = snapshot.grants.get(&terms.device).cloned();
@@ -426,31 +511,26 @@ impl Grants {
         };
         // The recovery identity's core ceiling is the largest active grant
         // that names it, including this one.
-        let mut projected = snapshot.grants.clone();
-        projected.insert(row.device.clone(), row.clone());
-        let projected = Snapshot {
-            grants: projected,
-            members: BTreeMap::new(),
+        let mut projected = Snapshot {
+            grants: snapshot.grants.clone(),
+            ..Snapshot::default()
         };
+        projected.grants.insert(row.device.clone(), row.clone());
         let recovery_limit = projected
             .active_limit(&terms.recovery, &self.inner.owners, now)
             .unwrap_or(terms.byte_limit);
         {
             let mut db = self.inner.db.lock().map_err(|_| ApiError::unavailable())?;
             let tx = db.transaction().map_err(|_| ApiError::unavailable())?;
-            let inserted = tx
-                .execute(
-                    "INSERT OR IGNORE INTO used_events (event_id, expires_at) VALUES (?1, ?2)",
-                    params![authorised.event_id, as_i64(authorised.expires_at)?],
-                )
-                .map_err(|_| ApiError::unavailable())?;
-            if inserted != 1 {
+            if !db::consume_event(&tx, &authorised.event_id, authorised.expires_at)
+                .map_err(|_| ApiError::unavailable())?
+            {
                 return Err(ApiError::conflict("device grant event was already used"));
             }
-            write_grant(&tx, &row).map_err(|_| ApiError::unavailable())?;
-            write_member(&tx, &terms.device, &authorised.owner, terms.byte_limit)
+            db::write_grant(&tx, &row).map_err(|_| ApiError::unavailable())?;
+            db::write_member(&tx, &terms.device, &authorised.owner, terms.byte_limit)
                 .map_err(|_| ApiError::unavailable())?;
-            write_member(&tx, &terms.recovery, &authorised.owner, recovery_limit)
+            db::write_member(&tx, &terms.recovery, &authorised.owner, recovery_limit)
                 .map_err(|_| ApiError::unavailable())?;
             tx.commit().map_err(|_| ApiError::unavailable())?;
         }
@@ -461,16 +541,9 @@ impl Grants {
             let _ = self.push_core_policy().await;
             return Err(ApiError::unavailable());
         }
-        for (key, before) in [&terms.device, &terms.recovery].into_iter().zip([
-            snapshot.members.get(&terms.device),
-            snapshot.members.get(&terms.recovery),
-        ]) {
-            if before.is_none() {
-                self.restore_moved_claims(key).await;
-            }
-        }
-        // A replacement can leave an earlier recovery identity unreferenced.
-        self.sweep_locked().await.ok();
+        // Restoring moved claims and sweeping a replaced recovery identity
+        // happen in maintenance, not on this request.
+        self.inner.wake.notify_one();
         tracing::info!(device = %terms.device, "accepted an owner-signed device grant");
         let status = if previous.is_some() {
             StatusCode::OK
@@ -486,16 +559,14 @@ impl Grants {
         authorised: &Authorised,
         terms: &GrantTerms,
     ) -> Result<(), ApiError> {
-        let cli = self
-            .inner
-            .cli_friend_grants
-            .iter()
-            .map(|grant| grant.pubkey.as_str())
-            .collect::<BTreeSet<_>>();
+        let cli = self.cli_keys();
         for key in [&terms.device, &terms.recovery] {
-            if self.inner.owners.contains(key) || cli.contains(key.as_str()) {
+            if self.inner.owners.contains(key)
+                || cli.contains(key)
+                || self.inner.reserved.contains(key)
+            {
                 return Err(ApiError::conflict(
-                    "a delegated key cannot be an owner or friend key",
+                    "a delegated key cannot be an owner, friend or service key",
                 ));
             }
             if snapshot
@@ -523,8 +594,9 @@ impl Grants {
                 ));
             }
         }
-        if let Some(row) = snapshot.grants.get(&terms.device)
-            && authorised.created_at <= row.last_event_at
+        if snapshot
+            .last_event_at(&terms.device)
+            .is_some_and(|last| authorised.created_at <= last)
         {
             return Err(ApiError::conflict(
                 "a newer event for this device was already accepted",
@@ -543,18 +615,14 @@ impl Grants {
             let mut db = self.inner.db.lock().map_err(|_| ApiError::unavailable())?;
             let tx = db.transaction().map_err(|_| ApiError::unavailable())?;
             match previous {
-                Some(row) => write_grant(&tx, &row),
-                None => tx
-                    .execute("DELETE FROM device_grants WHERE device = ?1", [device])
-                    .map(|_| ()),
+                Some(row) => db::write_grant(&tx, &row),
+                None => db::delete_grant(&tx, device),
             }
             .map_err(|_| ApiError::unavailable())?;
             for (key, member) in members {
                 match member {
-                    Some(member) => write_member(&tx, &key, &member.issuer, member.byte_limit),
-                    None => tx
-                        .execute("DELETE FROM core_members WHERE pubkey = ?1", [&key])
-                        .map(|_| ()),
+                    Some(member) => db::write_member(&tx, &key, &member.issuer, member.byte_limit),
+                    None => db::delete_member(&tx, &key),
                 }
                 .map_err(|_| ApiError::unavailable())?;
             }
@@ -568,7 +636,6 @@ impl Grants {
         device: &str,
         headers: &HeaderMap,
     ) -> Result<GrantStatus, ApiError> {
-        let _update = self.inner.updates.lock().await;
         let now = self.now();
         let header = single_authorization(headers)?;
         let bytes = event::decode_header(header)
@@ -582,40 +649,53 @@ impl Grants {
                 "revoke event names a different device",
             ));
         }
+        let _update = self.inner.updates.lock().await;
+        let now = self.now();
         let snapshot = self.snapshot();
-        let mut row = snapshot
-            .grants
-            .get(device)
-            .cloned()
-            .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "unknown device"))?;
-        if authorised.created_at <= row.last_event_at {
+        if snapshot
+            .last_event_at(device)
+            .is_some_and(|last| authorised.created_at <= last)
+        {
             return Err(ApiError::conflict(
                 "a newer event for this device was already accepted",
             ));
         }
-        row.revoked_at = Some(now);
-        row.last_event_at = authorised.created_at;
+        let row = snapshot.grants.get(device).cloned().map(|mut row| {
+            row.revoked_at = Some(now);
+            row.last_event_at = authorised.created_at;
+            row
+        });
         {
             let mut db = self.inner.db.lock().map_err(|_| ApiError::unavailable())?;
             let tx = db.transaction().map_err(|_| ApiError::unavailable())?;
-            let inserted = tx
-                .execute(
-                    "INSERT OR IGNORE INTO used_events (event_id, expires_at) VALUES (?1, ?2)",
-                    params![authorised.event_id, as_i64(authorised.expires_at)?],
-                )
-                .map_err(|_| ApiError::unavailable())?;
-            if inserted != 1 {
+            if !db::consume_event(&tx, &authorised.event_id, authorised.expires_at)
+                .map_err(|_| ApiError::unavailable())?
+            {
                 return Err(ApiError::conflict("device grant event was already used"));
             }
-            write_grant(&tx, &row).map_err(|_| ApiError::unavailable())?;
+            match &row {
+                Some(row) => db::write_grant(&tx, row),
+                // Pre-emptive revocation: an older grant posted later must not land.
+                None => db::write_marker(&tx, device, authorised.created_at),
+            }
+            .map_err(|_| ApiError::unavailable())?;
             tx.commit().map_err(|_| ApiError::unavailable())?;
         }
         self.reload().map_err(|_| ApiError::unavailable())?;
+        // The gate refuses the key from here on; the claim move runs in
+        // maintenance so a slow in-flight upload cannot delay this reply.
+        self.inner.wake.notify_one();
         tracing::info!(device = %device, "revoked a device grant");
-        if let Err(error) = self.sweep_locked().await {
-            tracing::warn!(reason = %error, "device grant sweep will retry");
-        }
-        Ok(self.status_of(&row))
+        Ok(match row {
+            Some(row) => self.status_of(&row),
+            None => GrantStatus {
+                device: device.to_owned(),
+                recovery: None,
+                bytes: None,
+                until: None,
+                state: "revoked",
+            },
+        })
     }
 
     fn status_of(&self, row: &GrantRow) -> GrantStatus {
@@ -631,9 +711,9 @@ impl Grants {
         };
         GrantStatus {
             device: row.device.clone(),
-            recovery: row.recovery.clone(),
-            bytes: row.byte_limit,
-            until: row.until,
+            recovery: Some(row.recovery.clone()),
+            bytes: Some(row.byte_limit),
+            until: Some(row.until),
             state,
         }
     }
@@ -645,22 +725,55 @@ impl Grants {
         app.set_friend_grants(self.core_friend_grants()).await
     }
 
-    /// Move ended keys' claims to their owner and remove them from the core.
+    /// One maintenance pass: hand back moved claims to active keys, keep
+    /// recovery ceilings current, and move ended keys' claims to their owner.
     pub async fn sweep_ended(&self) -> Result<(), String> {
         let _update = self.inner.updates.lock().await;
         self.sweep_locked().await
     }
 
     async fn sweep_locked(&self) -> Result<(), String> {
+        let Some(app) = self.inner.app.get() else {
+            return Ok(());
+        };
         let now = self.now();
         let snapshot = self.snapshot();
-        let ended = snapshot
-            .members
-            .iter()
-            .filter(|(key, _)| !snapshot.key_active(key, &self.inner.owners, now))
-            .map(|(key, member)| (key.clone(), member.clone()))
-            .collect::<Vec<_>>();
-        // Keep surviving recovery ceilings in step with the grants naming them.
+
+        // Retry restores every pass: this also covers a crash after a grant
+        // was committed and claims over a ceiling that has since grown.
+        let moved_keys = {
+            let db = self.inner.db.lock().map_err(db_error)?;
+            db::moved_keys(&db).map_err(db_error)?
+        };
+        for key in moved_keys {
+            let Some(member) = snapshot.members.get(&key).cloned() else {
+                continue;
+            };
+            if !snapshot.key_active(&key, &self.inner.owners, now) {
+                continue;
+            }
+            let grants = self.clone();
+            let store = app.store().clone();
+            let result = spawn_blocking(move || {
+                claims::restore(
+                    &store,
+                    &grants.inner.db,
+                    &key,
+                    &member,
+                    &core_grant_id(&key),
+                )
+            })
+            .await
+            .unwrap_or_else(|_| Err("claim restore task failed".to_owned()));
+            match result {
+                Ok((restored, _)) if restored > 0 => {
+                    tracing::info!(restored, "handed moved claims back to a delegated key");
+                }
+                Ok(_) => {}
+                Err(error) => tracing::warn!(reason = %error, "could not hand moved claims back"),
+            }
+        }
+
         let mut adjusted = Vec::new();
         for (key, member) in &snapshot.members {
             if let Some(limit) = snapshot.active_limit(key, &self.inner.owners, now)
@@ -669,22 +782,35 @@ impl Grants {
                 adjusted.push((key.clone(), member.issuer.clone(), limit));
             }
         }
-        if ended.is_empty() && adjusted.is_empty() {
-            return Ok(());
-        }
-        let Some(app) = self.inner.app.get() else {
-            return Ok(());
-        };
-        let _sweep = self.inner.sweep_lock.write().await;
+        let ended = snapshot
+            .members
+            .iter()
+            .filter(|(key, _)| !snapshot.key_active(key, &self.inner.owners, now))
+            .map(|(key, member)| (key.clone(), member.clone()))
+            .collect::<Vec<_>>();
+        let deadline = Instant::now() + IN_FLIGHT_WAIT;
         let mut transferred = Vec::new();
         for (key, member) in ended {
+            if !self.wait_idle(&key, deadline).await {
+                tracing::info!(
+                    "an ended delegated key still has a write in flight; retrying later"
+                );
+                continue;
+            }
             let grants = self.clone();
             let store = app.store().clone();
             let moving = key.clone();
-            let result =
-                spawn_blocking(move || grants.transfer_blocking(&store, &moving, &member.issuer))
-                    .await
-                    .unwrap_or_else(|_| Err("claim move task failed".to_owned()));
+            let result = spawn_blocking(move || {
+                claims::transfer(
+                    &store,
+                    &grants.inner.db,
+                    &moving,
+                    &member.issuer,
+                    &core_grant_id(&moving),
+                )
+            })
+            .await
+            .unwrap_or_else(|_| Err("claim move task failed".to_owned()));
             match result {
                 Ok(count) => {
                     tracing::info!(
@@ -694,35 +820,32 @@ impl Grants {
                     transferred.push(key);
                 }
                 Err(error) => {
-                    tracing::warn!(reason = %error, "could not copy delegated claims to the owner yet");
+                    tracing::warn!(reason = %error, "could not move delegated claims to the owner yet");
                 }
             }
         }
-        let previous = self.snapshot();
+        if transferred.is_empty() && adjusted.is_empty() {
+            return Ok(());
+        }
         {
-            let mut db = self
-                .inner
-                .db
-                .lock()
-                .map_err(|_| "database lock".to_owned())?;
-            let tx = db.transaction().map_err(|_| "database".to_owned())?;
+            let mut db = self.inner.db.lock().map_err(db_error)?;
+            let tx = db.transaction().map_err(db_error)?;
             for key in &transferred {
-                tx.execute("DELETE FROM core_members WHERE pubkey = ?1", [key])
-                    .map_err(|_| "database".to_owned())?;
+                db::delete_member(&tx, key).map_err(db_error)?;
             }
             for (key, issuer, limit) in &adjusted {
-                write_member(&tx, key, issuer, *limit).map_err(|_| "database".to_owned())?;
+                db::write_member(&tx, key, issuer, *limit).map_err(db_error)?;
             }
-            tx.commit().map_err(|_| "database".to_owned())?;
+            tx.commit().map_err(db_error)?;
         }
-        self.reload().map_err(|_| "database".to_owned())?;
+        self.reload().map_err(db_error)?;
         if let Err(error) = self.push_core_policy().await {
-            // Put the members back so the next pass retries the removal; the
-            // copies already made are idempotent.
+            // Put the members back so the next pass retries; moves already
+            // made are recorded and idempotent.
             if let Ok(db) = self.inner.db.lock() {
                 for key in &transferred {
-                    if let Some(member) = previous.members.get(key) {
-                        let _ = write_member(&db, key, &member.issuer, member.byte_limit);
+                    if let Some(member) = snapshot.members.get(key) {
+                        let _ = db::write_member(&db, key, &member.issuer, member.byte_limit);
                     }
                 }
             }
@@ -730,290 +853,6 @@ impl Grants {
             return Err(format!("core refused the reduced delegated set: {error}"));
         }
         Ok(())
-    }
-
-    /// Give a re-activated key back the claims an earlier sweep moved to its
-    /// owner.  The owner's copy is removed again unless the owner held that
-    /// blob independently; if the owner deleted their copy in the meantime,
-    /// that deletion wins and the key does not get the claim back.
-    async fn restore_moved_claims(&self, key: &str) {
-        let Ok(app) = self.app() else {
-            return;
-        };
-        let Some(member) = self.snapshot().members.get(key).cloned() else {
-            return;
-        };
-        let grants = self.clone();
-        let store = app.store().clone();
-        let key = key.to_owned();
-        let result = spawn_blocking(move || grants.restore_blocking(&store, &key, &member)).await;
-        match result {
-            Ok(Ok((restored, kept))) if restored + kept > 0 => {
-                tracing::info!(
-                    restored,
-                    kept,
-                    "restored moved claims to a re-activated delegated key"
-                );
-            }
-            Ok(Ok(_)) => {}
-            Ok(Err(error)) => {
-                tracing::warn!(reason = %error, "could not restore moved delegated claims")
-            }
-            Err(_) => tracing::warn!("delegated claim restore task failed"),
-        }
-    }
-
-    fn restore_blocking(
-        &self,
-        store: &Store,
-        key: &str,
-        member: &Member,
-    ) -> Result<(u64, u64), String> {
-        let records = {
-            let db = self
-                .inner
-                .db
-                .lock()
-                .map_err(|_| "database lock".to_owned())?;
-            read_moved(&db, key).map_err(|_| "database".to_owned())?
-        };
-        let (mut restored, mut kept) = (0_u64, 0_u64);
-        for record in records {
-            // Claims moved to a different owner stay with that owner.
-            if record.owner != member.issuer {
-                kept += 1;
-                continue;
-            }
-            let spec = ClaimSpec {
-                signer_pubkey: key.to_owned(),
-                retention_tier: RetentionTier::Friend,
-                declared_type: record.declared_type.clone(),
-                grant_id: Some(core_grant_id(key)),
-                claim_expires_at: Some(CORE_GRANT_SENTINEL),
-                byte_limit: Some(member.byte_limit),
-                class: record.class.clone(),
-            };
-            match store.begin_claimed_mirror(&record.hash, record.size, spec) {
-                Ok(UploadStart::Existing(_)) => {}
-                // The blob is gone (the reservation is cancelled on drop).
-                Ok(UploadStart::Reserved(_))
-                | Err(
-                    StoreError::MissingBlob | StoreError::Tombstoned | StoreError::LengthMismatch,
-                ) => {
-                    self.forget_moved(key, &record.hash)?;
-                    continue;
-                }
-                // Over the new ceiling: the owner keeps holding it.
-                Err(StoreError::FriendLimitExceeded) => {
-                    kept += 1;
-                    continue;
-                }
-                Err(error) => return Err(error.to_string()),
-            }
-            let others = {
-                let db = self
-                    .inner
-                    .db
-                    .lock()
-                    .map_err(|_| "database lock".to_owned())?;
-                count_moved_for(&db, &record.hash, &record.owner, key)
-                    .map_err(|_| "database".to_owned())?
-            };
-            if !record.independent && others == 0 {
-                match store.delete_claim(&record.hash, &record.owner) {
-                    Ok(_) | Err(StoreError::MissingBlob) => {}
-                    Err(StoreError::NotClaimant) => {
-                        // The owner deleted their copy while holding it.
-                        let _ = store.delete_claim(&record.hash, key);
-                        self.forget_moved(key, &record.hash)?;
-                        continue;
-                    }
-                    Err(error) => return Err(error.to_string()),
-                }
-            }
-            self.forget_moved(key, &record.hash)?;
-            restored += 1;
-        }
-        Ok((restored, kept))
-    }
-
-    fn forget_moved(&self, key: &str, hash: &str) -> Result<(), String> {
-        let db = self
-            .inner
-            .db
-            .lock()
-            .map_err(|_| "database lock".to_owned())?;
-        db.execute(
-            "DELETE FROM moved_claims WHERE pubkey = ?1 AND hash = ?2",
-            params![key, hash],
-        )
-        .map(|_| ())
-        .map_err(|_| "database".to_owned())
-    }
-
-    /// Move every claim `key` holds under its delegated grant to an
-    /// owner-tier claim for `owner`, recording each move.
-    fn transfer_blocking(&self, store: &Store, key: &str, owner: &str) -> Result<u64, String> {
-        let claims =
-            collect_claims(store, key, Some(&core_grant_id(key))).map_err(|e| e.to_string())?;
-        if claims.is_empty() {
-            return Ok(0);
-        }
-        let owner_hashes = collect_claims(store, owner, None)
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            .map(|claim| claim.sha256)
-            .collect::<BTreeSet<_>>();
-        let mut moved = 0_u64;
-        for claim in claims {
-            let independent = owner_hashes.contains(&claim.sha256) && {
-                let db = self
-                    .inner
-                    .db
-                    .lock()
-                    .map_err(|_| "database lock".to_owned())?;
-                owner_holds_independently(&db, &claim.sha256, owner)
-                    .map_err(|_| "database".to_owned())?
-            };
-            let declared = declared_type(&claim.content_type);
-            let spec = ClaimSpec {
-                signer_pubkey: owner.to_owned(),
-                retention_tier: RetentionTier::Owner,
-                declared_type: declared.clone(),
-                grant_id: None,
-                claim_expires_at: None,
-                byte_limit: None,
-                class: claim.class.clone(),
-            };
-            // A mirror-style claim never lifts an operator tombstone.
-            match store.begin_claimed_mirror(&claim.sha256, claim.size, spec) {
-                Ok(UploadStart::Existing(_)) => {}
-                Ok(UploadStart::Reserved(_))
-                | Err(
-                    StoreError::MissingBlob | StoreError::Tombstoned | StoreError::LengthMismatch,
-                ) => {
-                    continue;
-                }
-                Err(error) => return Err(error.to_string()),
-            }
-            // The owner claim now protects the blob, so removing the key's
-            // claim can never orphan it.
-            match store.delete_claim(&claim.sha256, key) {
-                Ok(_) | Err(StoreError::NotClaimant | StoreError::MissingBlob) => {}
-                Err(error) => return Err(error.to_string()),
-            }
-            let db = self
-                .inner
-                .db
-                .lock()
-                .map_err(|_| "database lock".to_owned())?;
-            db.execute(
-                "INSERT INTO moved_claims (pubkey, hash, owner, size, declared_type, class, independent)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                 ON CONFLICT(pubkey, hash) DO UPDATE SET owner = excluded.owner,
-                    size = excluded.size, declared_type = excluded.declared_type,
-                    class = excluded.class, independent = excluded.independent",
-                params![
-                    key,
-                    claim.sha256,
-                    owner,
-                    i64::try_from(claim.size).unwrap_or(i64::MAX),
-                    declared,
-                    claim.class,
-                    independent,
-                ],
-            )
-            .map_err(|_| "database".to_owned())?;
-            moved += 1;
-        }
-        Ok(moved)
-    }
-}
-
-/// Every claim of `key` (optionally only those under its delegated grant).
-fn collect_claims(
-    store: &Store,
-    key: &str,
-    grant_id: Option<&str>,
-) -> Result<Vec<wildbloom_core::ClaimMetadata>, StoreError> {
-    let mut claims = Vec::new();
-    let mut cursor: Option<String> = None;
-    loop {
-        let page = match grant_id {
-            Some(grant_id) => {
-                store.list_claims_for_grant(key, grant_id, cursor.as_deref(), LIST_PAGE)?
-            }
-            None => store.list_claims(key, cursor.as_deref(), LIST_PAGE)?,
-        };
-        let done = page.len() < LIST_PAGE;
-        cursor = page.last().map(|claim| claim.sha256.clone());
-        claims.extend(page);
-        if done || claims.len() >= MAX_SWEEP_CLAIMS {
-            return Ok(claims);
-        }
-    }
-}
-
-struct MovedClaim {
-    hash: String,
-    owner: String,
-    size: u64,
-    declared_type: String,
-    class: Option<String>,
-    independent: bool,
-}
-
-fn read_moved(connection: &Connection, key: &str) -> rusqlite::Result<Vec<MovedClaim>> {
-    let mut statement = connection.prepare(
-        "SELECT hash, owner, size, declared_type, class, independent
-         FROM moved_claims WHERE pubkey = ?1 ORDER BY hash",
-    )?;
-    let rows = statement.query_map([key], |row| {
-        Ok(MovedClaim {
-            hash: row.get(0)?,
-            owner: row.get(1)?,
-            size: row_u64(row, 2)?,
-            declared_type: row.get(3)?,
-            class: row.get(4)?,
-            independent: row.get(5)?,
-        })
-    })?;
-    rows.collect()
-}
-
-fn count_moved_for(
-    connection: &Connection,
-    hash: &str,
-    owner: &str,
-    except: &str,
-) -> rusqlite::Result<i64> {
-    connection.query_row(
-        "SELECT COUNT(*) FROM moved_claims WHERE hash = ?1 AND owner = ?2 AND pubkey != ?3",
-        params![hash, owner, except],
-        |row| row.get(0),
-    )
-}
-
-/// The owner claims `hash` in its own right unless every existing owner
-/// claim for it came from a recorded move.
-fn owner_holds_independently(
-    connection: &Connection,
-    hash: &str,
-    owner: &str,
-) -> rusqlite::Result<bool> {
-    connection.query_row(
-        "SELECT NOT EXISTS (SELECT 1 FROM moved_claims WHERE hash = ?1 AND owner = ?2)
-             OR EXISTS (SELECT 1 FROM moved_claims WHERE hash = ?1 AND owner = ?2 AND independent)",
-        params![hash, owner],
-        |row| row.get(0),
-    )
-}
-
-fn declared_type(value: &str) -> String {
-    if value.is_empty() || value.len() > 255 {
-        "application/octet-stream".to_owned()
-    } else {
-        value.to_owned()
     }
 }
 
@@ -1023,10 +862,6 @@ pub fn core_grant_id(key: &str) -> String {
 
 fn poisoned() -> GrantsError {
     GrantsError::Io(std::io::Error::other("device grant state lock poisoned"))
-}
-
-fn as_i64(value: u64) -> Result<i64, ApiError> {
-    i64::try_from(value).map_err(|_| ApiError::bad_request("integer out of range"))
 }
 
 fn create_private_file(path: &Path) -> std::io::Result<()> {
@@ -1051,136 +886,6 @@ fn create_private_file(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn initialise(connection: &Connection) -> Result<(), GrantsError> {
-    let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    if version > 1 {
-        return Err(GrantsError::Schema(version));
-    }
-    connection.execute_batch(
-        "PRAGMA journal_mode = WAL;
-         BEGIN IMMEDIATE;
-         CREATE TABLE IF NOT EXISTS device_grants (
-            device TEXT PRIMARY KEY NOT NULL,
-            recovery TEXT NOT NULL,
-            issuer TEXT NOT NULL,
-            byte_limit INTEGER NOT NULL CHECK (byte_limit > 0),
-            until INTEGER NOT NULL,
-            granted_at INTEGER NOT NULL,
-            last_event_at INTEGER NOT NULL,
-            revoked_at INTEGER
-         );
-         CREATE TABLE IF NOT EXISTS core_members (
-            pubkey TEXT PRIMARY KEY NOT NULL,
-            issuer TEXT NOT NULL,
-            byte_limit INTEGER NOT NULL CHECK (byte_limit > 0)
-         );
-         CREATE TABLE IF NOT EXISTS moved_claims (
-            pubkey TEXT NOT NULL,
-            hash TEXT NOT NULL,
-            owner TEXT NOT NULL,
-            size INTEGER NOT NULL CHECK (size >= 0),
-            declared_type TEXT NOT NULL,
-            class TEXT,
-            independent INTEGER NOT NULL,
-            PRIMARY KEY (pubkey, hash)
-         );
-         CREATE INDEX IF NOT EXISTS moved_claims_hash ON moved_claims(hash, owner);
-         CREATE TABLE IF NOT EXISTS used_events (
-            event_id TEXT PRIMARY KEY NOT NULL,
-            expires_at INTEGER NOT NULL
-         );
-         PRAGMA user_version = 1;
-         COMMIT;",
-    )?;
-    Ok(())
-}
-
-fn read_snapshot(connection: &Connection) -> rusqlite::Result<Snapshot> {
-    let mut snapshot = Snapshot::default();
-    let mut statement = connection.prepare(
-        "SELECT device, recovery, issuer, byte_limit, until, granted_at, last_event_at, revoked_at
-         FROM device_grants",
-    )?;
-    let rows = statement.query_map([], |row| {
-        Ok(GrantRow {
-            device: row.get(0)?,
-            recovery: row.get(1)?,
-            issuer: row.get(2)?,
-            byte_limit: row_u64(row, 3)?,
-            until: row_u64(row, 4)?,
-            granted_at: row_u64(row, 5)?,
-            last_event_at: row_u64(row, 6)?,
-            revoked_at: row
-                .get::<_, Option<i64>>(7)?
-                .map(|value| u64::try_from(value).unwrap_or(0)),
-        })
-    })?;
-    for row in rows {
-        let row = row?;
-        snapshot.grants.insert(row.device.clone(), row);
-    }
-    let mut statement =
-        connection.prepare("SELECT pubkey, issuer, byte_limit FROM core_members")?;
-    let rows = statement.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            Member {
-                issuer: row.get(1)?,
-                byte_limit: row_u64(row, 2)?,
-            },
-        ))
-    })?;
-    for row in rows {
-        let (key, member) = row?;
-        snapshot.members.insert(key, member);
-    }
-    Ok(snapshot)
-}
-
-fn row_u64(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
-    let value: i64 = row.get(index)?;
-    u64::try_from(value).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(index, value))
-}
-
-fn write_grant(connection: &Connection, row: &GrantRow) -> rusqlite::Result<()> {
-    let int = |value: u64| i64::try_from(value).unwrap_or(i64::MAX);
-    connection.execute(
-        "INSERT INTO device_grants
-            (device, recovery, issuer, byte_limit, until, granted_at, last_event_at, revoked_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-         ON CONFLICT(device) DO UPDATE SET
-            recovery = excluded.recovery, issuer = excluded.issuer,
-            byte_limit = excluded.byte_limit, until = excluded.until,
-            granted_at = excluded.granted_at, last_event_at = excluded.last_event_at,
-            revoked_at = excluded.revoked_at",
-        params![
-            row.device,
-            row.recovery,
-            row.issuer,
-            int(row.byte_limit),
-            int(row.until),
-            int(row.granted_at),
-            int(row.last_event_at),
-            row.revoked_at.map(int),
-        ],
-    )?;
-    Ok(())
-}
-
-fn write_member(
-    connection: &Connection,
-    key: &str,
-    issuer: &str,
-    byte_limit: u64,
-) -> rusqlite::Result<()> {
-    connection.execute(
-        "INSERT INTO core_members (pubkey, issuer, byte_limit) VALUES (?1, ?2, ?3)
-         ON CONFLICT(pubkey) DO UPDATE SET issuer = excluded.issuer, byte_limit = excluded.byte_limit",
-        params![key, issuer, i64::try_from(byte_limit).unwrap_or(i64::MAX)],
-    )?;
-    Ok(())
-}
-
 fn single_authorization(headers: &HeaderMap) -> Result<&str, ApiError> {
     let mut values = headers.get_all(header::AUTHORIZATION).iter();
     let value = values
@@ -1201,6 +906,12 @@ pub(crate) fn cors(methods: &[Method]) -> tower_http::cors::CorsLayer {
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
 }
 
+fn json_ok(status: StatusCode, body: GrantStatus) -> Response {
+    let mut response = (status, Json(body)).into_response();
+    no_store(&mut response);
+    response
+}
+
 async fn post_grant(State(grants): State<Grants>, request: Request<Body>) -> Response {
     let result = async {
         if request.uri().query().is_some() {
@@ -1213,11 +924,7 @@ async fn post_grant(State(grants): State<Grants>, request: Request<Body>) -> Res
     }
     .await;
     match result {
-        Ok((status, body)) => {
-            let mut response = (status, Json(body)).into_response();
-            no_store(&mut response);
-            response
-        }
+        Ok((status, body)) => json_ok(status, body),
         Err(error) => error.into_response(),
     }
 }
@@ -1231,11 +938,7 @@ async fn delete_grant(
         return ApiError::bad_request("invalid device public key").into_response();
     }
     match grants.apply_revoke(&device, &headers).await {
-        Ok(status) => {
-            let mut response = Json(status).into_response();
-            no_store(&mut response);
-            response
-        }
+        Ok(status) => json_ok(StatusCode::OK, status),
         Err(error) => error.into_response(),
     }
 }
@@ -1273,28 +976,52 @@ async fn get_grant(
         Ok(grants.status_of(row))
     })();
     match result {
-        Ok(status) => {
-            let mut response = Json(status).into_response();
-            no_store(&mut response);
-            response
-        }
+        Ok(status) => json_ok(StatusCode::OK, status),
         Err(error) => error.into_response(),
     }
 }
 
-fn is_core_write(method: &Method, path: &str) -> bool {
+/// Requests the gate lets through for an ended key: reads only.  `HEAD
+/// /upload` is BUD-06 write preflight, so it is not a read.
+fn is_read(method: &Method, path: &str) -> bool {
     match *method {
-        Method::PUT => path == "/upload" || path == "/mirror",
-        Method::HEAD => path == "/upload",
-        Method::DELETE => true,
+        Method::GET | Method::OPTIONS => true,
+        Method::HEAD => path != "/upload",
         _ => false,
     }
 }
 
-/// Layer for the core Blossom router: refuses writes from a delegated key
-/// whose grant has ended, and holds the sweep read guard for active ones.
+/// Bound a delegated write body: it must keep arriving and finish in time.
+fn bounded_body(body: Body) -> Body {
+    let deadline = Instant::now() + WRITE_TOTAL_TIMEOUT;
+    let stream =
+        futures_util::stream::unfold(Some(body.into_data_stream()), move |state| async move {
+            let mut stream = state?;
+            let wait = deadline
+                .saturating_duration_since(Instant::now())
+                .min(WRITE_IDLE_TIMEOUT);
+            match tokio::time::timeout(wait, stream.next()).await {
+                Ok(Some(Ok(bytes))) => Some((Ok::<Bytes, std::io::Error>(bytes), Some(stream))),
+                Ok(Some(Err(_))) => {
+                    Some((Err(std::io::Error::other("upload stream failed")), None))
+                }
+                Ok(None) => None,
+                Err(_) => Some((
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "delegated write body timed out",
+                    )),
+                    None,
+                )),
+            }
+        });
+    Body::from_stream(stream)
+}
+
+/// Layer for the core Blossom router.  A delegated key whose grant has ended
+/// can only read; an active one's writes are counted in flight and bounded.
 pub async fn gate(State(grants): State<Grants>, request: Request, next: Next) -> Response {
-    if !is_core_write(request.method(), request.uri().path()) {
+    if is_read(request.method(), request.uri().path()) {
         return next.run(request).await;
     }
     let Some(signer) = request
@@ -1309,11 +1036,12 @@ pub async fn gate(State(grants): State<Grants>, request: Request, next: Next) ->
     if !grants.snapshot().knows(&signer) {
         return next.run(request).await;
     }
-    let _guard = grants.inner.sweep_lock.read().await;
-    if !grants.is_active(&signer) {
+    let Some(_flight) = grants.begin_write(&signer) else {
         return ApiError::forbidden("the delegated storage grant has ended").into_response();
-    }
-    next.run(request).await
+    };
+    let (parts, body) = request.into_parts();
+    next.run(Request::from_parts(parts, bounded_body(body)))
+        .await
 }
 
 /// Stops background maintenance when dropped.
@@ -1333,5 +1061,16 @@ pub fn has_database(data_dir: &Path) -> bool {
 impl std::fmt::Debug for Grants {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("Grants")
+    }
+}
+
+#[cfg(test)]
+impl Grants {
+    pub(crate) fn snapshot_members(&self) -> std::collections::BTreeMap<String, u64> {
+        self.snapshot()
+            .members
+            .iter()
+            .map(|(key, member)| (key.clone(), member.byte_limit))
+            .collect()
     }
 }

@@ -15,7 +15,7 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     path::Path,
     sync::{Arc, Mutex},
     time::Duration,
@@ -23,11 +23,14 @@ use std::{
 use url::Url;
 
 pub const ISSUER_PATH: &str = "pairing/v1/live-grants";
+/// Environment form of the operator token.  Child processes never inherit it;
+/// prefer `--pairing-operator-token-file`.
+pub const TOKEN_ENV: &str = "WILDBLOOM_PAIRING_OPERATOR_TOKEN";
 /// Foregather's maximum live session lifetime.
 pub const MAX_INVITATION_LIFETIME: u64 = 600;
 /// A creation grant only needs to cover the allocation that follows it.
 pub const GRANT_TTL: u64 = 300;
-/// Per-device issuance budget within one window.
+/// Per-device issuance budget within any rolling window.
 pub const RATE_LIMIT: u32 = 30;
 pub const RATE_WINDOW: u64 = 60 * 60;
 const MAX_UPSTREAM_BYTES: usize = 4096;
@@ -104,7 +107,7 @@ pub struct Issuer {
     endpoint: Url,
     token: OperatorToken,
     client: reqwest::Client,
-    rate: Arc<Mutex<HashMap<String, (u64, u32)>>>,
+    rate: Arc<Mutex<HashMap<String, VecDeque<u64>>>>,
 }
 
 #[derive(Serialize)]
@@ -197,24 +200,35 @@ impl Issuer {
         if !self.grants.is_active_device(&device) {
             return Err(ApiError::forbidden("the device has no active grant"));
         }
+        // Sliding window, checked before the replay row is written so a
+        // refused request spends neither budget nor the event id.
+        let mut rate = self.rate.lock().map_err(|_| ApiError::unavailable())?;
+        for window in rate.values_mut() {
+            while window
+                .front()
+                .is_some_and(|issued| now.saturating_sub(*issued) >= RATE_WINDOW)
+            {
+                window.pop_front();
+            }
+        }
+        rate.retain(|_, window| !window.is_empty());
+        if rate
+            .get(&device)
+            .is_some_and(|window| window.len() >= RATE_LIMIT as usize)
+        {
+            return Err(ApiError::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "pairing request budget is spent",
+            ));
+        }
         if !self
             .grants
             .consume_event(principal.event_id(), now.saturating_add(REPLAY_WINDOW))?
         {
             return Err(ApiError::conflict("pairing request was already used"));
         }
-        {
-            let mut rate = self.rate.lock().map_err(|_| ApiError::unavailable())?;
-            rate.retain(|_, (start, _)| now.saturating_sub(*start) < RATE_WINDOW);
-            let entry = rate.entry(device.clone()).or_insert((now, 0));
-            if entry.1 >= RATE_LIMIT {
-                return Err(ApiError::new(
-                    StatusCode::TOO_MANY_REQUESTS,
-                    "pairing request budget is spent",
-                ));
-            }
-            entry.1 += 1;
-        }
+        rate.entry(device.clone()).or_default().push_back(now);
+        drop(rate);
         Ok(device)
     }
 

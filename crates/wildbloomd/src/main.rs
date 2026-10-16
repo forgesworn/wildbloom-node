@@ -302,6 +302,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect::<Vec<_>>();
     // Persisted grants are always honoured once they exist, even if the routes
     // are later disabled, so turning the flag off never demotes stored claims.
+    // Read early so its announcement key can be reserved from delegation.
+    let service_profile = cli
+        .service_profile
+        .as_ref()
+        .map(|path| services::Profile::read(path))
+        .transpose()?;
     let device_grants = if cli.device_grants || grants::has_database(&data_dir) {
         Some(grants::Grants::open(
             &data_dir,
@@ -310,6 +316,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 server_names: server_names.clone(),
                 origin: public_url.to_string(),
                 cli_friend_grants: cli_friend_grants.clone(),
+                reserved_keys: service_profile
+                    .iter()
+                    .map(|profile| profile.service_pubkey.clone())
+                    .collect(),
             },
             grants::system_clock(),
         )?)
@@ -320,7 +330,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(
             match (
                 &cli.pairing_operator_token_file,
-                std::env::var("WILDBLOOM_PAIRING_OPERATOR_TOKEN"),
+                std::env::var(grants::issuer::TOKEN_ENV),
             ) {
                 (Some(path), Err(_)) => grants::issuer::OperatorToken::from_file(path)?,
                 (None, Ok(value)) => grants::issuer::OperatorToken::parse(&value)?,
@@ -395,7 +405,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut _grant_maintenance = None;
     if let Some(device_grants) = &device_grants {
         device_grants.attach(state.clone());
-        if let Err(error) = device_grants.sweep_ended().await {
+        if let Err(error) = device_grants.startup().await {
             tracing::warn!(reason = %error, "device grant sweep will retry");
         }
         _grant_maintenance = Some(grants::Maintenance(device_grants.spawn_maintenance()));
@@ -427,9 +437,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         routes = routes.merge(checkout);
         checkout_service = Some(service);
     }
-    let publisher = if let Some(profile) = cli.service_profile {
+    let publisher = if let Some(profile) = service_profile {
         let services = services::Services::new(
-            services::Profile::read(&profile)?,
+            profile,
             state.store().clone(),
             checkout_service,
             public_url.as_str(),

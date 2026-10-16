@@ -52,6 +52,7 @@ fn hex(keys: &Keys) -> String {
 
 struct Node {
     grants: Grants,
+    state: AppState,
     app: Router,
     offset: Arc<AtomicI64>,
 }
@@ -63,6 +64,10 @@ impl Node {
 
     fn advance(&self, seconds: i64) {
         self.offset.fetch_add(seconds, Ordering::SeqCst);
+    }
+
+    async fn sweep(&self) {
+        self.grants.sweep_ended().await.unwrap();
     }
 
     async fn call(&self, request: Request<Body>) -> (StatusCode, Value) {
@@ -77,7 +82,16 @@ impl Node {
 }
 
 async fn node_at(root: PathBuf, offset: Arc<AtomicI64>) -> Node {
-    let owner = hex(&keys(1));
+    node_with(root, offset, &[1], Vec::new()).await
+}
+
+async fn node_with(
+    root: PathBuf,
+    offset: Arc<AtomicI64>,
+    owners: &[u64],
+    friends: Vec<wildbloom_core::FriendGrant>,
+) -> Node {
+    let owners = owners.iter().map(|n| hex(&keys(*n))).collect::<Vec<_>>();
     let store = Store::open(StoreConfig {
         root: root.clone(),
         quota_bytes: 64 * MIB,
@@ -88,10 +102,11 @@ async fn node_at(root: PathBuf, offset: Arc<AtomicI64>) -> Node {
     let grants = Grants::open(
         &root,
         GrantsConfig {
-            owners: vec![owner.clone()],
+            owners: owners.clone(),
             server_names: vec![SERVER.into()],
             origin: ORIGIN.into(),
-            cli_friend_grants: Vec::new(),
+            cli_friend_grants: friends,
+            reserved_keys: vec![hex(&keys(99))],
         },
         Arc::new(move || real_now().saturating_add_signed(clock_offset.load(Ordering::SeqCst))),
     )
@@ -102,7 +117,7 @@ async fn node_at(root: PathBuf, offset: Arc<AtomicI64>) -> Node {
             server_metadata: ServerMetadata::default(),
             public_base_url: ORIGIN.parse().unwrap(),
             accepted_server_names: vec![SERVER.into()],
-            allowed_pubkeys: vec![owner],
+            allowed_pubkeys: owners,
             friend_grants: grants.core_friend_grants(),
             open_shelter: false,
             max_concurrent_writes: 4,
@@ -111,12 +126,13 @@ async fn node_at(root: PathBuf, offset: Arc<AtomicI64>) -> Node {
     )
     .unwrap();
     grants.attach(state.clone());
-    grants.sweep_ended().await.unwrap();
+    grants.startup().await.unwrap();
     let app = router(state.clone())
         .layer(from_fn_with_state(grants.clone(), gate))
         .merge(grants.router());
     Node {
         grants,
+        state,
         app,
         offset,
     }
@@ -363,7 +379,9 @@ async fn owner_grant_allows_device_and_recovery_writes_and_revocation_stops_them
         delete(&node, &device, &sha(b"device file")).await,
         StatusCode::FORBIDDEN
     );
-    // Existing claims are kept, now held by the owner, who can delete them.
+    // Existing claims are kept, moved to the owner by the next sweep, and
+    // the owner can delete them.
+    node.sweep().await;
     assert_eq!(
         get_status(&node, &format!("/{}", sha(b"device file"))).await,
         StatusCode::OK
@@ -714,6 +732,7 @@ async fn regranting_a_recovery_identity_restores_its_key_list() {
             .0,
         StatusCode::OK
     );
+    node.sweep().await;
     assert!(list(&node, &recovery).await.is_empty());
     assert_eq!(list(&node, &owner).await, vec![sha(b"encrypted key list")]);
 
@@ -728,19 +747,21 @@ async fn regranting_a_recovery_identity_restores_its_key_list() {
             .0,
         StatusCode::CREATED
     );
+    node.sweep().await;
     assert_eq!(
         list(&node, &recovery).await,
         vec![sha(b"encrypted key list")]
     );
-    // The owner copy made by the move is handed back, not duplicated.
-    assert!(list(&node, &owner).await.is_empty());
+    // The owner keeps its claim; the recovery identity's sits beside it, so
+    // its delete removes only its own claim.
+    assert_eq!(list(&node, &owner).await, vec![sha(b"encrypted key list")]);
     assert_eq!(
         delete(&node, &recovery, &sha(b"encrypted key list")).await,
         StatusCode::OK
     );
     assert_eq!(
         get_status(&node, &format!("/{}", sha(b"encrypted key list"))).await,
-        StatusCode::NOT_FOUND
+        StatusCode::OK
     );
 }
 
@@ -756,6 +777,7 @@ async fn an_owner_deletion_while_holding_moved_claims_wins_over_a_regrant() {
         StatusCode::CREATED
     );
     node.call(revoke_request(&owner, &device, now + 1)).await;
+    node.sweep().await;
     assert_eq!(
         delete(&node, &owner, &sha(b"owner removes")).await,
         StatusCode::OK
@@ -766,6 +788,7 @@ async fn an_owner_deletion_while_holding_moved_claims_wins_over_a_regrant() {
             .0,
         StatusCode::OK
     );
+    node.sweep().await;
     assert!(list(&node, &device).await.is_empty());
     assert_eq!(
         get_status(&node, &format!("/{}", sha(b"owner removes"))).await,
@@ -1154,6 +1177,7 @@ async fn a_former_delegated_key_cannot_be_reconfigured_as_a_friend() {
             owners: vec![hex(&keys(1))],
             server_names: vec![SERVER.into()],
             origin: ORIGIN.into(),
+            reserved_keys: Vec::new(),
             cli_friend_grants: vec![wildbloom_core::FriendGrant {
                 pubkey: hex(&keys(10)),
                 byte_limit: MIB,
@@ -1165,4 +1189,393 @@ async fn a_former_delegated_key_cannot_be_reconfigured_as_a_friend() {
         super::system_clock(),
     );
     assert!(matches!(reopened, Err(super::GrantsError::Conflict)));
+}
+
+#[tokio::test]
+async fn delegated_core_grants_never_expire_in_the_core() {
+    // The real expiry must stay in the shell: if the core grant carried it,
+    // the core would reap the claims at the next store open after it passed.
+    let dir = tempfile::tempdir().unwrap();
+    let offset = Arc::new(AtomicI64::new(0));
+    let node = node_at(dir.path().join("data"), offset.clone()).await;
+    let grant = Grant {
+        until_in: 2,
+        ..standard_grant()
+    };
+    assert_eq!(
+        node.call(post_grant(grant_event(&keys(1), &grant, node.now())))
+            .await
+            .0,
+        StatusCode::CREATED
+    );
+    for core_grant in node.grants.core_friend_grants() {
+        assert_eq!(core_grant.expires_at, super::CORE_GRANT_SENTINEL);
+    }
+    assert_eq!(
+        upload(&node, &keys(10), b"outlives the real expiry").await,
+        StatusCode::CREATED
+    );
+    drop(node);
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    let node = node_at(dir.path().join("data"), offset).await;
+    assert_eq!(
+        list(&node, &keys(1)).await,
+        vec![sha(b"outlives the real expiry")]
+    );
+}
+
+#[tokio::test]
+async fn issuer_budget_is_a_sliding_window_checked_before_replay() {
+    let (_dir, node) = node().await;
+    let relay = relay(StatusCode::CREATED).await;
+    let app = issuer_app(&node, &relay);
+    let now = node.now();
+    let long = Grant {
+        until_in: 3 * 3600,
+        ..standard_grant()
+    };
+    node.call(post_grant(grant_event(&keys(1), &long, now)))
+        .await;
+    for age in 0..super::issuer::RATE_LIMIT as u64 {
+        let (status, _, text) = call(&app, issue_request(&keys(10), now - age, b"")).await;
+        assert_eq!(status, StatusCode::CREATED, "{text}");
+    }
+    let refused = issue_request(&keys(10), now - 40, b"");
+    assert_eq!(call(&app, refused).await.0, StatusCode::TOO_MANY_REQUESTS);
+    // The budget returns as the window slides.
+    node.advance(super::issuer::RATE_WINDOW as i64);
+    let later = node.now();
+    assert_eq!(
+        call(&app, issue_request(&keys(10), later, b"")).await.0,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        relay.calls.load(Ordering::SeqCst),
+        super::issuer::RATE_LIMIT + 1
+    );
+}
+
+#[tokio::test]
+async fn moved_claims_return_only_to_a_regrant_by_the_same_owner() {
+    let dir = tempfile::tempdir().unwrap();
+    let node = node_with(
+        dir.path().join("data"),
+        Arc::new(AtomicI64::new(0)),
+        &[1, 2],
+        Vec::new(),
+    )
+    .await;
+    let now = node.now();
+    node.call(post_grant(grant_event(&keys(1), &standard_grant(), now)))
+        .await;
+    assert_eq!(
+        upload(&node, &keys(10), b"first owner's file").await,
+        StatusCode::CREATED
+    );
+    node.call(revoke_request(&keys(1), &keys(10), now + 1))
+        .await;
+    node.sweep().await;
+    assert_eq!(
+        node.call(post_grant(grant_event(
+            &keys(2),
+            &standard_grant(),
+            now + 2
+        )))
+        .await
+        .0,
+        StatusCode::OK
+    );
+    node.sweep().await;
+    assert!(list(&node, &keys(10)).await.is_empty());
+    assert_eq!(
+        list(&node, &keys(1)).await,
+        vec![sha(b"first owner's file")]
+    );
+}
+
+#[tokio::test]
+async fn recovery_ceiling_follows_the_largest_active_grant() {
+    let (_dir, node) = node().await;
+    let now = node.now();
+    let small = Grant {
+        bytes: 16,
+        ..standard_grant()
+    };
+    let large = Grant {
+        device: 20,
+        bytes: 64,
+        ..standard_grant()
+    };
+    node.call(post_grant(grant_event(&keys(1), &small, now)))
+        .await;
+    node.call(post_grant(grant_event(&keys(1), &large, now)))
+        .await;
+    assert_eq!(node.grants.snapshot_members()[&hex(&keys(11))], 64);
+    assert_eq!(
+        upload(&node, &keys(11), &[7_u8; 40]).await,
+        StatusCode::CREATED
+    );
+    node.call(revoke_request(&keys(1), &keys(20), now + 1))
+        .await;
+    node.sweep().await;
+    assert_eq!(node.grants.snapshot_members()[&hex(&keys(11))], 16);
+    assert_eq!(
+        upload(&node, &keys(11), b"over the smaller ceiling").await,
+        StatusCode::INSUFFICIENT_STORAGE
+    );
+}
+
+#[tokio::test]
+async fn removing_the_issuing_owner_withdraws_its_device_grants() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("data");
+    let offset = Arc::new(AtomicI64::new(0));
+    let node = node_with(root.clone(), offset.clone(), &[1, 2], Vec::new()).await;
+    let now = node.now();
+    node.call(post_grant(grant_event(&keys(2), &standard_grant(), now)))
+        .await;
+    assert_eq!(
+        upload(&node, &keys(10), b"withdrawn owner's file").await,
+        StatusCode::CREATED
+    );
+    drop(node);
+    let node = node_with(root, offset, &[1], Vec::new()).await;
+    let (status, body) = node
+        .call(status_request(&keys(10), &keys(10), node.now()))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["state"], "withdrawn");
+    assert_eq!(
+        upload(&node, &keys(10), b"refused").await,
+        StatusCode::FORBIDDEN
+    );
+    assert!(node.grants.snapshot_members().is_empty());
+    // The bytes are still stored, now under the former owner like any of
+    // that owner's other claims.
+    assert_eq!(
+        get_status(&node, &format!("/{}", sha(b"withdrawn owner's file"))).await,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn a_regrant_never_deletes_an_owner_claim() {
+    let (_dir, node) = node().await;
+    let (owner, device) = (keys(1), keys(10));
+    let now = node.now();
+    node.call(post_grant(grant_event(&owner, &standard_grant(), now)))
+        .await;
+    assert_eq!(
+        upload(&node, &device, b"owner re-uploads").await,
+        StatusCode::CREATED
+    );
+    node.call(revoke_request(&owner, &device, now + 1)).await;
+    node.sweep().await;
+    // The owner deletes the moved copy, then uploads the same bytes itself.
+    assert_eq!(
+        delete(&node, &owner, &sha(b"owner re-uploads")).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        upload(&node, &owner, b"owner re-uploads").await,
+        StatusCode::CREATED
+    );
+    node.call(post_grant(grant_event(&owner, &standard_grant(), now + 2)))
+        .await;
+    node.sweep().await;
+    assert_eq!(list(&node, &device).await, vec![sha(b"owner re-uploads")]);
+    assert_eq!(list(&node, &owner).await, vec![sha(b"owner re-uploads")]);
+    assert_eq!(
+        delete(&node, &device, &sha(b"owner re-uploads")).await,
+        StatusCode::OK
+    );
+    assert_eq!(list(&node, &owner).await, vec![sha(b"owner re-uploads")]);
+    assert_eq!(
+        get_status(&node, &format!("/{}", sha(b"owner re-uploads"))).await,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn startup_re_adopts_claims_an_older_binary_demoted() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("data");
+    let offset = Arc::new(AtomicI64::new(0));
+    let node = node_at(root.clone(), offset.clone()).await;
+    node.call(post_grant(grant_event(
+        &keys(1),
+        &standard_grant(),
+        node.now(),
+    )))
+    .await;
+    assert_eq!(
+        upload(&node, &keys(10), b"survives a rollback").await,
+        StatusCode::CREATED
+    );
+    drop(node);
+    {
+        // A binary without device grants: its reconcile demotes the claim.
+        let store = Store::open(StoreConfig {
+            root: root.clone(),
+            quota_bytes: 64 * MIB,
+            max_blob_bytes: 8 * MIB,
+        })
+        .unwrap();
+        let _old = AppState::new(
+            store.clone(),
+            BlossomConfig {
+                server_metadata: ServerMetadata::default(),
+                public_base_url: ORIGIN.parse().unwrap(),
+                accepted_server_names: vec![SERVER.into()],
+                allowed_pubkeys: vec![hex(&keys(1))],
+                friend_grants: Vec::new(),
+                open_shelter: false,
+                max_concurrent_writes: 4,
+                mirror_proxy: None,
+            },
+        )
+        .unwrap();
+        assert!(
+            store
+                .list_claims_for_grant(
+                    &hex(&keys(10)),
+                    &super::core_grant_id(&hex(&keys(10))),
+                    None,
+                    10
+                )
+                .unwrap()
+                .is_empty()
+        );
+    }
+    let node = node_at(root, offset).await;
+    assert_eq!(
+        list(&node, &keys(10)).await,
+        vec![sha(b"survives a rollback")]
+    );
+    node.advance(7200);
+    node.sweep().await;
+    assert_eq!(
+        list(&node, &keys(1)).await,
+        vec![sha(b"survives a rollback")]
+    );
+}
+
+#[tokio::test]
+async fn restores_over_the_ceiling_are_retried_on_later_sweeps() {
+    let (_dir, node) = node().await;
+    let (owner, device) = (keys(1), keys(10));
+    let now = node.now();
+    node.call(post_grant(grant_event(&owner, &standard_grant(), now)))
+        .await;
+    let files: [&[u8]; 2] = [b"first ten.", b"second ten"];
+    for file in files {
+        assert_eq!(upload(&node, &device, file).await, StatusCode::CREATED);
+    }
+    node.call(revoke_request(&owner, &device, now + 1)).await;
+    node.sweep().await;
+    let small = Grant {
+        bytes: 16,
+        ..standard_grant()
+    };
+    node.call(post_grant(grant_event(&owner, &small, now + 2)))
+        .await;
+    node.sweep().await;
+    let first = list(&node, &device).await;
+    assert_eq!(first.len(), 1);
+    assert_eq!(delete(&node, &device, &first[0]).await, StatusCode::OK);
+    node.sweep().await;
+    let second = list(&node, &device).await;
+    assert_eq!(second.len(), 1);
+    assert_ne!(first, second);
+}
+
+#[tokio::test]
+async fn paid_claims_of_a_delegated_key_are_not_moved_to_the_owner() {
+    let (_dir, node) = node().await;
+    let (owner, device) = (keys(1), keys(10));
+    let now = node.now();
+    node.call(post_grant(grant_event(&owner, &standard_grant(), now)))
+        .await;
+    let store = node.state.store();
+    store
+        .reserve_paid_sale(&wildbloom_core::PaidSale {
+            order_id: "order-1".into(),
+            signer_pubkey: hex(&device),
+            capacity_bytes: MIB,
+            duration_seconds: 3600,
+            grace_seconds: 0,
+            hold_expires_at: real_now() + 600,
+            renews: None,
+        })
+        .unwrap();
+    store.activate_paid_sale("order-1").unwrap();
+    assert_eq!(
+        upload(&node, &device, b"paid for separately").await,
+        StatusCode::CREATED
+    );
+    node.call(revoke_request(&owner, &device, now + 1)).await;
+    node.sweep().await;
+    assert!(list(&node, &owner).await.is_empty());
+    assert_eq!(
+        list(&node, &device).await,
+        vec![sha(b"paid for separately")]
+    );
+}
+
+#[tokio::test]
+async fn a_revocation_before_any_grant_blocks_older_grants() {
+    let (_dir, node) = node().await;
+    let now = node.now();
+    let (status, body) = node
+        .call(revoke_request(&keys(1), &keys(10), now + 5))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["state"], "revoked");
+    assert_eq!(
+        node.call(post_grant(grant_event(&keys(1), &standard_grant(), now)))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        node.call(post_grant(grant_event(
+            &keys(1),
+            &standard_grant(),
+            now + 6
+        )))
+        .await
+        .0,
+        StatusCode::CREATED
+    );
+}
+
+#[tokio::test]
+async fn service_keys_cannot_be_delegated_and_ended_keys_cannot_use_other_methods() {
+    let (_dir, node) = node().await;
+    let now = node.now();
+    let service = Grant {
+        device: 99,
+        ..standard_grant()
+    };
+    assert_eq!(
+        node.call(post_grant(grant_event(&keys(1), &service, now)))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    node.call(post_grant(grant_event(&keys(1), &standard_grant(), now)))
+        .await;
+    node.call(revoke_request(&keys(1), &keys(10), now + 1))
+        .await;
+    let hash = sha(b"x");
+    let request = Request::builder()
+        .method(Method::PATCH)
+        .uri("/upload")
+        .header(
+            header::AUTHORIZATION,
+            bud11(&keys(10), "upload", Some(&hash)),
+        )
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(node.call(request).await.0, StatusCode::FORBIDDEN);
 }
