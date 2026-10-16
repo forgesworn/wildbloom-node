@@ -14,9 +14,11 @@ assert.ok(['darwin', 'linux', 'win32'].includes(process.platform), 'Unsupported 
 const exe = process.platform === 'win32' ? '.exe' : '';
 const platformName = { darwin: 'macOS', linux: 'Linux', win32: 'Windows' }[process.platform];
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const appBinary = join(repo, `desktop/src-tauri/target/debug/wildbloom-desktop${exe}`);
+// A shared CARGO_TARGET_DIR holds both workspaces' outputs.
+const sharedTarget = process.env.CARGO_TARGET_DIR ? resolve(process.env.CARGO_TARGET_DIR) : null;
+const appBinary = join(sharedTarget ?? join(repo, 'desktop/src-tauri/target'), `debug/wildbloom-desktop${exe}`);
 const daemon = join(dirname(appBinary), `wildbloomd${exe}`);
-const signer = join(repo, `target/debug/examples/acceptance_signer${exe}`);
+const signer = join(sharedTarget ?? join(repo, 'target'), `debug/examples/acceptance_signer${exe}`);
 for (const file of [appBinary, daemon, signer]) assert.ok(existsSync(file), 'Build the native acceptance binaries first.');
 const root = mkdtempSync(join(tmpdir(), 'wildbloom-native-pools-'));
 // Always exercise a digit-leading ID; its app-identifier segment needs a letter prefix on D-Bus.
@@ -48,7 +50,7 @@ function passed(name) { evidence.checks.push(name); console.log(`PASS ${name}`);
 async function until(fn, label, timeout = 20000) {
   const end = Date.now() + timeout;
   while (Date.now() < end) { if (await fn()) return; await pause(100); }
-  throw new Error(`Timed out: ${label}`);
+  throw new Error(`Timed out: ${typeof label === 'function' ? label() : label}`);
 }
 async function bounded(promise, label, timeout = 15000) {
   let timer;
@@ -79,8 +81,8 @@ async function startNode(node, generation) {
     try { return (await fetch(`${node.origin}healthz`, { signal: AbortSignal.timeout(300) })).ok; } catch { return false; }
   }, 'storage node readiness');
 }
-function launchApp() {
-  const child = spawn(appBinary, [], { env: { ...process.env, WILDBLOOM_ACCEPTANCE_ID: runId }, stdio: ['pipe', 'pipe', 'pipe'] });
+function launchApp(extraEnv = {}) {
+  const child = spawn(appBinary, [], { env: { ...process.env, WILDBLOOM_ACCEPTANCE_ID: runId, ...extraEnv }, stdio: ['pipe', 'pipe', 'pipe'] });
   children.push(child);
   let serial = 0, buffer = '', webviewReady = false;
   const pending = new Map();
@@ -102,13 +104,13 @@ function launchApp() {
     for (const wait of pending.values()) { clearTimeout(wait.timer); wait.reject(new Error(`Native app exited during ${wait.op}: code=${code}, signal=${signal}`)); }
     pending.clear();
   });
-  const command = (op, script = '') => new Promise((resolve, reject) => {
+  const command = (op, script = '', window = undefined) => new Promise((resolve, reject) => {
     const id = ++serial;
     const timer = setTimeout(() => { pending.delete(id); reject(new Error(`Native driver timed out: ${op}`)); }, 15000);
     pending.set(id, { resolve, reject, timer, op });
-    child.stdin.write(`${JSON.stringify({ id, op, script })}\n`);
+    child.stdin.write(`${JSON.stringify(window ? { id, op, script, window } : { id, op, script })}\n`);
   });
-  const evaluate = (script) => command('eval', `(()=>{try{return (${script});}catch(e){return {driver_error:String(e)}}})()`);
+  const evaluate = (script, window) => command('eval', `(()=>{try{return (${script});}catch(e){return {driver_error:String(e)}}})()`, window);
   return { child, command, evaluate, ready: () => webviewReady };
 }
 // WebKitGTK and WebView2 have their own children. Count only real daemon
@@ -189,12 +191,55 @@ try {
     await until(async () => await app.evaluate('!!document.querySelector("#pool-import")') === true, 'native UI ready');
     return dirs.data_dir;
   }
+  // Wildbloom Drop with no reachable keychain (as on a Linux desktop without
+  // a Secret Service): first run must show the platform's keychain screen and
+  // Try again must answer, not hang.  The acceptance build then uses a
+  // process-local keychain, never the runner's or the developer's own.
+  {
+    app = launchApp({ WILDBLOOM_ACCEPTANCE_KEYCHAIN: 'missing' });
+    await until(app.ready, 'native page load (keychain missing)');
+    const heading = { darwin: 'Wildbloom needs your keychain', win32: 'Wildbloom needs Credential Manager', linux: 'Wildbloom needs your keyring' }[process.platform];
+    let shown = null;
+    await until(async () => { shown = await app.evaluate('document.querySelector("#view-first h2")?.textContent ?? null', 'drop'); return shown === heading; }, () => `keychain screen (showing ${JSON.stringify(shown)})`);
+    await app.evaluate('[...document.querySelectorAll("#view-first button")].find((b) => b.textContent === "Try again").click()', 'drop');
+    await until(async () => await app.evaluate('document.querySelector("#view-first [role=alert]")?.textContent === "Still can\'t reach it."', 'drop') === true, 'Try again answers');
+    const exited = once(app.child, 'exit');
+    await app.command('quit');
+    await exited;
+    passed('with no keychain, Drop first run shows the platform keychain screen and Try again answers without hanging');
+  }
   const dataDir = await boot();
   evidence.webview_user_agent = await app.evaluate('navigator.userAgent');
   await pause(500);
   assert.equal((await descendants(app.child.pid)).length, 0, 'Fresh app must not start a node/repair automatically');
   assert.equal(signatures(), 0);
   passed('native app starts without storage, signer or repair children');
+  // Wildbloom Drop: a fresh profile opens the Drop window at first run step 1,
+  // and the node window starts hidden.  No keychain entry is written.
+  let firstRunView = null;
+  await until(async () => {
+    firstRunView = await app.evaluate('({ hidden: document.querySelector("#view-first")?.hidden ?? null, heading: document.querySelector("#view-first h2")?.textContent ?? null })', 'drop');
+    return firstRunView?.hidden === false && firstRunView.heading === 'Set up Wildbloom Drop';
+  }, () => `Drop first run D1 (showing ${JSON.stringify(firstRunView)})`);
+  assert.equal((await app.command('status', '', 'drop')).visible, true, 'Drop window shown');
+  assert.equal((await app.command('status')).visible, false, 'node window starts hidden');
+  assert.equal(await app.evaluate('document.documentElement.dataset.os', 'drop'), process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'windows' : 'linux');
+  passed('fresh profile opens the Drop window at first run step 1 with platform_info from Rust; node window hidden');
+  // Each window may call only its own commands (app manifest + capabilities).
+  async function invokeOutcome(command, window) {
+    await app.evaluate(`(window.__outcome = null, window.__TAURI__.core.invoke(${JSON.stringify(command)}).then(() => { window.__outcome = 'allowed'; }, (e) => { window.__outcome = 'refused: ' + String(e?.message ?? e); }), true)`, window);
+    let outcome = null;
+    await until(async () => { outcome = await app.evaluate('window.__outcome', window); return outcome !== null; }, `${command} outcome`);
+    return outcome;
+  }
+  for (const command of ['recovery_key_for_display', 'share_start', 'save_recovery_file', 'remove']) {
+    assert.match(await invokeOutcome(command), /not allowed/i, `node window must not call ${command}`);
+  }
+  for (const command of ['node_status', 'save_settings', 'import_pool', 'open_drop_flow']) {
+    assert.match(await invokeOutcome(command, 'drop'), /not allowed/i, `Drop window must not call ${command}`);
+  }
+  assert.equal(await invokeOutcome('drop_status'), 'allowed', 'node window reads Drop status');
+  passed('per-window command permissions: the node window cannot read the recovery key or share, the Drop window cannot reach node settings or pools');
 
   const importAction = `(()=>{
     const transfer=new DataTransfer(); transfer.items.add(new File([${JSON.stringify(JSON.stringify(receipt))}], 'receipt.json', {type:'application/json'}));

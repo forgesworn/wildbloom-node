@@ -1,0 +1,43 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "drop-window",
+  "description": "The Wildbloom Drop window: events, native menus, file dialogs and the clipboard",
+  "windows": [
+    "drop"
+  ],
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-focus",
+    "core:window:allow-show",
+    "core:webview:allow-get-all-webviews",
+    "core:menu:default",
+    "dialog:allow-open",
+    "clipboard-manager:allow-write-text",
+    "clipboard-manager:allow-read-text",
+    "allow-platform-info",
+    "allow-drop-status",
+    "allow-add-paths",
+    "allow-pick-files",
+    "allow-retry",
+    "allow-copy-back",
+    "allow-save-copy",
+    "allow-remove",
+    "allow-check-online-node",
+    "allow-set-online-node",
+    "allow-approve-device",
+    "allow-renew-approval",
+    "allow-approval-status",
+    "allow-cancel-approval",
+    "allow-recovery-key-for-display",
+    "allow-save-recovery-file",
+    "allow-confirm-recovery-saved",
+    "allow-restore",
+    "allow-set-watch-folder",
+    "allow-open-watch-folder",
+    "allow-share-start",
+    "allow-share-again",
+    "allow-share-verify",
+    "allow-share-cancel",
+    "allow-stop-sharing"
+  ]
+}

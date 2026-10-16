@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-clear-pool-cleanup"
+description = "Enables the clear_pool_cleanup command without any pre-configured scope."
+commands.allow = ["clear_pool_cleanup"]
+
+[[permission]]
+identifier = "deny-clear-pool-cleanup"
+description = "Denies the clear_pool_cleanup command without any pre-configured scope."
+commands.deny = ["clear_pool_cleanup"]

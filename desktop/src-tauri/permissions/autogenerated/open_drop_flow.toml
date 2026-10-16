@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-open-drop-flow"
+description = "Enables the open_drop_flow command without any pre-configured scope."
+commands.allow = ["open_drop_flow"]
+
+[[permission]]
+identifier = "deny-open-drop-flow"
+description = "Denies the open_drop_flow command without any pre-configured scope."
+commands.deny = ["open_drop_flow"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-cancel-approval"
+description = "Enables the cancel_approval command without any pre-configured scope."
+commands.allow = ["cancel_approval"]
+
+[[permission]]
+identifier = "deny-cancel-approval"
+description = "Denies the cancel_approval command without any pre-configured scope."
+commands.deny = ["cancel_approval"]

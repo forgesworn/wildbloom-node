@@ -10,6 +10,7 @@ repository.workspace = true
 
 [dependencies]
 wildbloom-checkout = { path = "../wildbloom-checkout" }
+wildbloom-envelope = { path = "../envelope" }
 tower-http = { version = "0.7.1", features = ["cors"] }
 wildbloom-private-state = { path = "../private-state" }
 axum.workspace = true

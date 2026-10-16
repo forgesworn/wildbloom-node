@@ -13,6 +13,20 @@
     },
     "windows": [
       {
+        "label": "drop",
+        "title": "Wildbloom Drop",
+        "url": "drop.html",
+        "width": 400,
+        "height": 600,
+        "minWidth": 340,
+        "minHeight": 420,
+        "resizable": true,
+        "fullscreen": false,
+        "visible": true,
+        "center": true,
+        "dragDropEnabled": true
+      },
+      {
         "label": "main",
         "title": "Wildbloom Node",
         "width": 820,
@@ -21,7 +35,8 @@
         "minHeight": 600,
         "resizable": true,
         "fullscreen": false,
-        "center": true
+        "center": true,
+        "visible": false
       }
     ]
   },
@@ -48,7 +63,8 @@
     "resources": {
       "tor-runtime/": "tor-runtime/",
       "../../LICENSE": "LICENSE",
-      "../../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md"
+      "../../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
+      "THIRD_PARTY_RUST_NOTICES.md": "THIRD_PARTY_RUST_NOTICES.md"
     },
     "icon": [
       "icons/32x32.png",
@@ -60,7 +76,8 @@
     "targets": "all",
     "createUpdaterArtifacts": false,
     "macOS": {
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "infoPlist": "Info.plist"
     }
   }
 }

@@ -82,7 +82,7 @@ fn twice(byte: u8) -> u8 {
 impl Fixture {
     async fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
-        let mut payload = b"FSWNENC2".to_vec();
+        let mut payload = wildbloom_envelope::MAGIC.to_vec();
         payload.extend((0..1001).map(|i| (i % 251) as u8));
         let size = payload.len().div_ceil(2);
         let a = payload[..size].to_vec();

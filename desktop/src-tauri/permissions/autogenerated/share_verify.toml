@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-share-verify"
+description = "Enables the share_verify command without any pre-configured scope."
+commands.allow = ["share_verify"]
+
+[[permission]]
+identifier = "deny-share-verify"
+description = "Denies the share_verify command without any pre-configured scope."
+commands.deny = ["share_verify"]

@@ -1,0 +1,4 @@
+/* Test only: wide sans metrics (Verdana on macOS and Windows, DejaVu Sans on
+   Linux) so the Drop UI tests check layout against the widest common system
+   fonts, not just the one on the test machine. */
+html, html * { font-family: Verdana, "DejaVu Sans", "Bitstream Vera Sans", sans-serif !important; }

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-copy-back"
+description = "Enables the copy_back command without any pre-configured scope."
+commands.allow = ["copy_back"]
+
+[[permission]]
+identifier = "deny-copy-back"
+description = "Denies the copy_back command without any pre-configured scope."
+commands.deny = ["copy_back"]

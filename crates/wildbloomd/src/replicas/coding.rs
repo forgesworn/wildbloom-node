@@ -176,7 +176,7 @@ pub(super) async fn regenerate(
     }
     if remaining != 0
         || hex::encode(payload.finalize()) != manifest.payload.sha256
-        || header != b"FSWNENC2"
+        || header != wildbloom_envelope::MAGIC
     {
         return Err(Error::Configuration(
             "reconstructed ciphertext does not match signed encrypted payload",
@@ -191,7 +191,7 @@ mod tests {
     #[tokio::test]
     async fn disk_reconstruction_crosses_stripes_and_rejects_bad_signed_hashes() {
         let root = tempfile::tempdir().unwrap();
-        let mut payload = b"FSWNENC2".to_vec();
+        let mut payload = wildbloom_envelope::MAGIC.to_vec();
         payload.extend((0..393_217).map(|i| (i % 251) as u8));
         let size = payload.len().div_ceil(3);
         let inputs: Vec<_> = (0..3)

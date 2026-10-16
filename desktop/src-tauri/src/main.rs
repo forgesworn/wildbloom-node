@@ -1,5 +1,6 @@
 #[cfg(feature = "native-acceptance")]
 mod acceptance;
+mod drop;
 mod pool_cleanup;
 mod pools;
 
@@ -13,9 +14,9 @@ use std::{
     time::Duration,
 };
 use tauri::{
-    AppHandle, Manager, State, WindowEvent,
-    menu::{Menu, MenuItem},
-    tray::TrayIconBuilder,
+    AppHandle, Emitter, Manager, State, WindowEvent,
+    menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt as _};
 use tauri_plugin_shell::{
@@ -474,6 +475,22 @@ async fn start_node_sidecar(
         arguments.push("--allow-pubkey".into());
         arguments.push(pubkey.into());
     }
+    // Wildbloom Drop's device key and recovery identity write to the local
+    // node through one constant friend grant in every mode (see
+    // `local_node_trust_args`), never as owners.
+    if let Some(engine) = app
+        .try_state::<drop::commands::DropSlot>()
+        .and_then(|s| s.0.get().cloned())
+    {
+        let keys = engine.local_trusted_keys();
+        for argument in drop::engine::local_node_trust_args(
+            &keys,
+            settings.allowed_pubkey.as_deref(),
+            quota_bytes,
+        ) {
+            arguments.push(argument.into());
+        }
+    }
     for grant in &settings.friend_grants {
         arguments.push("--friend-grant".into());
         arguments.push(grant.into());
@@ -512,6 +529,7 @@ async fn start_node_sidecar(
     );
 
     let node_manager = manager.clone();
+    let node_app = app.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(event) = events.recv().await {
             match event {
@@ -534,6 +552,9 @@ async fn start_node_sidecar(
                             Some(public_url.clone()),
                             Some(node_port),
                         );
+                        if let Some(engine) = drop_engine(&node_app) {
+                            engine.local_node_ready();
+                        }
                     }
                 }
                 CommandEvent::Error(error) => set_error(
@@ -856,32 +877,424 @@ fn free_port() -> Result<u16, String> {
         .map_err(|error| error.to_string())
 }
 
+const DROP_WINDOW: &str = "drop";
+
+fn show_window(app: &AppHandle, label: &str) {
+    if let Some(window) = app.get_webview_window(label) {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+fn toggle_drop_window(app: &AppHandle) {
+    let Some(window) = app.get_webview_window(DROP_WINDOW) else {
+        return;
+    };
+    if window.is_visible().unwrap_or(false) && window.is_focused().unwrap_or(false) {
+        let _ = window.hide();
+        return;
+    }
+    if !drop_window_placed(app) {
+        use tauri_plugin_positioner::{Position, WindowExt as _};
+        let position = if cfg!(target_os = "macos") {
+            Position::TrayCenter
+        } else {
+            Position::TrayBottomCenter
+        };
+        let _ = window.as_ref().window().move_window(position);
+        remember_drop_window(app);
+    }
+    show_window(app, DROP_WINDOW);
+}
+
+/// The Drop window remembers its size and position (section 5.1).
+#[derive(Serialize, Deserialize)]
+struct WindowGeometry {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
+fn geometry_path(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join("drop-window.json"))
+}
+
+fn drop_window_placed(app: &AppHandle) -> bool {
+    geometry_path(app).is_some_and(|path| path.is_file())
+}
+
+fn remember_drop_window(app: &AppHandle) {
+    let (Some(window), Some(path)) = (app.get_webview_window(DROP_WINDOW), geometry_path(app))
+    else {
+        return;
+    };
+    let (Ok(position), Ok(size)) = (window.outer_position(), window.inner_size()) else {
+        return;
+    };
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let geometry = WindowGeometry {
+        x: position.x,
+        y: position.y,
+        width: (f64::from(size.width) / scale).round() as u32,
+        height: (f64::from(size.height) / scale).round() as u32,
+    };
+    if let (Some(parent), Ok(bytes)) = (path.parent(), serde_json::to_vec(&geometry)) {
+        let _ = create_private_dir(parent);
+        let _ = fs::write(&path, bytes);
+    }
+}
+
+fn restore_drop_window(app: &AppHandle) {
+    let (Some(window), Some(path)) = (app.get_webview_window(DROP_WINDOW), geometry_path(app))
+    else {
+        return;
+    };
+    let Some(geometry) = fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<WindowGeometry>(&bytes).ok())
+    else {
+        return;
+    };
+    let _ = window.set_size(tauri::LogicalSize::new(
+        geometry.width.max(340),
+        geometry.height.max(420),
+    ));
+    let _ = window.set_position(tauri::PhysicalPosition::new(geometry.x, geometry.y));
+}
+
+/// The Drop window's canvas colour for the system theme (section 10), so
+/// the window never flashes the wrong theme before the page paints.
+fn paint_drop_background(window: &tauri::WebviewWindow, theme: tauri::Theme) {
+    let color = match theme {
+        tauri::Theme::Dark => tauri::window::Color(0x09, 0x0d, 0x0a, 0xff),
+        _ => tauri::window::Color(0xf4, 0xf3, 0xeb, 0xff),
+    };
+    let _ = window.set_background_color(Some(color));
+}
+
+fn title_case(mac: &'static str, other: &'static str) -> &'static str {
+    if cfg!(target_os = "macos") {
+        mac
+    } else {
+        other
+    }
+}
+
+/// Tray or menu bar menu (section 9.1) with left-click per section 7.2.
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
-    let show = MenuItem::with_id(app, "show", "Show Wildbloom Node", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
-    let mut tray = TrayIconBuilder::new()
+    let status = MenuItem::with_id(app, "status", "Wildbloom Node", false, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", "Open Wildbloom Drop", true, None::<&str>)?;
+    let add = MenuItem::with_id(
+        app,
+        "add",
+        title_case("Add Files…", "Add files…"),
+        true,
+        None::<&str>,
+    )?;
+    let folder = MenuItem::with_id(
+        app,
+        "folder",
+        title_case("Open Wildbloom Folder", "Open Wildbloom folder"),
+        false,
+        None::<&str>,
+    )?;
+    let settings = MenuItem::with_id(
+        app,
+        "settings",
+        title_case("Node Settings…", "Node settings…"),
+        true,
+        None::<&str>,
+    )?;
+    let updates = MenuItem::with_id(
+        app,
+        "updates",
+        title_case("Check for Updates…", "Check for updates…"),
+        true,
+        None::<&str>,
+    )?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Wildbloom Node", true, None::<&str>)?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &status,
+            &PredefinedMenuItem::separator(app)?,
+            &open,
+            &add,
+            &folder,
+            &PredefinedMenuItem::separator(app)?,
+            &settings,
+            &updates,
+            &PredefinedMenuItem::separator(app)?,
+            &quit,
+        ],
+    )?;
+    // AppIndicator on Linux sends no click events, so the menu opens on any click.
+    let left_click_menu = cfg!(target_os = "linux");
+    let mut tray = TrayIconBuilder::with_id("main")
         .tooltip("Wildbloom Node")
         .menu(&menu)
-        .show_menu_on_left_click(true)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+        .show_menu_on_left_click(left_click_menu)
+        .on_menu_event(|app, event| handle_menu(app, event.id.as_ref()))
+        .on_tray_icon_event(|tray, event| {
+            tauri_plugin_positioner::on_tray_event(tray.app_handle(), &event);
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                toggle_drop_window(tray.app_handle());
             }
-            "quit" => app.exit(0),
-            _ => {}
         });
     if let Some(icon) = app.default_window_icon() {
         tray = tray.icon(icon.clone());
     }
-    tray.build(app)?;
+    let tray = tray.build(app)?;
+    app.manage(drop::commands::TrayItems {
+        status,
+        folder,
+        tray,
+    });
     Ok(())
 }
 
+/// The macOS menu bar: App (with Settings…), File, Edit, View and Window.
+fn build_app_menu(app: &tauri::App) -> tauri::Result<()> {
+    if !cfg!(target_os = "macos") {
+        return Ok(());
+    }
+    let handle = app.handle();
+    let app_menu = Submenu::with_items(
+        handle,
+        "Wildbloom Node",
+        true,
+        &[
+            &PredefinedMenuItem::about(handle, None, None)?,
+            &PredefinedMenuItem::separator(handle)?,
+            &MenuItem::with_id(handle, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?,
+            &PredefinedMenuItem::separator(handle)?,
+            &PredefinedMenuItem::services(handle, None)?,
+            &PredefinedMenuItem::separator(handle)?,
+            &PredefinedMenuItem::hide(handle, None)?,
+            &PredefinedMenuItem::hide_others(handle, None)?,
+            &PredefinedMenuItem::show_all(handle, None)?,
+            &PredefinedMenuItem::separator(handle)?,
+            &MenuItem::with_id(
+                handle,
+                "quit",
+                "Quit Wildbloom Node",
+                true,
+                Some("CmdOrCtrl+Q"),
+            )?,
+        ],
+    )?;
+    let file = Submenu::with_items(
+        handle,
+        "File",
+        true,
+        &[
+            &MenuItem::with_id(handle, "add", "Add Files…", true, Some("CmdOrCtrl+O"))?,
+            &MenuItem::with_id(
+                handle,
+                "folder",
+                "Open Wildbloom Folder",
+                true,
+                Some("Shift+CmdOrCtrl+O"),
+            )?,
+            &PredefinedMenuItem::separator(handle)?,
+            &PredefinedMenuItem::close_window(handle, Some("Close Window"))?,
+        ],
+    )?;
+    let edit = Submenu::with_items(
+        handle,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(handle, None)?,
+            &PredefinedMenuItem::redo(handle, None)?,
+            &PredefinedMenuItem::separator(handle)?,
+            &PredefinedMenuItem::cut(handle, None)?,
+            &PredefinedMenuItem::copy(handle, None)?,
+            &PredefinedMenuItem::paste(handle, None)?,
+            &PredefinedMenuItem::select_all(handle, None)?,
+        ],
+    )?;
+    let view = Submenu::with_items(
+        handle,
+        "View",
+        true,
+        &[&PredefinedMenuItem::fullscreen(handle, None)?],
+    )?;
+    let window = Submenu::with_items(
+        handle,
+        "Window",
+        true,
+        &[
+            &PredefinedMenuItem::minimize(handle, None)?,
+            &PredefinedMenuItem::maximize(handle, None)?,
+        ],
+    )?;
+    let menu = Menu::with_items(handle, &[&app_menu, &file, &edit, &view, &window])?;
+    app.set_menu(menu)?;
+    app.on_menu_event(|app, event| handle_menu(app, event.id.as_ref()));
+    Ok(())
+}
+
+fn handle_menu(app: &AppHandle, id: &str) {
+    match id {
+        "open" => show_window(app, DROP_WINDOW),
+        "add" => {
+            // The page's own Add files… path reports refusals and duplicates.
+            show_window(app, DROP_WINDOW);
+            if let Some(window) = app.get_webview_window(DROP_WINDOW) {
+                let _ = window.eval("document.getElementById('add-files')?.click()");
+            }
+        }
+        "folder" => {
+            if let Some(engine) = drop_engine(app) {
+                let _ = engine.open_watch_folder();
+            }
+        }
+        "settings" => show_window(app, "main"),
+        "updates" => {
+            show_window(app, "main");
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.eval("document.getElementById('check-update')?.click()");
+            }
+        }
+        "quit" => confirm_quit(app),
+        _ => {}
+    }
+}
+
+fn drop_engine(app: &AppHandle) -> Option<Arc<drop::engine::Engine>> {
+    app.try_state::<drop::commands::DropSlot>()
+        .and_then(|slot| slot.0.get().cloned())
+}
+
+/// Quit, asking first while files are copying or a share is open (9.1).
+fn confirm_quit(app: &AppHandle) {
+    use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons};
+    let Some(engine) = drop_engine(app) else {
+        app.exit(0);
+        return;
+    };
+    let copying = engine
+        .rows()
+        .iter()
+        .filter(|row| matches!(row.state, "encrypting" | "copying" | "restoring"))
+        .count();
+    let (title, body) = if engine.share_open() {
+        (
+            "Quit and cancel sharing?".to_owned(),
+            "The link you're sending will stop working.",
+        )
+    } else if copying > 0 {
+        (
+            if copying == 1 {
+                "Quit while a file is copying?".to_owned()
+            } else {
+                format!("Quit while {copying} files are copying?")
+            },
+            "They'll finish copying next time Wildbloom Node starts.",
+        )
+    } else {
+        app.exit(0);
+        return;
+    };
+    let handle = app.clone();
+    app.dialog()
+        .message(body)
+        .title(title)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Quit".into(),
+            "Cancel".into(),
+        ))
+        .show(move |quit| {
+            if quit {
+                handle.exit(0);
+            }
+        });
+}
+
+fn drop_config(app: &AppHandle) -> Result<drop::engine::EngineConfig, String> {
+    let base = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
+    let home = app.path().home_dir().map_err(|e| e.to_string())?;
+    let watch_dir = home.join("Wildbloom");
+    let watch_display = if cfg!(windows) {
+        watch_dir.display().to_string()
+    } else {
+        "~/Wildbloom".into()
+    };
+    // Debug builds may point Drop at loopback test services; release builds
+    // always use the published recipient page and the online node's relay.
+    let debug_override = |name: &str| {
+        if cfg!(debug_assertions) {
+            std::env::var(name).ok().filter(|v| !v.is_empty())
+        } else {
+            None
+        }
+    };
+    Ok(drop::engine::EngineConfig {
+        data_dir: base.join("drop"),
+        temp_dir: base.join("drop-temp"),
+        watch_dir,
+        watch_display,
+        get_base: debug_override("WILDBLOOM_DROP_GET_BASE")
+            .unwrap_or_else(|| "https://wildbloom.forgesworn.dev/get/".into()),
+        relay_base: debug_override("WILDBLOOM_DROP_RELAY"),
+        allow_loopback_http: debug_override("WILDBLOOM_DROP_LOOPBACK").is_some(),
+        signer_timeout: Duration::from_secs(120),
+        computer_name: drop::commands::computer_name(),
+        watch_interval: Duration::from_secs(1),
+    })
+}
+
+fn start_drop(app: &tauri::App, manager: Arc<NodeManager>) {
+    let handle = app.handle().clone();
+    let config = match drop_config(&handle) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("Wildbloom Drop could not start: {error}");
+            return;
+        }
+    };
+    let service = app.config().identifier.clone();
+    let factory: drop::engine::StoreFactory = Box::new(move || {
+        drop::keychain::OsKeychain::with_service(&service)
+            .map(|store| Arc::new(store) as Arc<dyn drop::keychain::SecretStore>)
+    });
+    // The debug-only acceptance driver never touches the runner's or the
+    // developer's real keychain; release builds cannot compile this in.
+    #[cfg(feature = "native-acceptance")]
+    let factory = acceptance::keychain_factory().unwrap_or(factory);
+    let host = Arc::new(drop::commands::TauriHost {
+        app: handle.clone(),
+        manager,
+    });
+    let tauri::async_runtime::RuntimeHandle::Tokio(runtime) = tauri::async_runtime::handle();
+    match drop::engine::Engine::new(config, host, factory, runtime) {
+        Ok(engine) => {
+            let _ = app
+                .state::<drop::commands::DropSlot>()
+                .0
+                .set(engine.clone());
+            engine.start();
+            engine.emit_status();
+        }
+        Err(error) => eprintln!("Wildbloom Drop could not start: {error}"),
+    }
+}
+
 fn main() {
+    // The updater and reqwest compile both ring and aws-lc-rs; pick one for
+    // every TLS client in the process (the NIP-46 relay connections included).
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let context = tauri::generate_context!();
     #[cfg(feature = "native-acceptance")]
     let context = acceptance::isolate(context);
@@ -891,19 +1304,14 @@ fn main() {
     let managed = manager.clone();
     let builder = tauri::Builder::default();
     #[cfg(feature = "native-acceptance")]
-    let builder = builder.on_page_load(|_, payload| {
-        if payload.event() == tauri::webview::PageLoadEvent::Finished {
+    let builder = builder.on_page_load(|webview, payload| {
+        if webview.label() == "main" && payload.event() == tauri::webview::PageLoadEvent::Finished {
             acceptance::ready();
         }
     });
     let app = builder
         .plugin(tauri_plugin_single_instance::init(
-            |app, _arguments, _cwd| {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
-            },
+            |app, _arguments, _cwd| show_window(app, DROP_WINDOW),
         ))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -911,8 +1319,13 @@ fn main() {
             MacosLauncher::LaunchAgent,
             None,
         ))
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_positioner::init())
         .manage(managed)
         .manage(pool_manager)
+        .manage(drop::commands::DropSlot::default())
+        .manage(drop::commands::NativeDrops::default())
         .invoke_handler(tauri::generate_handler![
             node_status,
             save_settings,
@@ -926,21 +1339,101 @@ fn main() {
             pools::remove_pool,
             pools::review_pool_cleanup,
             pools::clear_pool_cleanup,
-            pools::open_pool_client
+            pools::open_pool_client,
+            drop::commands::platform_info,
+            drop::commands::drop_status,
+            drop::commands::add_paths,
+            drop::commands::pick_files,
+            drop::commands::retry,
+            drop::commands::copy_back,
+            drop::commands::save_copy,
+            drop::commands::remove,
+            drop::commands::check_online_node,
+            drop::commands::set_online_node,
+            drop::commands::approve_device,
+            drop::commands::renew_approval,
+            drop::commands::approval_status,
+            drop::commands::cancel_approval,
+            drop::commands::recovery_key_for_display,
+            drop::commands::save_recovery_file,
+            drop::commands::confirm_recovery_saved,
+            drop::commands::restore,
+            drop::commands::set_watch_folder,
+            drop::commands::open_watch_folder,
+            drop::commands::share_start,
+            drop::commands::share_again,
+            drop::commands::share_verify,
+            drop::commands::share_cancel,
+            drop::commands::stop_sharing,
+            drop::commands::open_drop_flow
         ])
-        .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
+        .on_window_event(|window, event| match event {
+            WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
+                let app = window.app_handle().clone();
+                if window.label() == DROP_WINDOW {
+                    remember_drop_window(&app);
+                    if keeps_running_notice_due(&app) {
+                        // GNOME without AppIndicator has no tray to come back
+                        // from: say so once, in the window, before hiding it.
+                        let _ = app.emit_to(
+                            DROP_WINDOW,
+                            "drop://notice",
+                            drop::types::Notice { kind: "keeps_running" },
+                        );
+                        let window = window.clone();
+                        tauri::async_runtime::spawn(async move {
+                            tokio::time::sleep(Duration::from_millis(2500)).await;
+                            let _ = window.hide();
+                        });
+                        return;
+                    }
+                }
                 let _ = window.hide();
             }
+            WindowEvent::DragDrop(tauri::DragDropEvent::Enter { paths, .. })
+                if window.label() == DROP_WINDOW =>
+            {
+                let app = window.app_handle();
+                if let Some(engine) = drop_engine(app) {
+                    let info = drop::commands::drag_info(paths, engine.drop_max_bytes());
+                    let _ = app.emit_to(DROP_WINDOW, "drop://drag-info", info);
+                }
+            }
+            WindowEvent::ThemeChanged(theme) if window.label() == DROP_WINDOW => {
+                if let Some(webview) = window.app_handle().get_webview_window(DROP_WINDOW) {
+                    paint_drop_background(&webview, *theme);
+                }
+            }
+            WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. })
+                if window.label() == DROP_WINDOW =>
+            {
+                // Only paths the OS handed over here may be added by the page.
+                window
+                    .app_handle()
+                    .state::<drop::commands::NativeDrops>()
+                    .record(paths);
+            }
+            WindowEvent::Focused(false) if window.label() == DROP_WINDOW => {
+                remember_drop_window(window.app_handle());
+            }
+            _ => {}
         })
         .setup(|app| {
             build_tray(app)?;
+            build_app_menu(app)?;
+            restore_drop_window(app.handle());
+            if let Some(window) = app.get_webview_window(DROP_WINDOW) {
+                let theme = window.theme().unwrap_or(tauri::Theme::Light);
+                paint_drop_background(&window, theme);
+            }
             #[cfg(feature = "native-acceptance")]
             acceptance::start(app.handle().clone());
             tauri::async_runtime::spawn(pools::load(app.handle().clone(), app.state::<Arc<pools::PoolManager>>().inner().clone()));
             let handle = app.handle().clone();
             let manager = app.state::<Arc<NodeManager>>().inner().clone();
+            // Drop first, so the local node starts trusting its keys.
+            start_drop(app, manager.clone());
             match settings_path(&handle) {
                 Ok(path) if path.is_file() => {
                     tauri::async_runtime::spawn(async move {
@@ -965,15 +1458,56 @@ fn main() {
         })
         .build(context)
         .expect("failed to build Wildbloom Node");
-    app.run(move |_app, event| {
-        if matches!(
-            event,
-            tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
-        ) {
+    app.run(move |app, event| match event {
+        tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. } => {
             tauri::async_runtime::block_on(pools_for_exit.stop()).ok();
             stop_children(&manager);
         }
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen { .. } => show_window(app, DROP_WINDOW),
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Opened { urls } => {
+            // Files dropped on the Dock icon (CFBundleDocumentTypes public.item).
+            let paths: Vec<PathBuf> = urls
+                .into_iter()
+                .filter_map(|url| url.to_file_path().ok())
+                .collect();
+            if let Some(engine) = drop_engine(app) {
+                show_window(app, DROP_WINDOW);
+                tauri::async_runtime::spawn(async move {
+                    let _ = engine.add_paths(paths, None).await;
+                });
+            }
+        }
+        _ => {
+            let _ = app;
+        }
     });
+}
+
+/// Linux GNOME (where a tray needs an extension) gets the "keeps running"
+/// notice once.
+fn keeps_running_notice_due(app: &AppHandle) -> bool {
+    if !cfg!(target_os = "linux") {
+        return false;
+    }
+    let gnome = std::env::var("XDG_CURRENT_DESKTOP")
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .contains("gnome");
+    let Some(marker) = app
+        .path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join("drop-keeps-running-shown"))
+    else {
+        return false;
+    };
+    if !gnome || marker.exists() {
+        return false;
+    }
+    let _ = fs::write(marker, b"");
+    true
 }
 
 #[cfg(test)]
