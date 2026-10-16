@@ -1,0 +1,85 @@
+<!doctype html>
+<!-- Test-only. Installs the Tauri stub from the ?state= query, then replaces this
+     document with ../ui/drop.html (CSP meta removed so <base> can point at ../ui/).
+     Lives outside ui/ so it is never bundled. Used with web-shots.mjs. -->
+<html lang="en-GB">
+  <head><meta charset="UTF-8" /><title>Wildbloom Drop harness</title></head>
+  <body>
+    <script src="drop-stub.js"></script>
+    <script>
+      (async () => {
+        const params = new URLSearchParams(location.search);
+        const name = params.get('state') || 'list';
+        const stub = window.__stub;
+        const now = Math.floor(Date.now() / 1000);
+        const words = ['orbit', 'lemon', 'candle', 'frost'];
+        const link = 'https://wildbloom.example/get#v1.a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2';
+        const shares = {
+          s1: { state: 'too_big' },
+          s2: { state: 'preparing', progress: 45 },
+          s3: { state: 'ready', link, words, expiresAt: now + 581 },
+          s4: { state: 'opened', link, words, expiresAt: now + 540 },
+          s5: { state: 'check', link, words, checkWords: ['apple', 'river', 'stone'], expiresAt: now + 500 },
+          s6: { state: 'sending' },
+          s7: { state: 'sent', deleteAt: now + 86400 },
+          s8: { state: 'expired' },
+          s9: { state: 'wrong_words', triesLeft: 0 },
+          s9b: { state: 'wrong_words', link, words, triesLeft: 2, expiresAt: now + 400 },
+          s10: { state: 'mismatch' },
+          s11: { state: 'relay_unreachable' },
+          s12: { state: 'node_unreachable' },
+          s13: { state: 'left' },
+        };
+        const waitFor = async (test) => { for (let i = 0; i < 200; i++) { const v = test(); if (v) return v; await new Promise((r) => setTimeout(r, 25)); } return null; };
+        const shareKey = name.startsWith('share-') ? name.slice(6) : null;
+        if (shareKey) {
+          const target = stub.files.find((f) => f.id === 'f1');
+          if (shareKey === 's1') target.bytes = 900000000;
+          stub.handlers.share_start = async () => shares[shareKey];
+        }
+        if (name === 'first-run-2-waiting') stub.approval = { state: 'waiting' };
+
+        const source = await (await fetch('../ui/drop.html')).text();
+        const patched = source.replace(/<meta\s+http-equiv="Content-Security-Policy"[^>]*>/, '').replace('<head>', '<head><base href="../ui/">');
+        document.open();
+        document.write(patched);
+        document.close();
+
+        await waitFor(() => document.getElementById('files') && window.WildbloomShare);
+        if (name.startsWith('drag-')) {
+          await waitFor(() => document.querySelector('li.row') || document.querySelector('#zone.empty'));
+          stub.emit('tauri://drag-enter', { paths: ['/a/one.pdf'], position: { x: 10, y: 10 } });
+          const info = { 'drag-hover': { files: 2, folders: 0, tooBig: 0 }, 'drag-folder': { files: 0, folders: 1, tooBig: 0 }, 'drag-big': { files: 1, folders: 0, tooBig: 1 } }[name];
+          stub.emit('drop://drag-info', info || { files: 1, folders: 0, tooBig: 0 });
+        } else if (shareKey) {
+          const button = await waitFor(() => document.querySelector('li.row[data-id="f1"] [data-ctl="share"]'));
+          button.click();
+        } else if (name === 'first-run-restore') {
+          const button = await waitFor(() => [...document.querySelectorAll('button')].find((b) => b.textContent.startsWith('Restore from')));
+          button.click();
+        } else if (name === 'first-run-1-error') {
+          const input = await waitFor(() => document.querySelector('#view-first input'));
+          input.value = 'https://silent.example';
+          input.form.requestSubmit();
+        } else if (name === 'first-run-2-error') {
+          const input = await waitFor(() => document.querySelector('#view-first input'));
+          input.value = 'not a link';
+          input.form.requestSubmit();
+        } else if (name === 'first-run-3-used') {
+          const copy = await waitFor(() => [...document.querySelectorAll('#view-first button')].find((b) => b.textContent === 'Copy'));
+          copy.click();
+        } else if (name === 'confirm-remove' || name === 'confirm-stop') {
+          const id = name === 'confirm-stop' ? 'f12' : 'f1';
+          const more = await waitFor(() => document.querySelector(`li.row[data-id="${id}"] [data-ctl="more"]`));
+          more.click();
+          const menu = await waitFor(() => stub.lastMenu);
+          menu.items.find((item) => item.text.startsWith(name === 'confirm-stop' ? 'Stop' : 'Remove')).action();
+        } else if (name === 'notice-folder') {
+          await waitFor(() => document.querySelector('li.row'));
+          stub.emit('tauri://drag-drop', { paths: ['/folder/Pictures'] });
+        }
+        document.documentElement.dataset.harness = 'ready';
+      })();
+    </script>
+  </body>
+</html>

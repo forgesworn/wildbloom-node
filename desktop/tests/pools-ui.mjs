@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { chromium } from 'playwright-core';
 import AxeBuilder from '@axe-core/playwright';
 const server=createServer(async(req,res)=> {
-  const name = new Map([['/','index.html'],['/app.js','app.js'],['/pools.js','pools.js'],['/style.css','style.css']]).get(req.url);
+  const name = new Map([['/','index.html'],['/app.js','app.js'],['/pools.js','pools.js'],['/style.css','style.css'],['/drop.js','drop.js'],['/drop.css','drop.css']]).get(req.url);
   if (!name) { res.writeHead(404).end(); return; }
   res.setHeader('Content-Type',name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html');
   res.end(await readFile(new URL(`../ui/${name}`,import.meta.url)));
@@ -23,6 +23,7 @@ try {
     window.__TAURI__={core:{invoke:async(command,args)=> {
       window.calls.push({command,args});
       if(command==='node_status')return {phase:'setup',phaseLabel:'Setup required',detail:'Choose transport.',settings:{friendGrants:[],quotaGib:10,transport:'tor',directPort:3742}};
+      if(command==='drop_status')return {online:{configured:false},approval:{state:'none'},watchFolder:{enabled:false,path:'~/Wildbloom'},recovery:{confirmed:true}};
       if(command==='pool_status')return {pools:imported?[structuredClone(window.poolFixture)]:[],error:null};
       if(command==='import_pool') { if(args.owner!=='b'.repeat(64))throw 'Wrong owner'; imported=true; return window.poolFixture.inspection; }
       if(command==='start_pool') { window.poolFixture.phase=args.settings.checkOnly?'checking':'repairing'; return; }
@@ -36,7 +37,7 @@ try {
   });
   await page.goto(`http://127.0.0.1:${server.address().port}/`);
   await page.waitForFunction(()=>window.calls.some(c=>c.command==='pool_status'));
-  assert.deepEqual(await page.evaluate(()=>[...new Set(window.calls.map(c=>c.command))].sort()),['node_status','pool_status']);
+  assert.deepEqual(await page.evaluate(()=>[...new Set(window.calls.map(c=>c.command))].sort()),['drop_status','node_status','pool_status']);
   await page.locator('#pool-receipt').setInputFiles({name:'receipt.json',mimeType:'application/json',buffer:Buffer.from('{}')});
   await page.locator('#pool-owner').fill('b'.repeat(64));
   await page.locator('#pool-import').click();
