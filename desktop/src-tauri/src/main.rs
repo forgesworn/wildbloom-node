@@ -1,5 +1,6 @@
 #[cfg(feature = "native-acceptance")]
 mod acceptance;
+mod drop;
 mod pool_cleanup;
 mod pools;
 
