@@ -575,7 +575,8 @@ fn metadata_length_is_bounded() {
 fn a_startup_sweep_removes_stale_temp_files_only() {
     let work = tempfile::tempdir().unwrap();
     let dir = work.path().join("private");
-    assert_eq!(sweep_stale_temp_files(&dir).unwrap(), 0, "missing dir");
+    let lock = TempDirLock::acquire(&dir).unwrap();
+    assert_eq!(sweep_stale_temp_files(&lock).unwrap().removed, 0);
 
     // A temp file the crate made and a hard kill left behind.
     let key = counting(3);
@@ -585,7 +586,7 @@ fn a_startup_sweep_removes_stale_temp_files_only() {
         encrypt_file_to_private_temp(&key, &source, "s", "", Limits::BROWSER, &dir, &mut go())
             .unwrap();
     let (_, stale) = envelope.keep().unwrap();
-    // Persisted output and unrelated files survive.
+    // Persisted output, the lock file and unrelated files survive.
     let kept = dir.join("persisted.wbenc");
     std::fs::write(&kept, b"kept").unwrap();
     std::fs::write(dir.join(".wildbloom-notes.txt"), b"kept").unwrap();
@@ -593,24 +594,65 @@ fn a_startup_sweep_removes_stale_temp_files_only() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&kept, dir.join(".wildbloom-link.part")).unwrap();
 
-    assert_eq!(sweep_stale_temp_files(&dir).unwrap(), 1);
+    let report = sweep_stale_temp_files(&lock).unwrap();
+    assert_eq!((report.removed, report.failed.len()), (1, 0));
     assert!(!stale.exists());
     assert!(kept.exists());
+    assert!(dir.join(crate::temp::TEMP_LOCK_FILE).exists());
     assert!(dir.join(".wildbloom-notes.txt").exists());
     assert!(dir.join(".wildbloom-dir.part").is_dir());
     #[cfg(unix)]
     assert!(std::fs::symlink_metadata(dir.join(".wildbloom-link.part")).is_ok());
-    assert_eq!(sweep_stale_temp_files(&dir).unwrap(), 0);
+    assert_eq!(sweep_stale_temp_files(&lock).unwrap().removed, 0);
+}
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(matches!(
-            sweep_stale_temp_files(&dir),
-            Err(Error::PrivateState(_))
-        ));
-    }
+#[test]
+fn a_second_holder_cannot_take_the_temp_dir() {
+    let work = tempfile::tempdir().unwrap();
+    let dir = work.path().join("private");
+    let lock = TempDirLock::acquire(&dir).unwrap();
+    assert!(matches!(
+        TempDirLock::acquire(&dir),
+        Err(Error::TempDirInUse)
+    ));
+    let path = dir.clone();
+    let other = std::thread::spawn(move || TempDirLock::acquire(&path).map(|_| ()))
+        .join()
+        .unwrap();
+    assert!(matches!(other, Err(Error::TempDirInUse)));
+    drop(lock);
+    assert!(TempDirLock::acquire(&dir).is_ok());
+}
+
+#[cfg(unix)]
+#[test]
+fn the_sweep_reports_failures_and_carries_on() {
+    use std::os::unix::fs::PermissionsExt;
+    let work = tempfile::tempdir().unwrap();
+    let dir = work.path().join("private");
+    let lock = TempDirLock::acquire(&dir).unwrap();
+    std::fs::write(dir.join(".wildbloom-a.part"), b"a").unwrap();
+    std::fs::write(dir.join(".wildbloom-b.part"), b"b").unwrap();
+    // A read-only directory makes every removal fail; the sweep still visits both.
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let report = sweep_stale_temp_files(&lock).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(report.removed, 0);
+    assert_eq!(report.failed.len(), 2, "{report:?}");
+    assert!(
+        report
+            .failed
+            .iter()
+            .all(|(_, kind)| *kind == std::io::ErrorKind::PermissionDenied)
+    );
+    assert_eq!(sweep_stale_temp_files(&lock).unwrap().removed, 2);
+
+    // A directory that gained broad access is refused outright.
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(matches!(
+        sweep_stale_temp_files(&lock),
+        Err(Error::PrivateState(_))
+    ));
 }
 
 #[test]

@@ -3028,6 +3028,7 @@ dependencies = [
  "aes",
  "aes-gcm",
  "base64 0.22.1",
+ "fs2",
  "getrandom 0.3.4",
  "ghash",
  "hex",

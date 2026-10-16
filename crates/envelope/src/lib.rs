@@ -32,13 +32,15 @@
 //! Decryption never returns plaintext before every record has authenticated and
 //! every semantic check has passed: the file helper deletes its private temp
 //! file on any error or panic, and the byte helper returns nothing.  A hard kill
-//! skips that cleanup, so callers run [`sweep_stale_temp_files`] on the temp
-//! directory at start-up.  That directory must not be in a synced or backed-up
-//! folder.
+//! skips that cleanup, so callers take a [`TempDirLock`] on the temp directory
+//! at start-up, hold it for the life of the process, and run
+//! [`sweep_stale_temp_files`] with it.  That directory must be local, private
+//! app data: not a synced or backed-up folder, and not a network file system.
 
 mod key;
 mod name;
 mod stream;
+mod temp;
 #[cfg(test)]
 mod tests;
 
@@ -46,8 +48,9 @@ pub use key::{InputKey, KeyError, WBK1_PREFIX, derive_envelope_key};
 pub use name::{normalise_media_type, sanitise_name};
 pub use stream::{
     Progress, Sealed, decrypt_file_to_private_temp, encrypt, encrypt_file_to_private_temp,
-    envelope_bytes, open_bytes, seal_bytes, sweep_stale_temp_files,
+    envelope_bytes, open_bytes, seal_bytes,
 };
+pub use temp::{SweepReport, TempDirLock, sweep_stale_temp_files};
 
 use serde::{Deserialize, Serialize};
 
@@ -138,6 +141,8 @@ pub enum Error {
     Random,
     #[error("the operation was cancelled")]
     Cancelled,
+    #[error("another process holds this temp directory")]
+    TempDirInUse,
     #[error("the source changed size while it was being encrypted")]
     SourceChanged,
     #[error("the source is larger than this envelope limit allows")]

@@ -7,11 +7,17 @@ use wildbloom_envelope::{InputKey, Limits, Metadata, Progress, Sealed};
 
 pub use wildbloom_envelope::Error as EnvelopeError;
 
+pub use wildbloom_envelope::{SweepReport, TempDirLock};
+
 /// Removes `.wildbloom-*.part` files a killed process left in the Drop temp
-/// directory.  Call once at start-up, before any Drop operation.  The temp
-/// directory must be private app data, never a synced or backed-up folder.
-pub fn sweep_stale_temp_files(temp_dir: &Path) -> Result<usize, EnvelopeError> {
-    wildbloom_envelope::sweep_stale_temp_files(temp_dir)
+/// directory.  The app takes the [`TempDirLock`] at start-up and holds it until
+/// exit, so a second instance cannot take it and sweep away this one's
+/// in-progress files; call this once, straight after taking the lock and before
+/// any Drop operation.  The temp directory must be local, private app data: not
+/// a synced or backed-up folder, and not a network file system, where the
+/// lock may not hold.  Files that cannot be removed are listed in the report.
+pub fn sweep_stale_temp_files(lock: &TempDirLock) -> Result<SweepReport, EnvelopeError> {
+    wildbloom_envelope::sweep_stale_temp_files(lock)
 }
 
 /// Why a new drop could not be encrypted.
@@ -178,9 +184,15 @@ mod tests {
     }
 
     #[test]
-    fn the_startup_sweep_is_exposed() {
+    fn the_startup_sweep_needs_the_instance_lock() {
         let work = tempfile::tempdir().unwrap();
         let temp = work.path().join("private");
-        assert_eq!(sweep_stale_temp_files(&temp).unwrap(), 0);
+        let lock = TempDirLock::acquire(&temp).unwrap();
+        assert!(matches!(
+            TempDirLock::acquire(&temp),
+            Err(EnvelopeError::TempDirInUse)
+        ));
+        let report = sweep_stale_temp_files(&lock).unwrap();
+        assert_eq!((report.removed, report.failed.len()), (0, 0));
     }
 }

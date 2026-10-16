@@ -7,8 +7,9 @@
 //! - [`envelope`]: streaming FSWNENC2 to private temp files, via the shared
 //!   `wildbloom-envelope` crate.  `encrypt_new_file` mints a fresh per-file key
 //!   and refuses empty files; `drop_limits` and `SHARE_LIMITS` carry the Q13
-//!   size caps.  Call `sweep_stale_temp_files` on the temp directory at start-up,
-//!   before any Drop operation.
+//!   size caps.  At start-up take `TempDirLock` on the temp directory, hold it
+//!   until exit, and call `sweep_stale_temp_files` with it before any Drop
+//!   operation.
 //! - [`keychain`]: the OS keychain behind the `SecretStore` trait.  `DropKeychain`
 //!   holds the device secret, the recovery secret and per-file keys.  A missing
 //!   Linux Secret Service is the typed `KeychainError::SecretServiceMissing`,
