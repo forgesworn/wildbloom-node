@@ -526,6 +526,7 @@ async fn start_node_sidecar(
     );
 
     let node_manager = manager.clone();
+    let node_app = app.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(event) = events.recv().await {
             match event {
@@ -548,6 +549,9 @@ async fn start_node_sidecar(
                             Some(public_url.clone()),
                             Some(node_port),
                         );
+                        if let Some(engine) = drop_engine(&node_app) {
+                            engine.local_node_ready();
+                        }
                     }
                 }
                 CommandEvent::Error(error) => set_error(

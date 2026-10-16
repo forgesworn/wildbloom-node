@@ -188,6 +188,8 @@ pub(crate) mod kv {
     pub const KEY_LIST_ONLINE_SHA: &str = "key_list_online_sha256";
     pub const WATCH_ENABLED: &str = "watch_enabled";
     pub const LAST_CHECK: &str = "last_copy_check";
+    /// A sealed key list has not reached every node it should be on.
+    pub const KEY_LIST_PENDING: &str = "key_list_pending";
 }
 
 impl Engine {
@@ -253,6 +255,9 @@ impl Engine {
                     // The original was not fully encrypted; its id is never
                     // reused, so the row shows that it must be added again.
                     let _ = self.index.set_local(&file.id, local::UNREADABLE);
+                } else if file.local == local::RESTORING {
+                    // A copy back that was cut off: offer Copy back again.
+                    let _ = self.index.set_local(&file.id, local::MISSING);
                 } else if file.online == online::COPYING {
                     let _ = self.index.set_online(&file.id, online::QUEUED);
                 }
@@ -349,6 +354,14 @@ impl Engine {
             return None;
         }
         node.endpoint
+    }
+
+    /// The local node is listening: run pending uploads and the key list now.
+    pub fn local_node_ready(&self) {
+        self.wake.notify_one();
+        if self.index.get_bool(kv::KEY_LIST_PENDING).unwrap_or(false) {
+            self.keysync_wake.notify_one();
+        }
     }
 
     pub(crate) fn approval_active(&self) -> bool {

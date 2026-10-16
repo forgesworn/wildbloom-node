@@ -112,12 +112,13 @@ impl Engine {
         let task_verify = verify.clone();
         let task_slot = slot.clone();
         let task = self.rt.spawn(async move {
+            // Every path ends in a state the sheet can show; nothing that
+            // fails part-way leaves it waiting.
             let state = engine
                 .run_share(&task_id, again, task_verify, task_slot.clone())
-                .await;
-            if let Some(state) = state {
-                engine.emit_share_if_current(&task_id, generation, state);
-            }
+                .await
+                .unwrap_or_else(|| ShareState::new(&task_id, "relay_unreachable"));
+            engine.emit_share_if_current(&task_id, generation, state);
             engine.delete_relay_session(&task_slot).await;
         });
         self.shares.lock().map_err(|_| internal("lock"))?.insert(
@@ -408,9 +409,11 @@ impl Engine {
         slot: RelaySlot,
     ) -> Option<ShareState> {
         let ended = |reason: Ended| Some(ShareState::new(id, reason.state()));
-        let node = self.writable_online()?;
-        let identity = self.identity().ok()?;
-        let file = self.index.file(id).ok().flatten()?;
+        let (Some(node), Ok(identity), Ok(Some(file))) =
+            (self.writable_online(), self.identity(), self.index.file(id))
+        else {
+            return ended(Ended::Node);
+        };
         let previous = self.index.share(id).ok().flatten();
 
         // 1. The shared copy.

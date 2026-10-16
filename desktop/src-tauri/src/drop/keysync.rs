@@ -97,6 +97,9 @@ impl Engine {
         if list.seq() < last_seen {
             // Without the nodes' copies the next seal could be older than one
             // already published; wait until the online node can be read.
+            self.index
+                .set_bool(kv::KEY_LIST_PENDING, true)
+                .or_internal()?;
             return Ok(());
         }
         let sealed = list.seal(&recovery).map_err(|e| internal(e.to_string()))?;
@@ -136,6 +139,14 @@ impl Engine {
             .is_ok();
             stored.push(("online", kv::KEY_LIST_ONLINE_SHA, ok));
         }
+        // Retried on the next mirror pass, when a node comes back or the
+        // local node finishes starting.
+        let complete = self.local_endpoint().is_some()
+            && stored.iter().all(|(_, _, ok)| *ok)
+            && stored.len() == 1 + usize::from(online.is_some());
+        self.index
+            .set_bool(kv::KEY_LIST_PENDING, !complete)
+            .or_internal()?;
         for (node, key, ok) in stored {
             if !ok {
                 continue;

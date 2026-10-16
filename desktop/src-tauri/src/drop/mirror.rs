@@ -102,6 +102,9 @@ impl Engine {
             }
         };
         if recovered {
+            if self.index.get_bool(kv::KEY_LIST_PENDING).unwrap_or(false) {
+                self.keysync_wake.notify_one();
+            }
             // "then on network change": a node that comes back is retried now.
             if let Ok(files) = self.index.files() {
                 for file in files {
@@ -152,6 +155,17 @@ impl Engine {
         }
         self.run_pending_deletes().await;
         self.sweep_shares().await;
+        let reachable = self
+            .online_rt
+            .lock()
+            .map(|rt| rt.reachable)
+            .unwrap_or(false);
+        if self.index.get_bool(kv::KEY_LIST_PENDING).unwrap_or(false)
+            && self.local_endpoint().is_some()
+            && (reachable || self.online_endpoint().is_none())
+        {
+            self.keysync_wake.notify_one();
+        }
         let last = self
             .index
             .get_u64(kv::LAST_CHECK)
