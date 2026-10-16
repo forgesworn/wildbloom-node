@@ -148,7 +148,9 @@ applies to each key separately, so one grant can hold at most twice `bytes`.
 A recovery identity named by several active grants takes the largest of their
 ceilings.  BUD-12 listing and deletion stay self-only.  A delegated write body
 must keep arriving (at most 60 seconds between chunks) and finish within two
-hours.  Once a grant has ended, every request from its keys other than `GET`,
+hours, or within `Content-Length / 16 KiB` seconds when that is longer.  A
+delete by an active key of a blob whose claim was moved to the owner and not
+yet handed back succeeds as if the key still held it.  Once a grant has ended, every request from its keys other than `GET`,
 `OPTIONS` and non-preflight `HEAD` is refused with `403`.  What happens when the
 grant ends (expiry, revocation or its owner leaving the owner set) is set out
 in [STORAGE-POLICY.md](STORAGE-POLICY.md#owner-delegated-claims).
@@ -168,7 +170,8 @@ and the operator token as `Authorization: Bearer`.  The token comes from
 `--pairing-operator-token-file` (an absolute, mode `0600` file; recommended)
 or the `WILDBLOOM_PAIRING_OPERATOR_TOKEN` environment variable, never a
 command-line argument.  The variable is removed from the environment of the
-Tor and signer child processes.  The token and must be Foregather's canonical 32-byte unpadded base64url form.
+Tor and signer child processes.  The token must be Foregather's canonical
+32-byte unpadded base64url form.
 It is never logged or returned.  The relay URL must be HTTPS, or plain HTTP to
 loopback.  Redirects and ambient proxies are disabled.
 

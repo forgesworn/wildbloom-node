@@ -59,9 +59,14 @@
   HTTP, and never logs or returns it.  A granted device can obtain at most 30
   one-use live creation grants in any rolling hour; each grant is usable for
   five minutes and allocates sessions of at most ten minutes.
-- Delegated write bodies must keep arriving and finish within two hours, and a
-  sweep waits only briefly for one ended key's in-flight writes, so a slow
-  upload cannot hold up revocation or other keys.
+- Revocation is committed and enforced by the gate at once; it waits for no
+  upload.  Delegated write bodies must keep arriving and finish within a
+  bounded time, and a sweep waits only briefly for one ended key's in-flight
+  writes before retrying it later.  Pushing a changed delegated set into the
+  core (a new grant's reply, and a key's final removal after its claims move)
+  waits for every in-flight core write to finish, so a slow owner, guest or
+  delegated upload can delay those steps.  The gate keeps refusing an ended
+  key meanwhile.
 - Owner and friend reservations may evict only best-effort guest blobs.  Guest
   requests cannot consume the protected reserve or evict a stronger claim.
 - Friend-only and guest-only responses are opaque attachments with `nosniff`.

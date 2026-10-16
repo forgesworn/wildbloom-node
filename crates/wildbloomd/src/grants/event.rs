@@ -83,14 +83,24 @@ pub fn decode_header(header: &str) -> Option<Vec<u8>> {
     (bytes.len() <= MAX_EVENT_BYTES).then_some(bytes)
 }
 
-/// The verified signer of a BUD-11 `Authorization` header, or `None` when it
-/// cannot be decoded or its signature fails.  Callers only use this to decide
-/// whether to refuse early; the core still performs full verification.
-pub fn signer_of_header(header: &str) -> Option<String> {
+/// The verified signer of a BUD-11 `Authorization` header and the hashes its
+/// `x` tags name, or `None` when it cannot be decoded or its signature fails.
+/// Callers only use this to decide whether to refuse early or what to record;
+/// the core still performs full verification.
+pub fn signed_header(header: &str) -> Option<(String, Vec<String>)> {
     let bytes = decode_header(header)?;
     let event: Event = serde_json::from_slice(&bytes).ok()?;
     event.verify().ok()?;
-    Some(event.pubkey.to_hex())
+    let hashes = event
+        .tags
+        .iter()
+        .filter_map(|tag| match tag.as_slice() {
+            [name, value] if name == "x" && is_canonical_key(value) => Some(value.clone()),
+            _ => None,
+        })
+        .take(32)
+        .collect();
+    Some((event.pubkey.to_hex(), hashes))
 }
 
 pub fn verify(

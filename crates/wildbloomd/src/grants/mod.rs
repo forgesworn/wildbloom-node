@@ -14,8 +14,10 @@
 //!   in-flight writes, moves its friend claims to owner-tier claims for the
 //!   issuing owner, records each move, and only then removes the key from the
 //!   core's trusted set.  Refusal is then core-enforced too.
-//! * While a key is active again under the same owner, each sweep hands its
-//!   recorded moves back beside the owner's claim.
+//! * While a key is active again under the same owner, sweeps hand its
+//!   recorded moves back and drop the owner claim a move created, unless the
+//!   owner held the blob before the move or wrote it since (the gate records
+//!   owner uploads and mirrors before they reach the core).
 //! * At start-up, claims of delegated keys that an older binary demoted to
 //!   guest are re-adopted.
 use crate::grants::event::{Action, Authorised, EventError, GrantTerms};
@@ -35,11 +37,14 @@ use serde::Serialize;
 use std::{
     collections::{BTreeSet, HashMap},
     path::Path,
-    sync::{Arc, Mutex, OnceLock, RwLock},
+    sync::{
+        Arc, Mutex, OnceLock, RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{sync::Notify, task::spawn_blocking, time::Instant};
-use wildbloom_core::{AppState, FriendGrant};
+use wildbloom_core::{AppState, FriendGrant, auth::AuthPolicy};
 
 mod claims;
 mod db;
@@ -55,7 +60,13 @@ const SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 /// Longest a sweep waits for one pass's ended keys to finish in-flight writes;
 /// a key still busy is retried on the next pass.
 const IN_FLIGHT_WAIT: Duration = Duration::from_secs(5);
-/// A delegated write body must keep arriving and must finish in bounded time.
+/// How long an owner's own write of a blob is remembered, so a move recorded
+/// around the same time never treats the owner's claim as the move's.
+pub const OWNER_WRITE_WINDOW: u64 = 60 * 60;
+/// Slowest sustained delegated upload rate the total body deadline allows.
+pub const WRITE_MIN_RATE: u64 = 16 * 1024;
+/// A delegated write body must keep arriving and must finish in bounded time:
+/// two hours, or longer for a large body at `WRITE_MIN_RATE`.
 pub const WRITE_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 pub const WRITE_TOTAL_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 
@@ -139,9 +150,18 @@ struct Inner {
     in_flight_changed: Notify,
     /// Wakes maintenance after a grant or revocation is committed.
     wake: Notify,
-    /// Serialises grant, revoke and sweep state changes (never held while
-    /// verifying signatures or streaming a body).
+    /// Serialises grant, revoke and sweep state changes.  Never held while
+    /// verifying signatures, streaming a body or waiting for the core.
     updates: tokio::sync::Mutex<()>,
+    /// Serialises core policy pushes, each built from the latest snapshot.
+    policy_push: tokio::sync::Mutex<()>,
+    /// Active keys whose moved claims should be offered back on the next
+    /// sweep: set on a grant, a ceiling change or a delete that frees space.
+    restore_due: Mutex<BTreeSet<String>>,
+    in_flight_wait_ms: AtomicU64,
+    /// Same BUD-11 checks as the core, used only to verify a delegated
+    /// delete the gate completes itself.
+    delete_auth: AuthPolicy,
     app: OnceLock<AppState>,
 }
 
@@ -265,16 +285,21 @@ impl Grants {
         create_private_file(&path)?;
         let connection = Connection::open(&path)?;
         connection.busy_timeout(Duration::from_secs(5))?;
-        let version = db::initialise(&connection)?;
-        if version != 1 {
+        let (version, discarded) = db::initialise(&connection)?;
+        if version != db::SCHEMA_VERSION {
             return Err(GrantsError::Schema(version));
+        }
+        if discarded {
+            tracing::warn!(
+                "discarded move records from a preview grant database; the owner keeps those claims"
+            );
         }
         let grants = Self {
             inner: Arc::new(Inner {
                 db: Mutex::new(connection),
                 owners: config.owners.into_iter().collect(),
                 reserved: config.reserved_keys.into_iter().collect(),
-                server_names: config.server_names,
+                server_names: config.server_names.clone(),
                 origin: config.origin,
                 cli_friend_grants: config.cli_friend_grants,
                 clock,
@@ -283,6 +308,12 @@ impl Grants {
                 in_flight_changed: Notify::new(),
                 wake: Notify::new(),
                 updates: tokio::sync::Mutex::new(()),
+                policy_push: tokio::sync::Mutex::new(()),
+                restore_due: Mutex::new(BTreeSet::new()),
+                in_flight_wait_ms: AtomicU64::new(
+                    u64::try_from(IN_FLIGHT_WAIT.as_millis()).unwrap_or(u64::MAX),
+                ),
+                delete_auth: AuthPolicy::new(config.server_names.clone()).with_public_writes(true),
                 app: OnceLock::new(),
             }),
         };
@@ -344,31 +375,42 @@ impl Grants {
 
     /// Re-adopt demoted delegated claims, then run one sweep.
     pub async fn startup(&self) -> Result<(), String> {
-        let _update = self.inner.updates.lock().await;
-        let Some(app) = self.inner.app.get() else {
-            return Ok(());
-        };
-        let snapshot = self.snapshot();
-        for (key, member) in &snapshot.members {
-            let store = app.store().clone();
-            let (key, member) = (key.clone(), member.clone());
-            let result =
-                spawn_blocking(move || claims::adopt(&store, &key, &member, &core_grant_id(&key)))
-                    .await
-                    .unwrap_or_else(|_| Err("claim adoption task failed".to_owned()));
-            match result {
-                Ok((0, 0)) => {}
-                Ok((adopted, refused)) => tracing::warn!(
-                    adopted,
-                    refused,
-                    "re-adopted delegated claims that an earlier binary had demoted"
-                ),
-                Err(error) => {
-                    tracing::warn!(reason = %error, "could not re-adopt delegated claims")
+        let pending = {
+            let _update = self.inner.updates.lock().await;
+            let Some(app) = self.inner.app.get() else {
+                return Ok(());
+            };
+            let snapshot = self.snapshot();
+            for (key, member) in &snapshot.members {
+                self.restore_due(key);
+                let store = app.store().clone();
+                let (key, member) = (key.clone(), member.clone());
+                let result = spawn_blocking(move || {
+                    claims::adopt(&store, &key, &member, &core_grant_id(&key))
+                })
+                .await
+                .unwrap_or_else(|_| Err("claim adoption task failed".to_owned()));
+                match result {
+                    Ok((0, 0)) => {}
+                    Ok((adopted, refused)) => tracing::warn!(
+                        adopted,
+                        refused,
+                        "re-adopted delegated claims that an earlier binary had demoted"
+                    ),
+                    Err(error) => {
+                        tracing::warn!(reason = %error, "could not re-adopt delegated claims")
+                    }
                 }
             }
+            self.sweep_locked().await?
+        };
+        self.finish_sweep(pending).await
+    }
+
+    fn restore_due(&self, key: &str) {
+        if let Ok(mut due) = self.inner.restore_due.lock() {
+            due.insert(key.to_owned());
         }
-        self.sweep_locked().await
     }
 
     pub fn spawn_maintenance(&self) -> tokio::task::JoinHandle<()> {
@@ -384,7 +426,7 @@ impl Grants {
                 if let Err(error) = grants.sweep_ended().await {
                     tracing::warn!(reason = %error, "device grant sweep will retry");
                 }
-                grants.prune_used_events();
+                grants.prune();
             }
         })
     }
@@ -440,11 +482,25 @@ impl Grants {
         db::consume_event(&db, event_id, expires_at).map_err(|_| ApiError::unavailable())
     }
 
-    fn prune_used_events(&self) {
+    fn prune(&self) {
         let now = self.now();
         if let Ok(db) = self.inner.db.lock() {
-            let _ = db::prune_used_events(&db, now);
+            let _ = db::prune(&db, now, OWNER_WRITE_WINDOW);
         }
+    }
+
+    /// Record an owner's own write of these hashes before it reaches the
+    /// core, so no move hand-back ever drops that owner claim.
+    fn mark_owner_writes(&self, owner: &str, hashes: &[String]) -> Result<(), ApiError> {
+        if hashes.is_empty() {
+            return Ok(());
+        }
+        let now = self.now();
+        let db = self.inner.db.lock().map_err(|_| ApiError::unavailable())?;
+        for hash in hashes {
+            db::mark_owner_write(&db, owner, hash, now).map_err(|_| ApiError::unavailable())?;
+        }
+        Ok(())
     }
 
     /// Count a delegated write as in flight if its key is active.  The count
@@ -469,6 +525,10 @@ impl Grants {
             .unwrap_or(usize::MAX)
     }
 
+    fn in_flight_wait(&self) -> Duration {
+        Duration::from_millis(self.inner.in_flight_wait_ms.load(Ordering::Relaxed))
+    }
+
     async fn wait_idle(&self, key: &str, deadline: Instant) -> bool {
         loop {
             let notified = self.inner.in_flight_changed.notified();
@@ -490,7 +550,7 @@ impl Grants {
         let Action::Grant(terms) = authorised.action.clone() else {
             return Err(ApiError::bad_request("expected a grant event"));
         };
-        let _update = self.inner.updates.lock().await;
+        let update = self.inner.updates.lock().await;
         let now = self.now();
         let snapshot = self.snapshot();
         self.check_grant_conflicts(&snapshot, &authorised, &terms)?;
@@ -528,16 +588,33 @@ impl Grants {
                 return Err(ApiError::conflict("device grant event was already used"));
             }
             db::write_grant(&tx, &row).map_err(|_| ApiError::unavailable())?;
-            db::write_member(&tx, &terms.device, &authorised.owner, terms.byte_limit)
-                .map_err(|_| ApiError::unavailable())?;
-            db::write_member(&tx, &terms.recovery, &authorised.owner, recovery_limit)
-                .map_err(|_| ApiError::unavailable())?;
+            for (key, byte_limit) in [
+                (&terms.device, terms.byte_limit),
+                (&terms.recovery, recovery_limit),
+            ] {
+                let member = Member {
+                    issuer: authorised.owner.clone(),
+                    byte_limit,
+                    since: now,
+                };
+                db::write_member(&tx, key, &member).map_err(|_| ApiError::unavailable())?;
+            }
             tx.commit().map_err(|_| ApiError::unavailable())?;
         }
         self.reload().map_err(|_| ApiError::unavailable())?;
+        self.restore_due(&terms.device);
+        self.restore_due(&terms.recovery);
+        // The core push waits for in-flight core writes to drain, so it runs
+        // outside the state lock: revocations and sweeps are not held up.
+        drop(update);
         if let Err(error) = self.push_core_policy().await {
             tracing::error!(reason = %error, "core refused the device grant policy; reverting");
-            self.revert(&terms.device, previous, previous_members)?;
+            let _update = self.inner.updates.lock().await;
+            // Revert only if nothing newer replaced this grant meanwhile.
+            if self.snapshot().grants.get(&terms.device) == Some(&row) {
+                self.revert(&terms.device, previous, previous_members)?;
+            }
+            drop(_update);
             let _ = self.push_core_policy().await;
             return Err(ApiError::unavailable());
         }
@@ -621,7 +698,7 @@ impl Grants {
             .map_err(|_| ApiError::unavailable())?;
             for (key, member) in members {
                 match member {
-                    Some(member) => db::write_member(&tx, &key, &member.issuer, member.byte_limit),
+                    Some(member) => db::write_member(&tx, &key, &member),
                     None => db::delete_member(&tx, &key),
                 }
                 .map_err(|_| ApiError::unavailable())?;
@@ -722,30 +799,63 @@ impl Grants {
         let Some(app) = self.inner.app.get() else {
             return Ok(());
         };
+        // Each push reads the snapshot once it holds this lock, so the last
+        // push always carries every change committed before it began.
+        let _push = self.inner.policy_push.lock().await;
         app.set_friend_grants(self.core_friend_grants()).await
     }
 
     /// One maintenance pass: hand back moved claims to active keys, keep
     /// recovery ceilings current, and move ended keys' claims to their owner.
     pub async fn sweep_ended(&self) -> Result<(), String> {
-        let _update = self.inner.updates.lock().await;
-        self.sweep_locked().await
+        let pending = {
+            let _update = self.inner.updates.lock().await;
+            self.sweep_locked().await?
+        };
+        self.finish_sweep(pending).await
     }
 
-    async fn sweep_locked(&self) -> Result<(), String> {
-        let Some(app) = self.inner.app.get() else {
+    /// Push the reduced set to the core outside the state lock.  On failure,
+    /// keys that left the set are put back (unless re-granted meanwhile) so
+    /// the next pass retries; their moves are recorded and idempotent.
+    async fn finish_sweep(&self, removed: Option<Vec<(String, Member)>>) -> Result<(), String> {
+        let Some(removed) = removed else {
             return Ok(());
+        };
+        let Err(error) = self.push_core_policy().await else {
+            return Ok(());
+        };
+        let _update = self.inner.updates.lock().await;
+        let current = self.snapshot();
+        if let Ok(db) = self.inner.db.lock() {
+            for (key, member) in &removed {
+                if !current.members.contains_key(key) {
+                    let _ = db::write_member(&db, key, member);
+                }
+            }
+        }
+        let _ = self.reload();
+        Err(format!("core refused the reduced delegated set: {error}"))
+    }
+
+    /// The state-changing part of a sweep.  Returns the keys removed from
+    /// the trusted set when the core policy must be pushed.
+    async fn sweep_locked(&self) -> Result<Option<Vec<(String, Member)>>, String> {
+        let Some(app) = self.inner.app.get() else {
+            return Ok(None);
         };
         let now = self.now();
         let snapshot = self.snapshot();
 
-        // Retry restores every pass: this also covers a crash after a grant
-        // was committed and claims over a ceiling that has since grown.
-        let moved_keys = {
-            let db = self.inner.db.lock().map_err(db_error)?;
-            db::moved_keys(&db).map_err(db_error)?
-        };
-        for key in moved_keys {
+        // Offer moved claims back only to keys with a reason to retry: a new
+        // grant, a ceiling change or a delete that freed space.
+        let due = self
+            .inner
+            .restore_due
+            .lock()
+            .map(|mut due| std::mem::take(&mut *due))
+            .unwrap_or_default();
+        for key in due {
             let Some(member) = snapshot.members.get(&key).cloned() else {
                 continue;
             };
@@ -754,13 +864,14 @@ impl Grants {
             }
             let grants = self.clone();
             let store = app.store().clone();
+            let restoring = key.clone();
             let result = spawn_blocking(move || {
                 claims::restore(
                     &store,
                     &grants.inner.db,
-                    &key,
+                    &restoring,
                     &member,
-                    &core_grant_id(&key),
+                    &core_grant_id(&restoring),
                 )
             })
             .await
@@ -770,7 +881,10 @@ impl Grants {
                     tracing::info!(restored, "handed moved claims back to a delegated key");
                 }
                 Ok(_) => {}
-                Err(error) => tracing::warn!(reason = %error, "could not hand moved claims back"),
+                Err(error) => {
+                    self.restore_due(&key);
+                    tracing::warn!(reason = %error, "could not hand moved claims back");
+                }
             }
         }
 
@@ -779,7 +893,13 @@ impl Grants {
             if let Some(limit) = snapshot.active_limit(key, &self.inner.owners, now)
                 && limit != member.byte_limit
             {
-                adjusted.push((key.clone(), member.issuer.clone(), limit));
+                adjusted.push((
+                    key.clone(),
+                    Member {
+                        byte_limit: limit,
+                        ..member.clone()
+                    },
+                ));
             }
         }
         let ended = snapshot
@@ -788,7 +908,7 @@ impl Grants {
             .filter(|(key, _)| !snapshot.key_active(key, &self.inner.owners, now))
             .map(|(key, member)| (key.clone(), member.clone()))
             .collect::<Vec<_>>();
-        let deadline = Instant::now() + IN_FLIGHT_WAIT;
+        let deadline = Instant::now() + self.in_flight_wait();
         let mut transferred = Vec::new();
         for (key, member) in ended {
             if !self.wait_idle(&key, deadline).await {
@@ -800,13 +920,15 @@ impl Grants {
             let grants = self.clone();
             let store = app.store().clone();
             let moving = key.clone();
+            let issuer = member.issuer.clone();
             let result = spawn_blocking(move || {
                 claims::transfer(
                     &store,
                     &grants.inner.db,
                     &moving,
-                    &member.issuer,
+                    &issuer,
                     &core_grant_id(&moving),
+                    now,
                 )
             })
             .await
@@ -817,7 +939,7 @@ impl Grants {
                         claims = count,
                         "moved an ended delegated key's claims to its owner"
                     );
-                    transferred.push(key);
+                    transferred.push((key, member));
                 }
                 Err(error) => {
                     tracing::warn!(reason = %error, "could not move delegated claims to the owner yet");
@@ -825,35 +947,103 @@ impl Grants {
             }
         }
         if transferred.is_empty() && adjusted.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
         {
             let mut db = self.inner.db.lock().map_err(db_error)?;
             let tx = db.transaction().map_err(db_error)?;
-            for key in &transferred {
+            for (key, _) in &transferred {
                 db::delete_member(&tx, key).map_err(db_error)?;
             }
-            for (key, issuer, limit) in &adjusted {
-                db::write_member(&tx, key, issuer, *limit).map_err(db_error)?;
+            for (key, member) in &adjusted {
+                db::write_member(&tx, key, member).map_err(db_error)?;
             }
             tx.commit().map_err(db_error)?;
         }
-        self.reload().map_err(db_error)?;
-        if let Err(error) = self.push_core_policy().await {
-            // Put the members back so the next pass retries; moves already
-            // made are recorded and idempotent.
-            if let Ok(db) = self.inner.db.lock() {
-                for key in &transferred {
-                    if let Some(member) = snapshot.members.get(key) {
-                        let _ = db::write_member(&db, key, &member.issuer, member.byte_limit);
-                    }
-                }
-            }
-            let _ = self.reload();
-            return Err(format!("core refused the reduced delegated set: {error}"));
+        for (key, _) in &adjusted {
+            self.restore_due(key);
         }
-        Ok(())
+        self.reload().map_err(db_error)?;
+        Ok(Some(transferred))
     }
+
+    /// An active delegated key deletes a blob whose claim was moved to its
+    /// owner and not yet handed back.  Drop the owner claim the move created
+    /// and answer for the core when the key holds no claim of its own.
+    async fn release_delete(
+        &self,
+        key: &str,
+        path: &str,
+        authorization: Option<&str>,
+    ) -> Option<Response> {
+        let hash = blob_hash(path)?.to_owned();
+        let owner = self.snapshot().members.get(key)?.issuer.clone();
+        let verified = self
+            .inner
+            .delete_auth
+            .verify_delete(authorization, &hash, system_now())
+            .ok()?;
+        if verified.owner_pubkey != key {
+            return None;
+        }
+        let app = self.inner.app.get()?;
+        let store = app.store().clone();
+        let grants = self.clone();
+        let key = key.to_owned();
+        let released = hash.clone();
+        let result = spawn_blocking(move || -> Result<Option<bool>, String> {
+            let hash = released;
+            if claims::release(&store, &grants.inner.db, &key, &owner, &hash)?.is_none() {
+                return Ok(None);
+            }
+            grants.restore_due(&key);
+            if claims::holds_claim(&store, &key, &hash)? {
+                return Ok(None);
+            }
+            let gone = store.get(&hash).map_err(|e| e.to_string())?.is_none();
+            Ok(Some(gone))
+        })
+        .await
+        .unwrap_or_else(|_| Err("delete release task failed".to_owned()));
+        match result {
+            Ok(None) => None,
+            Ok(Some(blob_deleted)) => {
+                let mut response = Json(serde_json::json!({
+                    "sha256": hash,
+                    "blobDeleted": blob_deleted,
+                }))
+                .into_response();
+                no_store(&mut response);
+                Some(response)
+            }
+            Err(error) => {
+                tracing::warn!(reason = %error, "could not release a moved claim");
+                Some(ApiError::unavailable().into_response())
+            }
+        }
+    }
+}
+
+fn system_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
+}
+
+/// The SHA-256 named by a `/<sha256>[.<ext>]` path, as the core parses it.
+fn blob_hash(path: &str) -> Option<&str> {
+    let segment = path.strip_prefix('/')?;
+    let (hash, suffix) = if segment.len() == 64 {
+        (segment, None)
+    } else {
+        let (hash, suffix) = segment.split_once('.')?;
+        (hash, Some(suffix))
+    };
+    if suffix.is_some_and(str::is_empty) || !event::is_canonical_key(hash) {
+        return None;
+    }
+    Some(hash)
 }
 
 pub fn core_grant_id(key: &str) -> String {
@@ -991,9 +1181,15 @@ fn is_read(method: &Method, path: &str) -> bool {
     }
 }
 
+/// Total time allowed for a delegated body of `length` bytes.
+fn write_deadline(length: Option<u64>) -> Duration {
+    let scaled = Duration::from_secs(length.unwrap_or(0) / WRITE_MIN_RATE);
+    WRITE_TOTAL_TIMEOUT.max(scaled)
+}
+
 /// Bound a delegated write body: it must keep arriving and finish in time.
-fn bounded_body(body: Body) -> Body {
-    let deadline = Instant::now() + WRITE_TOTAL_TIMEOUT;
+fn bounded_body(body: Body, length: Option<u64>) -> Body {
+    let deadline = Instant::now() + write_deadline(length);
     let stream =
         futures_util::stream::unfold(Some(body.into_data_stream()), move |state| async move {
             let mut stream = state?;
@@ -1018,30 +1214,72 @@ fn bounded_body(body: Body) -> Body {
     Body::from_stream(stream)
 }
 
-/// Layer for the core Blossom router.  A delegated key whose grant has ended
-/// can only read; an active one's writes are counted in flight and bounded.
+/// Layer for the core Blossom router.
+///
+/// * An owner's own upload or mirror is recorded before it reaches the core,
+///   so a move hand-back never drops an owner-initiated claim.
+/// * A delegated key whose grant has ended can only read.
+/// * An active delegated key's writes are counted in flight and bounded, and
+///   its deletes also release owner claims a move created.
 pub async fn gate(State(grants): State<Grants>, request: Request, next: Next) -> Response {
     if is_read(request.method(), request.uri().path()) {
         return next.run(request).await;
     }
-    let Some(signer) = request
+    let Some((signer, hashes)) = request
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
-        .and_then(event::signer_of_header)
+        .and_then(event::signed_header)
     else {
         // Undecodable or unsigned: the core applies the same checks and refuses.
         return next.run(request).await;
     };
+    if grants.inner.owners.contains(&signer) {
+        let path = request.uri().path();
+        if request.method() == Method::PUT && (path == "/upload" || path == "/mirror") {
+            // The event's `x` tags cover every hash the core could claim.
+            if let Err(error) = grants.mark_owner_writes(&signer, &hashes) {
+                return error.into_response();
+            }
+        }
+        return next.run(request).await;
+    }
     if !grants.snapshot().knows(&signer) {
         return next.run(request).await;
     }
     let Some(_flight) = grants.begin_write(&signer) else {
         return ApiError::forbidden("the delegated storage grant has ended").into_response();
     };
+    let is_delete = request.method() == Method::DELETE;
+    let path = request.uri().path().to_owned();
+    let authorization = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    if is_delete
+        && let Some(response) = grants
+            .release_delete(&signer, &path, authorization.as_deref())
+            .await
+    {
+        grants.inner.wake.notify_one();
+        return response;
+    }
+    let length = request
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
     let (parts, body) = request.into_parts();
-    next.run(Request::from_parts(parts, bounded_body(body)))
-        .await
+    let response = next
+        .run(Request::from_parts(parts, bounded_body(body, length)))
+        .await;
+    if is_delete && response.status().is_success() {
+        // Freed space may let pending hand-backs fit.
+        grants.restore_due(&signer);
+        grants.inner.wake.notify_one();
+    }
+    response
 }
 
 /// Stops background maintenance when dropped.
@@ -1066,6 +1304,17 @@ impl std::fmt::Debug for Grants {
 
 #[cfg(test)]
 impl Grants {
+    pub(crate) fn in_flight_count(&self, key: &str) -> usize {
+        self.in_flight(key)
+    }
+
+    pub(crate) fn set_in_flight_wait(&self, wait: Duration) {
+        self.inner.in_flight_wait_ms.store(
+            u64::try_from(wait.as_millis()).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+    }
+
     pub(crate) fn snapshot_members(&self) -> std::collections::BTreeMap<String, u64> {
         self.snapshot()
             .members

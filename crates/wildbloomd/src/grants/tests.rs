@@ -8,7 +8,7 @@ use super::{
 };
 use axum::{
     Json, Router,
-    body::{Body, to_bytes},
+    body::{Body, Bytes, to_bytes},
     http::{Method, Request, StatusCode, header},
     middleware::from_fn_with_state,
     routing::post,
@@ -752,16 +752,16 @@ async fn regranting_a_recovery_identity_restores_its_key_list() {
         list(&node, &recovery).await,
         vec![sha(b"encrypted key list")]
     );
-    // The owner keeps its claim; the recovery identity's sits beside it, so
-    // its delete removes only its own claim.
-    assert_eq!(list(&node, &owner).await, vec![sha(b"encrypted key list")]);
+    // The owner claim the move created is dropped again, so the recovery
+    // identity's delete really removes the blob.
+    assert!(list(&node, &owner).await.is_empty());
     assert_eq!(
         delete(&node, &recovery, &sha(b"encrypted key list")).await,
         StatusCode::OK
     );
     assert_eq!(
         get_status(&node, &format!("/{}", sha(b"encrypted key list"))).await,
-        StatusCode::OK
+        StatusCode::NOT_FOUND
     );
 }
 
@@ -1229,29 +1229,47 @@ async fn issuer_budget_is_a_sliding_window_checked_before_replay() {
     let (_dir, node) = node().await;
     let relay = relay(StatusCode::CREATED).await;
     let app = issuer_app(&node, &relay);
-    let now = node.now();
     let long = Grant {
         until_in: 3 * 3600,
         ..standard_grant()
     };
-    node.call(post_grant(grant_event(&keys(1), &long, now)))
+    node.call(post_grant(grant_event(&keys(1), &long, node.now())))
         .await;
-    for age in 0..super::issuer::RATE_LIMIT as u64 {
-        let (status, _, text) = call(&app, issue_request(&keys(10), now - age, b"")).await;
-        assert_eq!(status, StatusCode::CREATED, "{text}");
+    let issue = |created_at: u64| issue_request(&keys(10), created_at, b"");
+    let half = super::issuer::RATE_LIMIT as u64 / 2;
+    // Half the budget at t0, the other half 3590 s later.
+    let t0 = node.now();
+    for age in 0..half {
+        assert_eq!(call(&app, issue(t0 - age)).await.0, StatusCode::CREATED);
     }
-    let refused = issue_request(&keys(10), now - 40, b"");
-    assert_eq!(call(&app, refused).await.0, StatusCode::TOO_MANY_REQUESTS);
-    // The budget returns as the window slides.
-    node.advance(super::issuer::RATE_WINDOW as i64);
-    let later = node.now();
+    node.advance(3590);
+    let t1 = node.now();
+    for age in 0..half {
+        assert_eq!(call(&app, issue(t1 - age)).await.0, StatusCode::CREATED);
+    }
+    // Over budget: refused, and its event id is not spent.
+    let refused_at = t1 - 20;
     assert_eq!(
-        call(&app, issue_request(&keys(10), later, b"")).await.0,
-        StatusCode::CREATED
+        call(&app, issue(refused_at)).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    // Eleven seconds on, the t0 half has left the window but the refused
+    // event is still fresh: it is accepted, proving it was not consumed.
+    node.advance(11);
+    let t2 = node.now();
+    assert_eq!(call(&app, issue(refused_at)).await.0, StatusCode::CREATED);
+    // A fixed window reset at t0 + 3600 would now allow a whole budget; a
+    // sliding one still counts the t1 half and the accepted retry.
+    for ahead in 1..half {
+        assert_eq!(call(&app, issue(t2 + ahead)).await.0, StatusCode::CREATED);
+    }
+    assert_eq!(
+        call(&app, issue(t2 + half)).await.0,
+        StatusCode::TOO_MANY_REQUESTS
     );
     assert_eq!(
         relay.calls.load(Ordering::SeqCst),
-        super::issuer::RATE_LIMIT + 1
+        3 * super::issuer::RATE_LIMIT / 2
     );
 }
 
@@ -1578,4 +1596,354 @@ async fn service_keys_cannot_be_delegated_and_ended_keys_cannot_use_other_method
         .body(Body::empty())
         .unwrap();
     assert_eq!(node.call(request).await.0, StatusCode::FORBIDDEN);
+}
+
+fn held_upload(signer: &Keys, bytes: &[u8]) -> (Request<Body>, tokio::sync::mpsc::Sender<Bytes>) {
+    let hash = sha(bytes);
+    let (sender, receiver) = tokio::sync::mpsc::channel::<Bytes>(4);
+    let stream = futures_util::stream::unfold(receiver, |mut receiver| async move {
+        receiver
+            .recv()
+            .await
+            .map(|chunk| (Ok::<Bytes, std::io::Error>(chunk), receiver))
+    });
+    let request = Request::builder()
+        .method(Method::PUT)
+        .uri("/upload")
+        .header(header::CONTENT_LENGTH, bytes.len())
+        .header("x-sha-256", &hash)
+        .header(header::AUTHORIZATION, bud11(signer, "upload", Some(&hash)))
+        .body(Body::from_stream(stream))
+        .unwrap();
+    (request, sender)
+}
+
+async fn wait_for_in_flight(node: &Node, key: &Keys, count: usize) {
+    for _ in 0..200 {
+        if node.grants.in_flight_count(&hex(key)) == count {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("in-flight count never reached {count}");
+}
+
+#[tokio::test]
+async fn a_held_upload_neither_delays_revocation_nor_loses_its_claim() {
+    let (_dir, node) = node().await;
+    node.grants
+        .set_in_flight_wait(std::time::Duration::from_secs(2));
+    let (owner, device) = (keys(1), keys(10));
+    let now = node.now();
+    node.call(post_grant(grant_event(&owner, &standard_grant(), now)))
+        .await;
+    // A second computer keeps the recovery identity active, so only the
+    // revoked device leaves the core.  (Removing a key from the core waits
+    // for every in-flight core write, including this held one.)
+    let other = Grant {
+        device: 20,
+        ..standard_grant()
+    };
+    node.call(post_grant(grant_event(&owner, &other, now)))
+        .await;
+    let body = b"an upload held open across revocation".to_vec();
+    let (request, sender) = held_upload(&device, &body);
+    sender
+        .send(Bytes::copy_from_slice(&body[..10]))
+        .await
+        .unwrap();
+    let app = node.app.clone();
+    let upload = tokio::spawn(async move { app.oneshot(request).await.unwrap().status() });
+    wait_for_in_flight(&node, &device, 1).await;
+
+    // Revocation is committed and answered without waiting for the upload.
+    let (status, _) = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        node.call(revoke_request(&owner, &device, now + 1)),
+    )
+    .await
+    .expect("revocation must reply without waiting for in-flight writes");
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        upload_status(&node, &device, b"new write").await,
+        StatusCode::FORBIDDEN
+    );
+    // The sweep waits, then skips the busy key rather than moving early.
+    node.sweep().await;
+    assert!(node.grants.snapshot_members().contains_key(&hex(&device)));
+
+    sender
+        .send(Bytes::copy_from_slice(&body[10..]))
+        .await
+        .unwrap();
+    drop(sender);
+    assert_eq!(upload.await.unwrap(), StatusCode::CREATED);
+    wait_for_in_flight(&node, &device, 0).await;
+    node.sweep().await;
+    assert!(!node.grants.snapshot_members().contains_key(&hex(&device)));
+    assert_eq!(list(&node, &owner).await, vec![sha(&body)]);
+}
+
+async fn upload_status(node: &Node, signer: &Keys, bytes: &[u8]) -> StatusCode {
+    upload(node, signer, bytes).await
+}
+
+#[tokio::test]
+async fn a_stalled_delegated_body_times_out() {
+    let (_dir, node) = node().await;
+    let device = keys(10);
+    node.call(post_grant(grant_event(
+        &keys(1),
+        &standard_grant(),
+        node.now(),
+    )))
+    .await;
+    let polled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = polled.clone();
+    let hash = sha(b"never arrives");
+    let stream = futures_util::stream::unfold((), move |()| {
+        flag.store(true, Ordering::SeqCst);
+        std::future::pending::<Option<(Result<Bytes, std::io::Error>, ())>>()
+    });
+    let request = Request::builder()
+        .method(Method::PUT)
+        .uri("/upload")
+        .header(header::CONTENT_LENGTH, 13)
+        .header("x-sha-256", &hash)
+        .header(header::AUTHORIZATION, bud11(&device, "upload", Some(&hash)))
+        .body(Body::from_stream(stream))
+        .unwrap();
+    let app = node.app.clone();
+    let upload = tokio::spawn(async move { app.oneshot(request).await.unwrap().status() });
+    for _ in 0..200 {
+        if polled.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(
+        polled.load(Ordering::SeqCst),
+        "the core never read the body"
+    );
+    tokio::time::pause();
+    tokio::time::advance(super::WRITE_IDLE_TIMEOUT + std::time::Duration::from_secs(1)).await;
+    tokio::time::resume();
+    let status = tokio::time::timeout(std::time::Duration::from_secs(5), upload)
+        .await
+        .expect("a stalled delegated body must time out")
+        .unwrap();
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    wait_for_in_flight(&node, &device, 0).await;
+}
+
+#[tokio::test]
+async fn a_device_delete_after_a_lapse_removes_the_blob() {
+    let (_dir, node) = node().await;
+    let (owner, device) = (keys(1), keys(10));
+    let now = node.now();
+    node.call(post_grant(grant_event(&owner, &standard_grant(), now)))
+        .await;
+    assert_eq!(
+        upload(&node, &device, b"shared copy one").await,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        upload(&node, &device, b"shared copy two!").await,
+        StatusCode::CREATED
+    );
+    node.call(revoke_request(&owner, &device, now + 1)).await;
+    node.sweep().await;
+    // Re-granted with a ceiling that fits only one of them.
+    let small = Grant {
+        bytes: 15,
+        ..standard_grant()
+    };
+    node.call(post_grant(grant_event(&owner, &small, now + 2)))
+        .await;
+    node.sweep().await;
+    // Handed back: the owner claim the move made is gone, so stop sharing
+    // really deletes the bytes.
+    assert_eq!(list(&node, &device).await, vec![sha(b"shared copy one")]);
+    assert_eq!(
+        delete(&node, &device, &sha(b"shared copy one")).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        get_status(&node, &format!("/{}", sha(b"shared copy one"))).await,
+        StatusCode::NOT_FOUND
+    );
+    // Not yet handed back (over the ceiling when last tried): the device's
+    // delete still releases the owner claim the move created.
+    let (status, body) = node
+        .call(
+            Request::builder()
+                .method(Method::DELETE)
+                .uri(format!("/{}", sha(b"shared copy two!")))
+                .header(
+                    header::AUTHORIZATION,
+                    bud11(&device, "delete", Some(&sha(b"shared copy two!"))),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        get_status(&node, &format!("/{}", sha(b"shared copy two!"))).await,
+        StatusCode::NOT_FOUND
+    );
+    assert!(list(&node, &owner).await.is_empty());
+}
+
+#[tokio::test]
+async fn owner_claims_held_before_the_move_are_never_dropped() {
+    let (_dir, node) = node().await;
+    let (owner, device) = (keys(1), keys(10));
+    let now = node.now();
+    assert_eq!(
+        upload(&node, &owner, b"owner had it first").await,
+        StatusCode::CREATED
+    );
+    node.call(post_grant(grant_event(&owner, &standard_grant(), now)))
+        .await;
+    assert_eq!(
+        upload(&node, &device, b"owner had it first").await,
+        StatusCode::OK
+    );
+    node.call(revoke_request(&owner, &device, now + 1)).await;
+    node.sweep().await;
+    node.call(post_grant(grant_event(&owner, &standard_grant(), now + 2)))
+        .await;
+    node.sweep().await;
+    assert_eq!(list(&node, &device).await, vec![sha(b"owner had it first")]);
+    assert_eq!(
+        delete(&node, &device, &sha(b"owner had it first")).await,
+        StatusCode::OK
+    );
+    assert_eq!(list(&node, &owner).await, vec![sha(b"owner had it first")]);
+    assert_eq!(
+        get_status(&node, &format!("/{}", sha(b"owner had it first"))).await,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn a_preview_grant_database_is_migrated() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("data");
+    std::fs::create_dir_all(&root).unwrap();
+    {
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).append(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        options.open(root.join(super::DATABASE_FILE)).unwrap();
+    }
+    let connection = rusqlite::Connection::open(root.join(super::DATABASE_FILE)).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE core_members (pubkey TEXT PRIMARY KEY NOT NULL, issuer TEXT NOT NULL,
+                byte_limit INTEGER NOT NULL CHECK (byte_limit > 0));
+             CREATE TABLE moved_claims (pubkey TEXT NOT NULL, hash TEXT NOT NULL,
+                owner TEXT NOT NULL, size INTEGER NOT NULL, declared_type TEXT NOT NULL,
+                class TEXT, independent INTEGER NOT NULL, PRIMARY KEY (pubkey, hash));
+             INSERT INTO moved_claims VALUES ('a', 'b', 'c', 1, 'x', NULL, 0);
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+    drop(connection);
+    let node = node_at(root.clone(), Arc::new(AtomicI64::new(0))).await;
+    // The migrated database records moves with the current layout.
+    node.call(post_grant(grant_event(
+        &keys(1),
+        &standard_grant(),
+        node.now(),
+    )))
+    .await;
+    assert_eq!(
+        upload(&node, &keys(10), b"after migration").await,
+        StatusCode::CREATED
+    );
+    node.call(revoke_request(&keys(1), &keys(10), node.now() + 1))
+        .await;
+    node.sweep().await;
+    assert_eq!(list(&node, &keys(1)).await, vec![sha(b"after migration")]);
+    drop(node);
+    let connection = rusqlite::Connection::open(root.join(super::DATABASE_FILE)).unwrap();
+    connection
+        .execute_batch("PRAGMA user_version = 3;")
+        .unwrap();
+    drop(connection);
+    let reopened = Grants::open(
+        &root,
+        GrantsConfig {
+            owners: vec![hex(&keys(1))],
+            server_names: vec![SERVER.into()],
+            origin: ORIGIN.into(),
+            cli_friend_grants: Vec::new(),
+            reserved_keys: Vec::new(),
+        },
+        super::system_clock(),
+    );
+    assert!(matches!(reopened, Err(super::GrantsError::Schema(3))));
+}
+
+#[tokio::test]
+async fn re_adoption_leaves_guest_claims_from_before_the_grant() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("data");
+    let offset = Arc::new(AtomicI64::new(0));
+    {
+        // A guest mirror-style claim made by the key before it was granted.
+        let store = Store::open(StoreConfig {
+            root: root.clone(),
+            quota_bytes: 64 * MIB,
+            max_blob_bytes: 8 * MIB,
+        })
+        .unwrap();
+        let owner_spec = wildbloom_core::ClaimSpec {
+            signer_pubkey: hex(&keys(1)),
+            retention_tier: wildbloom_core::RetentionTier::Owner,
+            declared_type: "application/octet-stream".into(),
+            grant_id: None,
+            claim_expires_at: None,
+            byte_limit: None,
+            class: None,
+        };
+        let bytes = b"guest before grant";
+        let hash = sha(bytes);
+        if let wildbloom_core::store::UploadStart::Reserved(reservation) = store
+            .begin_claimed_upload(&hash, bytes.len() as u64, owner_spec)
+            .unwrap()
+        {
+            std::fs::write(reservation.temp_path(), bytes).unwrap();
+            reservation.commit(&hash, bytes.len() as u64).unwrap();
+        }
+        let guest = wildbloom_core::ClaimSpec {
+            signer_pubkey: hex(&keys(10)),
+            retention_tier: wildbloom_core::RetentionTier::Guest,
+            declared_type: "application/octet-stream".into(),
+            grant_id: None,
+            claim_expires_at: None,
+            byte_limit: None,
+            class: None,
+        };
+        store
+            .begin_claimed_mirror(&hash, bytes.len() as u64, guest)
+            .unwrap();
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    let node = node_at(root.clone(), offset.clone()).await;
+    node.call(post_grant(grant_event(
+        &keys(1),
+        &standard_grant(),
+        node.now(),
+    )))
+    .await;
+    drop(node);
+    let node = node_at(root, offset).await;
+    assert!(list(&node, &keys(10)).await.is_empty());
 }

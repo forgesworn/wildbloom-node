@@ -1,5 +1,6 @@
 //! Blocking store work for the delegated claim lifecycle: move to the owner,
-//! hand back on a later grant, and re-adopt after a rollback demoted claims.
+//! hand back on a later grant, release on a key's delete, and re-adopt after a
+//! rollback demoted claims.
 //!
 //! Every walk is paginated through the core's public listing API; nothing is
 //! capped or silently truncated.  Hash sets hold 32-byte digests only.
@@ -89,10 +90,10 @@ fn hash_set(
     Ok(set)
 }
 
-/// Whether `owner` holds an active claim on `hash`.  The listing cursor must
+/// Whether `signer` holds an active claim on `hash`.  The listing cursor must
 /// be one of the signer's active claims, so this is an exact point lookup.
-fn owner_claims(store: &Store, owner: &str, hash: &str) -> Result<bool, String> {
-    match store.list_claims(owner, Some(hash), 1) {
+pub(super) fn holds_claim(store: &Store, signer: &str, hash: &str) -> Result<bool, String> {
+    match store.list_claims(signer, Some(hash), 1) {
         Ok(_) => Ok(true),
         Err(StoreError::InvalidCursor) => Ok(false),
         Err(error) => Err(error.to_string()),
@@ -104,15 +105,42 @@ fn lock(db: &Mutex<Connection>) -> Result<std::sync::MutexGuard<'_, Connection>,
         .map_err(|_| "device grant database lock".to_owned())
 }
 
+fn database<E>(_: E) -> String {
+    "device grant database".to_owned()
+}
+
+/// Drop the owner claim a move created, unless the owner held the blob
+/// before the move or has written it since.  Runs under the database lock,
+/// which owner writes also take to record themselves before they reach the
+/// core, so an owner upload is either seen here or lands after this delete.
+fn drop_owner_claim_if_ours(
+    store: &Store,
+    connection: &Connection,
+    key: &str,
+    hash: &str,
+) -> Result<(), String> {
+    let Some(record) = db::moved_row(connection, key, hash).map_err(database)? else {
+        return Ok(());
+    };
+    if record.owner_claim_is_ours() {
+        match store.delete_claim(hash, &record.owner) {
+            Ok(_) | Err(StoreError::NotClaimant | StoreError::MissingBlob) => {}
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    db::forget_move(connection, key, hash).map_err(database)
+}
+
 /// Move every friend claim `key` holds under its delegated grant to an
-/// owner-tier claim for `owner`, recording each move.  Paid claims are left
-/// alone: they belong to a separate allowance with its own retention.
+/// owner-tier claim for `owner`, recording each move first.  Paid claims are
+/// left alone: they belong to a separate allowance with its own retention.
 pub(super) fn transfer(
     store: &Store,
     db: &Mutex<Connection>,
     key: &str,
     owner: &str,
     grant_id: &str,
+    now: u64,
 ) -> Result<u64, String> {
     let paid = hash_set(store, key, Some(PAID_ONLY)).map_err(|e| e.to_string())?;
     let mut attempted = HashSet::new();
@@ -132,10 +160,39 @@ pub(super) fn transfer(
                 continue;
             }
             let declared = declared_type(&claim.content_type);
+            {
+                // Record intent before the owner claim exists, under the lock
+                // owner writes take, so `independent` is exact and a
+                // concurrent owner upload is never mistaken for the move's.
+                // A record left by an interrupted earlier pass keeps its flags.
+                let connection = lock(db)?;
+                if db::moved_row(&connection, key, &claim.sha256)
+                    .map_err(database)?
+                    .is_none()
+                {
+                    let record = MovedClaim {
+                        hash: claim.sha256.clone(),
+                        owner: owner.to_owned(),
+                        size: claim.size,
+                        declared_type: declared.clone(),
+                        class: claim.class.clone(),
+                        independent: holds_claim(store, owner, &claim.sha256)?,
+                        adopted: db::recent_owner_write(
+                            &connection,
+                            owner,
+                            &claim.sha256,
+                            now.saturating_sub(super::OWNER_WRITE_WINDOW),
+                        )
+                        .map_err(database)?,
+                        moved_at: now,
+                    };
+                    db::insert_move(&connection, key, &record).map_err(database)?;
+                }
+            }
             let spec = ClaimSpec {
                 signer_pubkey: owner.to_owned(),
                 retention_tier: RetentionTier::Owner,
-                declared_type: declared.clone(),
+                declared_type: declared,
                 grant_id: None,
                 claim_expires_at: None,
                 byte_limit: None,
@@ -149,6 +206,7 @@ pub(super) fn transfer(
                 | Err(
                     StoreError::MissingBlob | StoreError::Tombstoned | StoreError::LengthMismatch,
                 ) => {
+                    db::forget_move(&*lock(db)?, key, &claim.sha256).map_err(database)?;
                     continue;
                 }
                 Err(error) => return Err(error.to_string()),
@@ -158,18 +216,6 @@ pub(super) fn transfer(
                 Ok(_) | Err(StoreError::NotClaimant | StoreError::MissingBlob) => {}
                 Err(error) => return Err(error.to_string()),
             }
-            db::record_move(
-                &*lock(db)?,
-                key,
-                &MovedClaim {
-                    hash: claim.sha256,
-                    owner: owner.to_owned(),
-                    size: claim.size,
-                    declared_type: declared,
-                    class: claim.class,
-                },
-            )
-            .map_err(|_| "device grant database".to_owned())?;
             moved += 1;
         }
         if !full {
@@ -179,9 +225,11 @@ pub(super) fn transfer(
 }
 
 /// Give an active key back the claims an earlier sweep moved to the same
-/// owner.  The owner keeps its own claim; the key's claim is added beside it.
-/// A moved claim the owner has since deleted is not handed back.  Claims over
-/// the key's current ceiling stay recorded and are retried on later sweeps.
+/// owner, then drop the owner claim the move created (see
+/// [`drop_owner_claim_if_ours`]).  A moved claim the owner deleted and has not
+/// written again is not handed back.  Claims over the key's current ceiling
+/// stay recorded and are retried when the key frees space or its ceiling
+/// changes.  Moves to another owner are never read.
 pub(super) fn restore(
     store: &Store,
     db: &Mutex<Connection>,
@@ -192,25 +240,16 @@ pub(super) fn restore(
     let (mut restored, mut kept) = (0_u64, 0_u64);
     let mut after = String::new();
     loop {
-        let page = db::moved_page(&*lock(db)?, key, &after, MOVED_PAGE)
-            .map_err(|_| "device grant database".to_owned())?;
+        let page = db::moved_page(&*lock(db)?, key, &member.issuer, &after, MOVED_PAGE)
+            .map_err(database)?;
         let Some(last) = page.last() else {
             return Ok((restored, kept));
         };
         after = last.hash.clone();
         for record in page {
-            // Claims moved to a different owner stay with that owner.
-            if record.owner != member.issuer {
-                kept += 1;
-                continue;
-            }
-            let forget = |db: &Mutex<Connection>| {
-                db::forget_move(&*lock(db)?, key, &record.hash)
-                    .map_err(|_| "device grant database".to_owned())
-            };
-            if !owner_claims(store, &member.issuer, &record.hash)? {
+            if !holds_claim(store, &member.issuer, &record.hash)? {
                 // The owner deleted it while holding it: that decision wins.
-                forget(db)?;
+                db::forget_move(&*lock(db)?, key, &record.hash).map_err(database)?;
                 continue;
             }
             let spec = friend_spec(
@@ -222,14 +261,15 @@ pub(super) fn restore(
             );
             match store.begin_claimed_mirror(&record.hash, record.size, spec) {
                 Ok(UploadStart::Existing(_)) => {
-                    forget(db)?;
+                    let connection = lock(db)?;
+                    drop_owner_claim_if_ours(store, &connection, key, &record.hash)?;
                     restored += 1;
                 }
                 Ok(UploadStart::Reserved(_))
                 | Err(
                     StoreError::MissingBlob | StoreError::Tombstoned | StoreError::LengthMismatch,
                 ) => {
-                    forget(db)?;
+                    db::forget_move(&*lock(db)?, key, &record.hash).map_err(database)?;
                 }
                 Err(StoreError::FriendLimitExceeded) => kept += 1,
                 Err(error) => return Err(error.to_string()),
@@ -238,9 +278,31 @@ pub(super) fn restore(
     }
 }
 
+/// An active key deletes a blob whose claim was moved to `owner` and not yet
+/// handed back: drop the owner claim the move created and forget the record.
+/// Returns `None` when there is no such record for this owner.
+pub(super) fn release(
+    store: &Store,
+    db: &Mutex<Connection>,
+    key: &str,
+    owner: &str,
+    hash: &str,
+) -> Result<Option<()>, String> {
+    let connection = lock(db)?;
+    match db::moved_row(&connection, key, hash).map_err(database)? {
+        Some(record) if record.owner == owner => {
+            drop_owner_claim_if_ours(store, &connection, key, hash)?;
+            Ok(Some(()))
+        }
+        _ => Ok(None),
+    }
+}
+
 /// Re-adopt claims of a delegated key that a binary without device grant
-/// support demoted to `guest` (its reconcile clears the grant id).  Runs in
-/// batches until every such claim is adopted or refused by the ceiling.
+/// support demoted to `guest` (its reconcile clears the grant id).  Only
+/// claims made since the key joined the trusted set are adopted, so guest
+/// claims the key made before it was granted stay guest.  Runs in batches
+/// until every such claim is adopted or refused by the ceiling.
 pub(super) fn adopt(
     store: &Store,
     key: &str,
@@ -255,7 +317,11 @@ pub(super) fn adopt(
         let mut batch = Vec::new();
         each_claim(store, key, None, |claim| {
             let id = digest(&claim.sha256);
-            if batch.len() < ADOPT_BATCH && !placed.contains(&id) && !refused_set.contains(&id) {
+            if batch.len() < ADOPT_BATCH
+                && claim.uploaded >= member.since
+                && !placed.contains(&id)
+                && !refused_set.contains(&id)
+            {
                 batch.push(claim);
             }
         })

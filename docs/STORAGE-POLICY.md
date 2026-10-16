@@ -177,14 +177,22 @@ delegated tier, so `wildbloomd` composes one from public core APIs:
   owner retention, and the owner can list them and delete them with ordinary
   BUD-12 requests.  A revoked device cannot delete the owner's backups.
 - A recovery identity stays active while any grant naming it is active.
-- While a key is active under the same owner that received its moved claims,
-  every sweep hands them back: the key gets its own claim again beside the
-  owner's, within its current ceiling.  The owner's claim is never removed, so
-  after a lapse the bytes stay until both the key and the owner delete them.
-  A moved claim the owner deleted in the meantime is not handed back.  Claims
-  over the ceiling stay recorded and are retried on later sweeps.  This is how
-  a new computer can list the recovery identity's key list after the lost one
-  was revoked.
+- Each move is recorded before the owner claim is made, with whether the
+  owner already held that blob.  An owner's own upload or mirror is recorded
+  by the gate before it reaches the core, so a later owner write is never
+  mistaken for the move's.
+- While a key is active again under the same owner, sweeps hand its moved
+  claims back within its current ceiling, and the owner claim the move made is
+  dropped again unless the owner held the blob before the move or has
+  uploaded or mirrored it since.  A delete by the key of a moved claim not yet
+  handed back drops that owner claim the same way.  So after a lapse and a
+  re-grant, the device's delete (for example Stop sharing) still removes the
+  bytes, and an owner-initiated upload is never removed.
+- A moved claim the owner deleted, and has not uploaded again, is not handed
+  back.  Claims over the ceiling stay recorded and are retried when the key's
+  ceiling changes or one of its deletes frees space.  This is how a new
+  computer can list the recovery identity's key list after the lost one was
+  revoked.
 
 Moved claims keep their size, type and class; their BUD-12 `uploaded` time
 becomes the time of the move.  Removing an owner from `--allow-pubkey` ends
@@ -205,10 +213,14 @@ Rolling back to a binary without device grant support is safe for the bytes but
 not for the tier: that binary's start-up reconcile demotes every delegated
 friend claim to `guest` and clears its grant id.  When a binary with device
 grants starts again, it re-adopts every such claim of a key still recorded in
-the grant database (within its ceiling) before the first sweep.  While the older
+the grant database (within its ceiling) before the first sweep.  Only claims
+made since the key joined the trusted set are adopted, so guest claims the key
+made before it was granted (for example open-shelter mirrors) stay guest.  While the older
 binary runs, those claims are evictable guests, so do not run it on a node close
 to its quota.  All lifecycle walks page through the core's listing API without
-a cap.
+a cap.  Grant databases written by unreleased previews (schema 1) are migrated
+to schema 2 at start-up; their move records are discarded, so those claims stay
+with the owner and are not handed back.  A newer schema is refused.
 
 A future core with a native delegated tier should replace this composition.
 Until then, two facts are load-bearing: friend claims are not evicted, and the
