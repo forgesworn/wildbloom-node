@@ -46,6 +46,17 @@
   may issue expiring per-key friend byte grants.  Open shelter is separate and
   accepts unknown keys only for signed BUD-04 mirrors above the high free-space
   watermark; unknown direct uploads remain denied.
+- Optional device grants (`--device-grants`) accept only an owner-signed,
+  single-use, server-scoped event that is at most ten minutes old, with
+  monotonic per-device ordering, so a captured older grant cannot undo a
+  revocation.  Delegated keys are byte-capped by the core while active.  An
+  ended key is refused by a layer in front of the Blossom router and then
+  removed from the core's trusted set after its claims move to the owner.
+  Grant state is a private `0600` SQLite file beside the store.
+- The optional pairing issuer holds a Foregather operator token read from a
+  `0600` file or the environment, sends it only to the configured relay over
+  HTTPS or loopback HTTP, and never logs or returns it.  A granted device can
+  spend at most 30 one-use, ten-minute live creation grants an hour.
 - Owner and friend reservations may evict only best-effort guest blobs.  Guest
   requests cannot consume the protected reserve or evict a stronger claim.
 - Friend-only and guest-only responses are opaque attachments with `nosniff`.
@@ -86,6 +97,11 @@
   already in-flight remote write. A local signer executable is an explicitly
   trusted operator component; it can refuse and is never discovered remotely.
   See [REPLICA-POLICY.md](REPLICA-POLICY.md) for bounds and remaining gates.
+- A compromised device key can fill its byte ceiling and delete its own
+  claims until the owner revokes it or the grant expires.  The delegated tier
+  is composed in `wildbloomd` around the core's friend tier rather than being a
+  core tier; the gate and sweep are the security boundary between expiry and
+  removal from the core.
 
 ## Operator responsibilities
 

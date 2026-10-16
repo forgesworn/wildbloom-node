@@ -1,5 +1,5 @@
 use clap::Parser;
-use std::{net::SocketAddr, path::PathBuf, str::FromStr, sync::Arc};
+use std::{collections::BTreeSet, net::SocketAddr, path::PathBuf, str::FromStr, sync::Arc};
 use tracing_subscriber::EnvFilter;
 use url::Url;
 use wildbloom_core::{
@@ -7,6 +7,7 @@ use wildbloom_core::{
     router,
 };
 
+mod grants;
 mod proofs;
 mod replicas;
 mod services;
@@ -119,6 +120,32 @@ struct Cli {
         value_delimiter = ','
     )]
     friend_grants: Vec<FriendGrantArg>,
+
+    /// Accept owner-signed device grants on /grants/v1 (requires --allow-pubkey).
+    #[arg(long, env = "WILDBLOOM_DEVICE_GRANTS")]
+    device_grants: bool,
+
+    /// Issue one-use Foregather live creation grants to granted devices.
+    /// The operator token comes from --pairing-operator-token-file or the
+    /// WILDBLOOM_PAIRING_OPERATOR_TOKEN environment variable, never an argument.
+    #[arg(
+        long,
+        env = "WILDBLOOM_PAIRING_ISSUER",
+        requires_all = ["device_grants", "pairing_relay_url"]
+    )]
+    pairing_issuer: bool,
+
+    /// Foregather resolver API base, for example https://relay.example/ (loopback HTTP allowed).
+    #[arg(long, env = "WILDBLOOM_PAIRING_RELAY_URL", requires = "pairing_issuer")]
+    pairing_relay_url: Option<Url>,
+
+    /// Private (0600) file holding the Foregather operator creation token.
+    #[arg(
+        long,
+        env = "WILDBLOOM_PAIRING_OPERATOR_TOKEN_FILE",
+        requires = "pairing_issuer"
+    )]
+    pairing_operator_token_file: Option<PathBuf>,
 
     /// Accept signed BUD-04 mirrors from unknown keys as evictable guest data.
     /// Direct unknown uploads remain denied.
@@ -265,6 +292,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .or(cli.mirror_proxy);
     let repair_enabled =
         (mirror_proxy.is_some() || cli.direct_https_mirrors) && cli.repair_interval > 0;
+    if cli.device_grants && cli.allowed_pubkeys.is_empty() {
+        return Err("--device-grants requires at least one --allow-pubkey owner".into());
+    }
+    let cli_friend_grants = cli
+        .friend_grants
+        .into_iter()
+        .map(|grant| grant.0)
+        .collect::<Vec<_>>();
+    // Persisted grants are always honoured once they exist, even if the routes
+    // are later disabled, so turning the flag off never demotes stored claims.
+    let device_grants = if cli.device_grants || grants::has_database(&data_dir) {
+        Some(grants::Grants::open(
+            &data_dir,
+            grants::GrantsConfig {
+                owners: cli.allowed_pubkeys.clone(),
+                server_names: server_names.clone(),
+                origin: public_url.to_string(),
+                cli_friend_grants: cli_friend_grants.clone(),
+            },
+            grants::system_clock(),
+        )?)
+    } else {
+        None
+    };
+    let pairing_issuer_token = if cli.pairing_issuer {
+        Some(
+            match (
+                &cli.pairing_operator_token_file,
+                std::env::var("WILDBLOOM_PAIRING_OPERATOR_TOKEN"),
+            ) {
+                (Some(path), Err(_)) => grants::issuer::OperatorToken::from_file(path)?,
+                (None, Ok(value)) => grants::issuer::OperatorToken::parse(&value)?,
+                _ => {
+                    return Err("--pairing-issuer needs exactly one of --pairing-operator-token-file or WILDBLOOM_PAIRING_OPERATOR_TOKEN".into());
+                }
+            },
+        )
+    } else {
+        None
+    };
     let config = BlossomConfig {
         server_metadata: ServerMetadata {
             name: "Wildbloom Node".into(),
@@ -273,7 +340,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         public_base_url: public_url.clone(),
         accepted_server_names: server_names.clone(),
         allowed_pubkeys: cli.allowed_pubkeys,
-        friend_grants: cli.friend_grants.into_iter().map(|grant| grant.0).collect(),
+        friend_grants: match &device_grants {
+            Some(device_grants) => device_grants.core_friend_grants(),
+            None => cli_friend_grants,
+        },
         open_shelter: cli.open_shelter,
         max_concurrent_writes: cli.max_concurrent_writes,
         mirror_proxy: mirror_proxy.clone(),
@@ -288,6 +358,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .iter()
                 .map(|grant| grant.pubkey.clone()),
         )
+        .chain(
+            device_grants
+                .iter()
+                .flat_map(|device_grants| device_grants.known_keys()),
+        )
+        .collect::<BTreeSet<_>>()
+        .into_iter()
         .collect::<Vec<_>>();
     let state = if cli.direct_https_mirrors {
         AppState::with_fetcher(store, config, Arc::new(DirectHttpsFetcher::new()?))?
@@ -315,6 +392,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ));
     }
     let mut routes = router(state.clone());
+    let mut _grant_maintenance = None;
+    if let Some(device_grants) = &device_grants {
+        device_grants.attach(state.clone());
+        if let Err(error) = device_grants.sweep_ended().await {
+            tracing::warn!(reason = %error, "device grant sweep will retry");
+        }
+        _grant_maintenance = Some(grants::Maintenance(device_grants.spawn_maintenance()));
+        routes = routes.layer(axum::middleware::from_fn_with_state(
+            device_grants.clone(),
+            grants::gate,
+        ));
+        if cli.device_grants {
+            routes = routes.merge(device_grants.router());
+        }
+        if let (Some(token), Some(relay_url)) = (pairing_issuer_token, &cli.pairing_relay_url) {
+            let issuer = grants::issuer::Issuer::new(device_grants.clone(), relay_url, token)?;
+            routes = routes.merge(issuer.router());
+        }
+    }
     if cli.storage_proofs {
         routes = routes.merge(proofs::router(
             state.store().clone(),
@@ -547,6 +643,41 @@ mod tests {
     fn parses_the_hidden_desktop_parent_contract() {
         let cli = Cli::try_parse_from(["wildbloomd", "--parent-pid", "1234"]).unwrap();
         assert_eq!(cli.parent_pid, Some(1234));
+    }
+
+    #[test]
+    fn device_grants_and_the_pairing_issuer_are_explicit_opt_ins() {
+        let cli = Cli::try_parse_from(["wildbloomd"]).unwrap();
+        assert!(!cli.device_grants && !cli.pairing_issuer);
+        assert!(Cli::try_parse_from(["wildbloomd", "--pairing-issuer"]).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "wildbloomd",
+                "--pairing-issuer",
+                "--pairing-relay-url",
+                "http://127.0.0.1:8787/",
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "wildbloomd",
+                "--pairing-relay-url",
+                "http://127.0.0.1:8787/",
+            ])
+            .is_err()
+        );
+        let cli = Cli::try_parse_from([
+            "wildbloomd",
+            "--device-grants",
+            "--pairing-issuer",
+            "--pairing-relay-url",
+            "http://127.0.0.1:8787/",
+            "--pairing-operator-token-file",
+            "/var/lib/example/token",
+        ])
+        .unwrap();
+        assert!(cli.device_grants && cli.pairing_issuer);
     }
 
     #[test]

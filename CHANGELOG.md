@@ -2,6 +2,14 @@
 
 ## 0.3.4 preview - Unreleased
 
+- Add opt-in owner-authorised device grants (`--device-grants`): an owner-signed
+  kind 27540 event grants a device key and a recovery identity a per-key byte
+  ceiling until an expiry, and a later event revokes it. Expiry and revocation
+  stop new writes at once and move stored claims to the owner instead of
+  demoting them. Grants persist in a private SQLite file beside the store.
+- Add an opt-in pairing issuer (`--pairing-issuer`) that exchanges a granted
+  device's NIP-98 request for a one-use Foregather live creation grant. The
+  operator token stays on the node and is never logged or returned.
 - Automate both Mac preview signatures and Apple notarisation from an exact,
   successful CI build using the owner's existing Keychain. Retain build,
   signature, checksum and native upgrade evidence without exporting credentials.

@@ -6,10 +6,16 @@ use nostr::prelude::{Event, Kind};
 #[derive(Debug, Clone)]
 pub struct Principal {
     pub(crate) pubkey: String,
+    pub(crate) event_id: String,
 }
 impl Principal {
     pub fn pubkey(&self) -> &str {
         &self.pubkey
+    }
+    /// Verified id of the NIP-98 event, for callers that must refuse replays
+    /// of a non-idempotent request within the freshness window.
+    pub fn event_id(&self) -> &str {
+        &self.event_id
     }
 }
 
@@ -67,5 +73,6 @@ pub fn authenticate(
     event.verify().map_err(|_| Error::Unauthorised)?;
     Ok(Principal {
         pubkey: event.pubkey.to_hex(),
+        event_id: event.id.to_hex(),
     })
 }

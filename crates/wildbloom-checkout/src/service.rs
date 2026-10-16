@@ -473,6 +473,7 @@ impl Checkout {
         let record = self.ledger.get(id)?.ok_or(Error::NotFound)?;
         let principal = Principal {
             pubkey: record.order.quote.signer_pubkey,
+            event_id: String::new(),
         };
         self.check(&principal, id, &record.order.quote_digest).await
     }
