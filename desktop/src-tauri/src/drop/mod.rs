@@ -35,6 +35,8 @@ pub mod client;
 pub mod commands;
 pub mod descriptor;
 pub mod device;
+#[cfg(test)]
+mod e2e;
 pub mod engine;
 pub mod envelope;
 pub mod index;
