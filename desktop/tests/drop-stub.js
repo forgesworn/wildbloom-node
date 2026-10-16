@@ -74,6 +74,7 @@
     if (flag === 'folder') state.watchFolder = { enabled: true, path: '~/Wildbloom' };
     if (flag === 'no-online') noOnline();
     if (flag === 'good') files = goodRows();
+    if (flag === 'shared') files = goodRows().concat([row('f12', 'quote.pdf', 'shared', { sharedUntil: nowSeconds + 20 * 3600 }), row('f22', 'plan.pdf', 'shared', { sharedUntil: nowSeconds + 3600 })]);
   }
 
   const stub = {

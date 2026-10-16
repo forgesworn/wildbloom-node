@@ -55,6 +55,9 @@ fn wait_for_port(port: u16, what: &str) {
     }
 }
 
+/// wildbloomd's default quota, which the app passes for a default install.
+const LOCAL_QUOTA: u64 = 10 * 1024 * 1024 * 1024;
+
 struct Proc(Child);
 
 impl Drop for Proc {
@@ -210,9 +213,12 @@ impl TestHost {
             .arg(format!("http://localhost:{port}/"))
             .arg("--data-dir")
             .arg(self.work.join(format!("{}-local-node", self.name)));
-        for key in keys {
-            command.arg("--allow-pubkey").arg(key);
-        }
+        // Exactly what the app passes in every transport mode.
+        command.args(super::engine::local_node_trust_args(
+            &keys,
+            None,
+            LOCAL_QUOTA,
+        ));
         let child = command
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -629,6 +635,24 @@ async fn drop_end_to_end() {
         "2 copies verified by HEAD on both nodes ({} bytes)",
         record.size.unwrap()
     ));
+    // The local copy is a friend-grant claim that survives node restarts:
+    // the app passes one constant grant in every transport mode, so a Tor or
+    // public-URL toggle (each a restart with the same Drop arguments) never
+    // changes its grant or demotes it to a guest claim.
+    let device_keys = engine.identity().unwrap().device.keys().clone();
+    for _ in 0..2 {
+        host.restart_local();
+        let listed = client::list(&http, &local, &device_keys).await.unwrap();
+        assert!(
+            listed.iter().any(|l| l.sha256 == sha),
+            "the local copy is still this grant's claim after a restart"
+        );
+        assert_eq!(
+            client::head(&http, &local, &sha).await.unwrap(),
+            record.size
+        );
+    }
+    report("local copy kept its friend-grant claim across node restarts");
     // The key list reaches both nodes.
     let key_engine = engine.clone();
     until("key list on the online node", 30, || {
@@ -1021,6 +1045,22 @@ async fn drop_end_to_end() {
     );
     assert!(engine2.index.pending_deletes().unwrap().is_empty());
     report("changing the online node deleted the live share on the old node first");
+
+    // Remove after the node change still reaches the copy on the old node.
+    let device2 = engine2.identity().unwrap().device.keys().clone();
+    let restored_sha = engine2.index.file(&id).unwrap().unwrap().sha256.unwrap();
+    let before = client::list(&http, &online, &device2).await.unwrap();
+    assert!(
+        before.iter().any(|l| l.sha256 == restored_sha),
+        "this computer claimed the restored copy"
+    );
+    engine2.remove(&id).await.unwrap();
+    let after = client::list(&http, &online, &device2).await.unwrap();
+    assert!(
+        after.iter().all(|l| l.sha256 != restored_sha),
+        "Remove deleted this computer's copy on the old node"
+    );
+    report("remove after a node change deleted the copy on the old node");
 }
 
 /// Waits for a JSON file the browser driver writes into the hand-off folder.

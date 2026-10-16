@@ -222,12 +222,26 @@ elements.checkUpdate.addEventListener("click", async () => {
     return finished;
   }
 
+  // Changing node ends every live share first (its shared copy is deleted on
+  // the old node), so say so before the owner continues.
+  function sharingWarning(status) {
+    const shared = (status?.files || []).filter((row) => row.state === "shared").length;
+    if (shared === 0) return [];
+    const host = Drop.hostOf(status.online.url);
+    return [shared === 1
+      ? `You're sharing 1 file. Its shared copy on ${host} is deleted now, so its link stops working.`
+      : `You're sharing ${shared} files. Their shared copies on ${host} are deleted now, so their links stop working.`];
+  }
+
   ui.nodeChange.addEventListener("click", async (event) => {
     const opener = event.currentTarget;
     if (snapshot?.online?.configured) {
       const yes = await Drop.confirmDialog({
         title: "Use a different online node?",
-        paragraphs: [`Your files will be copied to the new node. Copies on ${Drop.hostOf(snapshot.online.url)} aren't deleted.`],
+        paragraphs: [
+          `Your files will be copied to the new node. Copies on ${Drop.hostOf(snapshot.online.url)} aren't deleted.`,
+          ...sharingWarning(snapshot),
+        ],
         confirmLabel: "Continue", destructive: false, opener,
       });
       if (!yes) return;

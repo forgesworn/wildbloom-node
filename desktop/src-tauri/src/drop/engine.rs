@@ -202,7 +202,6 @@ pub(crate) mod kv {
     pub const KEY_LIST_PENDING: &str = "key_list_pending";
     /// The key list could not be opened or sealed; shown in the status line.
     pub const KEY_LIST_FAILED: &str = "key_list_failed";
-    pub const LOCAL_FRIEND_EXPIRY: &str = "local_friend_expiry";
 }
 
 impl Engine {
@@ -408,17 +407,6 @@ impl Engine {
         node.endpoint
     }
 
-    /// The fixed expiry of the local node's friend grant for the Drop keys
-    /// (ten years from first use), so its grant identity never changes.
-    pub fn local_friend_expiry(&self) -> u64 {
-        if let Ok(Some(expiry)) = self.index.get_u64(kv::LOCAL_FRIEND_EXPIRY) {
-            return expiry;
-        }
-        let expiry = now() + 10 * 366 * 86_400;
-        let _ = self.index.set_u64(kv::LOCAL_FRIEND_EXPIRY, expiry);
-        expiry
-    }
-
     /// The local node is listening: run pending uploads and the key list now.
     pub fn local_node_ready(&self) {
         self.wake.notify_one();
@@ -621,6 +609,16 @@ impl Engine {
                 Some(index::share::STOP_PENDING) => "stop_pending",
                 // Shown until the record is swept a day after it was marked.
                 Some(index::share::OWNER_ONLY) => "share_owner_only",
+                // A replaced shared copy stranded on the node, for a day.
+                _ if self
+                    .index
+                    .stranded_at(&file.id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|at| now.saturating_sub(at) < 86_400) =>
+                {
+                    "share_owner_only"
+                }
                 Some(index::share::ENDED)
                     if share
                         .and_then(|s| s.ended_at)
@@ -1403,11 +1401,18 @@ impl Engine {
             self.index
                 .queue_delete("local", sha, "device", 0)
                 .or_internal()?;
-            if file.online != online::NONE
+            // Every node this computer put a copy on, including one used
+            // before the online node was changed.
+            let mut origins = self.index.online_copies(id).or_internal()?;
+            if file.online == online::OK
                 && let Some(online) = self.online_endpoint()
+                && !origins.iter().any(|o| o == online.origin())
             {
+                origins.push(online.origin().to_owned());
+            }
+            for origin in origins {
                 self.index
-                    .queue_delete(online.origin(), sha, "device", 0)
+                    .queue_delete(&origin, sha, "device", 0)
                     .or_internal()?;
             }
         }
@@ -1479,31 +1484,46 @@ impl Engine {
                 // The approval for this node has ended: its claims moved to
                 // the node's owner, and this key can never delete them.  Stop
                 // retrying, and tell the owner a shared copy needs them.
+                // Refused: only the node's own answer that this computer's
+                // approval there has ended (its claims then belong to the
+                // owner) stops the retries.  Any other refusal is retried.
                 Err(NodeError::Unauthorised) if delete.node != "local" => {
-                    let current = self
-                        .online_endpoint()
-                        .is_some_and(|online| online.origin() == delete.node);
-                    if current && self.approval_active() {
-                        continue;
+                    let ended = matches!(
+                        client::grant_status(&self.http, &node, identity.device.keys()).await,
+                        Ok(Some(status)) if status.state != "active"
+                    );
+                    if ended {
+                        let _ = self.index.finish_delete(&delete);
+                        self.mark_owner_only(&delete);
                     }
-                    let _ = self.index.finish_delete(&delete);
-                    self.mark_owner_only(&delete.sha256);
                 }
                 Err(_) => {}
             }
         }
     }
 
-    /// A shared copy this computer can no longer delete.
-    fn mark_owner_only(&self, sha256: &str) {
+    /// A shared copy this computer can no longer delete: its share record, or
+    /// for a replaced copy the file the deletion was queued for, says so.
+    fn mark_owner_only(&self, delete: &index::PendingDelete) {
+        let mut marked = false;
         for share in self.index.shares().unwrap_or_default() {
-            if share.sha256 == sha256 && share.state != index::share::ENDED {
+            if share.sha256 == delete.sha256 && share.state != index::share::ENDED {
                 let mut record = share.clone();
                 record.state = index::share::OWNER_ONLY.into();
                 record.ended_at = Some(now());
                 let _ = self.index.put_share(&record);
                 self.emit_row(&share.file_id);
+                marked = true;
             }
+        }
+        if !marked
+            && let Some(file_id) = &delete.file_id
+            && self.index.file(file_id).ok().flatten().is_some()
+        {
+            let _ = self
+                .index
+                .add_stranded(file_id, &delete.sha256, &delete.node, now());
+            self.emit_row(file_id);
         }
     }
 
@@ -1515,6 +1535,33 @@ impl Engine {
     pub(crate) fn identity_after_restore(&self, identity: DropIdentity) {
         self.set_identity(identity);
     }
+}
+
+/// The local node's friend grant expiry for the Drop keys: 2100-01-01 UTC.
+/// It is a constant because the node keys friend claims by a grant id built
+/// from it; a grant id that changed (a new expiry, or a switch between owner
+/// and friend tiers when Tor or a public URL is turned on or off) would leave
+/// earlier local copies as unprotected guest claims the node may evict.
+pub const LOCAL_FRIEND_GRANT_EXPIRY: u64 = 4_102_444_800;
+
+/// The `wildbloomd` arguments that let the Drop device key and recovery
+/// identity write to the local node: the same friend grant whatever the
+/// transport, so their claims keep one tier and grant across restarts.  A key
+/// equal to the configured owner is left as the owner.
+pub fn local_node_trust_args(
+    keys: &[String],
+    owner: Option<&str>,
+    quota_bytes: u64,
+) -> Vec<String> {
+    keys.iter()
+        .filter(|key| owner != Some(key.as_str()))
+        .flat_map(|key| {
+            [
+                "--friend-grant".to_owned(),
+                format!("{key}:{quota_bytes}:{LOCAL_FRIEND_GRANT_EXPIRY}"),
+            ]
+        })
+        .collect()
 }
 
 pub(crate) fn device_error(error: &DeviceError) -> CommandError {
@@ -1624,5 +1671,36 @@ pub(crate) fn guess_media_type(name: &str) -> &'static str {
         "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         _ => "",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_local_trust_grant_is_one_constant_friend_grant() {
+        let keys = vec!["aa".repeat(32), "bb".repeat(32)];
+        let args = local_node_trust_args(&keys, None, 1000);
+        assert_eq!(
+            args,
+            [
+                "--friend-grant".to_owned(),
+                format!("{}:1000:4102444800", "aa".repeat(32)),
+                "--friend-grant".to_owned(),
+                format!("{}:1000:4102444800", "bb".repeat(32)),
+            ]
+        );
+        // Never --allow-pubkey, whatever the node's transport: the function
+        // takes no mode, so toggling Tor or a public URL cannot change it.
+        assert!(args.iter().all(|a| a != "--allow-pubkey"));
+        assert_eq!(local_node_trust_args(&keys, None, 1000), args, "stable");
+        // A key that is already the owner stays the owner.
+        assert_eq!(local_node_trust_args(&keys, Some(&keys[0]), 1000).len(), 2);
+        // 2100-01-01T00:00:00Z.
+        assert_eq!(
+            super::super::status::full_date(LOCAL_FRIEND_GRANT_EXPIRY),
+            "1 January 2100"
+        );
     }
 }

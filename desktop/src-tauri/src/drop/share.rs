@@ -331,9 +331,13 @@ impl Engine {
             _ => false,
         };
         if !deleted {
-            let _ = self
-                .index
-                .queue_delete(&share.origin, &share.sha256, "device", 0);
+            let _ = self.index.queue_share_delete(
+                &share.origin,
+                &share.sha256,
+                "device",
+                0,
+                Some(&share.file_id),
+            );
         }
         if let (Some(share_id), Ok(keychain)) = (FileId::parse(&share.share_id), self.keychain()) {
             let _ = keychain.remove_file_key(&share_id);
@@ -569,9 +573,13 @@ impl Engine {
                 } else {
                     0
                 };
-                let _ = self
-                    .index
-                    .queue_delete(&old.origin, &old.sha256, "device", not_before);
+                let _ = self.index.queue_share_delete(
+                    &old.origin,
+                    &old.sha256,
+                    "device",
+                    not_before,
+                    Some(id),
+                );
                 if let (Some(old_id), Ok(keychain)) =
                     (FileId::parse(&old.share_id), self.keychain())
                 {

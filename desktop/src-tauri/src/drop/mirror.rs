@@ -233,6 +233,7 @@ impl Engine {
         match result {
             Ok(()) => {
                 let _ = self.index.set_online(id, online::OK);
+                let _ = self.index.add_online_copy(id, node.origin());
                 let _ = self.index.set_backoff(id, 0, 0);
                 if let Ok(mut rt) = self.online_rt.lock() {
                     rt.full = false;

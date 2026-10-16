@@ -1100,6 +1100,18 @@ scenario('drop window: the node window\'s "Save recovery key again" opens the re
   await done(page);
 });
 
+scenario('settings: changing node warns that live shares end', async () => {
+  const page = await settingsPage({}, '&status=shared');
+  await page.locator('#drop-node-change').click();
+  const confirm = page.locator('dialog.confirm[open]');
+  assert.deepEqual(await confirm.locator('p').allTextContents(), [
+    "Your files will be copied to the new node. Copies on storage.example aren't deleted.",
+    "You're sharing 2 files. Their shared copies on storage.example are deleted now, so their links stop working.",
+  ]);
+  await confirm.locator('button', { hasText: 'Cancel' }).click();
+  await done(page);
+});
+
 scenario('settings: not set up, unreachable, approval ending soon, events', async () => {
   let page = await settingsPage({}, '&status=no-online');
   await page.waitForFunction(() => document.querySelector('#drop-node-status').textContent === 'Not set up');

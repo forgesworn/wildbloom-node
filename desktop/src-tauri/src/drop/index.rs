@@ -95,6 +95,9 @@ pub struct PendingDelete {
     pub sha256: String,
     pub signer: String,
     pub not_before: u64,
+    /// The file a shared copy belonged to, so a copy only the node's owner can
+    /// remove is shown on that file's row.
+    pub file_id: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -103,7 +106,17 @@ pub enum IndexError {
     Sql(String),
     #[error("the Drop file index directory is not private")]
     Private,
+    /// An index written by another version of this app's schema.  Drop
+    /// refuses it rather than guessing at missing node origins.
+    #[error(
+        "the Drop file index has schema version {0}, but this app needs version {SCHEMA_VERSION}; move the drop folder in the app data directory aside to start again"
+    )]
+    Version(i64),
 }
+
+/// The schema this build reads and writes.  Version 1 (test builds only)
+/// lacked node origins on deletions and shares, so it is refused.
+pub const SCHEMA_VERSION: i64 = 2;
 
 impl From<rusqlite::Error> for IndexError {
     fn from(error: rusqlite::Error) -> Self {
@@ -157,7 +170,20 @@ CREATE TABLE IF NOT EXISTS deletes (
   sha256 TEXT NOT NULL,
   signer TEXT NOT NULL,
   not_before INTEGER NOT NULL DEFAULT 0,
+  file_id TEXT,
   PRIMARY KEY (node, sha256, signer)
+);
+CREATE TABLE IF NOT EXISTS online_copies (
+  file_id TEXT NOT NULL,
+  origin TEXT NOT NULL,
+  PRIMARY KEY (file_id, origin)
+);
+CREATE TABLE IF NOT EXISTS stranded (
+  file_id TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  origin TEXT NOT NULL,
+  at INTEGER NOT NULL,
+  PRIMARY KEY (file_id, sha256)
 );
 CREATE TABLE IF NOT EXISTS removed (
   id TEXT PRIMARY KEY,
@@ -173,7 +199,6 @@ CREATE TABLE IF NOT EXISTS kv (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-PRAGMA user_version = 1;
 ";
 
 const FILE_COLUMNS: &str = "id, name, media_type, bytes, added, plain_sha256, sha256, size, local, online, attempts, next_attempt, watch_path, watch_size, watch_mtime";
@@ -229,7 +254,23 @@ impl Index {
                 .map_err(|_| IndexError::Private)?;
         }
         db.execute_batch("PRAGMA journal_mode = DELETE; PRAGMA foreign_keys = ON;")?;
-        db.execute_batch(SCHEMA)?;
+        let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        match version {
+            0 => {
+                let tables: i64 = db.query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'",
+                    [],
+                    |r| r.get(0),
+                )?;
+                if tables > 0 {
+                    return Err(IndexError::Version(0));
+                }
+                db.execute_batch(SCHEMA)?;
+                db.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
+            }
+            SCHEMA_VERSION => db.execute_batch(SCHEMA)?,
+            other => return Err(IndexError::Version(other)),
+        }
         Ok(Self { db: Mutex::new(db) })
     }
 
@@ -407,6 +448,8 @@ impl Index {
     pub fn delete_file(&self, id: &str) -> Result<(), IndexError> {
         self.with(|db| {
             db.execute("DELETE FROM shares WHERE file_id = ?1", [id])?;
+            db.execute("DELETE FROM online_copies WHERE file_id = ?1", [id])?;
+            db.execute("DELETE FROM stranded WHERE file_id = ?1", [id])?;
             db.execute("DELETE FROM files WHERE id = ?1", [id])
                 .map(|_| ())
         })
@@ -494,20 +537,86 @@ impl Index {
         signer: &str,
         not_before: u64,
     ) -> Result<(), IndexError> {
+        self.queue_share_delete(node, sha256, signer, not_before, None)
+    }
+
+    /// As [`Self::queue_delete`], for a shared copy of `file_id`.
+    pub fn queue_share_delete(
+        &self,
+        node: &str,
+        sha256: &str,
+        signer: &str,
+        not_before: u64,
+        file_id: Option<&str>,
+    ) -> Result<(), IndexError> {
         self.with(|db| {
             db.execute(
-                "INSERT INTO deletes (node, sha256, signer, not_before) VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT(node, sha256, signer) DO UPDATE SET not_before = MIN(not_before, excluded.not_before)",
-                params![node, sha256, signer, int(not_before)],
+                "INSERT INTO deletes (node, sha256, signer, not_before, file_id) VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(node, sha256, signer) DO UPDATE SET not_before = MIN(not_before, excluded.not_before),
+                 file_id = COALESCE(excluded.file_id, file_id)",
+                params![node, sha256, signer, int(not_before), file_id],
             )
             .map(|_| ())
+        })
+    }
+
+    // ------------------------------------------------------ online copies
+
+    /// Records that this computer's device key holds a copy of `file_id` on
+    /// the online node at `origin`, so Remove reaches it after a node change.
+    pub fn add_online_copy(&self, file_id: &str, origin: &str) -> Result<(), IndexError> {
+        self.with(|db| {
+            db.execute(
+                "INSERT OR IGNORE INTO online_copies (file_id, origin) VALUES (?1, ?2)",
+                params![file_id, origin],
+            )
+            .map(|_| ())
+        })
+    }
+
+    pub fn online_copies(&self, file_id: &str) -> Result<Vec<String>, IndexError> {
+        self.with(|db| {
+            let mut statement =
+                db.prepare("SELECT origin FROM online_copies WHERE file_id = ?1 ORDER BY origin")?;
+            statement
+                .query_map([file_id], |r| r.get(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()
+        })
+    }
+
+    /// A shared copy of `file_id` that only the node's owner can now remove.
+    pub fn add_stranded(
+        &self,
+        file_id: &str,
+        sha256: &str,
+        origin: &str,
+        at: u64,
+    ) -> Result<(), IndexError> {
+        self.with(|db| {
+            db.execute(
+                "INSERT OR REPLACE INTO stranded (file_id, sha256, origin, at) VALUES (?1, ?2, ?3, ?4)",
+                params![file_id, sha256, origin, int(at)],
+            )
+            .map(|_| ())
+        })
+    }
+
+    /// When the newest stranded copy of `file_id` was marked, if any.
+    pub fn stranded_at(&self, file_id: &str) -> Result<Option<u64>, IndexError> {
+        self.with(|db| {
+            db.query_row(
+                "SELECT MAX(at) FROM stranded WHERE file_id = ?1",
+                [file_id],
+                |r| r.get::<_, Option<i64>>(0),
+            )
+            .map(|v| v.map(|v| v.max(0) as u64))
         })
     }
 
     pub fn pending_deletes(&self) -> Result<Vec<PendingDelete>, IndexError> {
         self.with(|db| {
             let mut statement =
-                db.prepare("SELECT node, sha256, signer, not_before FROM deletes")?;
+                db.prepare("SELECT node, sha256, signer, not_before, file_id FROM deletes")?;
             statement
                 .query_map([], |r| {
                     Ok(PendingDelete {
@@ -515,6 +624,7 @@ impl Index {
                         sha256: r.get(1)?,
                         signer: r.get(2)?,
                         not_before: r.get::<_, i64>(3)?.max(0) as u64,
+                        file_id: r.get(4)?,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()
@@ -592,6 +702,39 @@ impl Index {
 mod tests {
     use super::*;
 
+    #[test]
+    fn older_schemas_are_refused_and_new_ones_versioned() {
+        let dir = tempfile::tempdir().unwrap();
+        let drop = dir.path().join("drop");
+        drop_index_at(&drop);
+        let db = Connection::open(drop.join("drop-index.sqlite")).unwrap();
+        let version: i64 = db
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        db.execute_batch("PRAGMA user_version = 1;").unwrap();
+        drop_connection(db);
+        assert!(matches!(Index::open(&drop), Err(IndexError::Version(1))));
+        // Tables without a version are not silently adopted either.
+        let bare = dir.path().join("bare");
+        wildbloom_private_state::private_directory(&bare).unwrap();
+        Connection::open(bare.join("drop-index.sqlite"))
+            .unwrap()
+            .execute_batch("CREATE TABLE files (id TEXT);")
+            .unwrap();
+        assert!(matches!(Index::open(&bare), Err(IndexError::Version(0))));
+    }
+
+    fn drop_index_at(dir: &Path) {
+        Index::open(dir).unwrap();
+        // Reopening a current index is fine.
+        Index::open(dir).unwrap();
+    }
+
+    fn drop_connection(db: Connection) {
+        drop(db);
+    }
+
     fn record(id: &str) -> FileRecord {
         FileRecord {
             id: id.into(),
@@ -657,6 +800,11 @@ mod tests {
         let deletes = index.pending_deletes().unwrap();
         assert_eq!(deletes.len(), 1);
         assert_eq!((deletes[0].node.as_str(), deletes[0].not_before), (node, 9));
+        index.add_online_copy("a", node).unwrap();
+        index.add_online_copy("a", node).unwrap();
+        assert_eq!(index.online_copies("a").unwrap(), vec![node.to_string()]);
+        index.add_stranded("a", &"ee".repeat(32), node, 77).unwrap();
+        assert_eq!(index.stranded_at("a").unwrap(), Some(77));
         index.add_tombstone("b", 5).unwrap();
         index.add_tombstone("b", 3).unwrap();
         assert_eq!(index.tombstones().unwrap(), vec![("b".to_string(), 5)]);
@@ -672,6 +820,8 @@ mod tests {
 
         index.delete_file("a").unwrap();
         assert!(index.file("a").unwrap().is_none());
+        assert!(index.online_copies("a").unwrap().is_empty());
+        assert_eq!(index.stranded_at("a").unwrap(), None);
         assert!(index.share("a").unwrap().is_none());
 
         #[cfg(unix)]
