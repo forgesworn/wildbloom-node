@@ -33,7 +33,7 @@ const results = [];
 const AXE_TAGS = ['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa'];
 const NPUB_SHORT = 'npub1q8…7xk2';
 
-async function open(url, { os = 'mac', desktop = '', scheme = 'light', width = 400, height = 600, reduced = false, clock = 'fixed', contrast, forced } = {}) {
+async function open(url, { os = 'mac', desktop = '', scheme = 'light', width = 400, height = 600, reduced = false, clock = 'fixed', contrast, forced, font } = {}) {
   const context = await browser.newContext({ viewport: { width, height }, colorScheme: scheme, reducedMotion: reduced ? 'reduce' : 'no-preference', forcedColors: forced ? 'active' : 'none', contrast: contrast || 'no-preference', timezoneId: 'Europe/London', locale: 'en-GB' });
   const page = await context.newPage();
   const label = url.replace(/^.*\/(ui|tests)\//, '');
@@ -44,6 +44,16 @@ async function open(url, { os = 'mac', desktop = '', scheme = 'light', width = 4
   if (clock === 'fixed') await page.clock.setFixedTime(FIXED);
   else if (clock === 'install') await page.clock.install({ time: FIXED });
   await context.addInitScript({ path: stubPath });
+  // `font: 'wide'` swaps in wide sans metrics (Verdana or DejaVu Sans, the
+  // usual Linux default), so layout checks hold whatever the system font.
+  // The rule rides in the page's own stylesheets, so it applies from first paint.
+  if (font === 'wide' || process.env.DROP_UI_WIDE_FONT) {
+    const wide = await readFile(path.join(root, 'tests/wide-font.css'), 'utf8');
+    await context.route(/\/ui\/(drop|style)\.css$/, async (route) => {
+      const response = await route.fetch();
+      await route.fulfill({ response, body: `${await response.text()}\n${wide}` });
+    });
+  }
   const separator = url.includes('?') ? '&' : '?';
   await page.goto(`${url}${separator}os=${os}${desktop ? `&desktop=${desktop}` : ''}`);
   return page;
@@ -124,6 +134,25 @@ const EXPECTED_ROWS = {
   f18: { status: '2 copies · only your online node’s owner can remove the shared copy now', share: true, menu: ['Share…', 'Save a Copy…', 'Remove…'] },
 };
 
+scenario('rows: long names fit two lines with wide sans metrics too', async () => {
+  const page = await drop('all-states', { font: 'wide' });
+  await ready(page);
+  for (const [width, height] of [[400, 600], [340, 420]]) {
+    await page.setViewportSize({ width, height });
+    await page.waitForTimeout(150);
+    const fit = await page.evaluate(() => {
+      const heading = [...document.querySelectorAll('li.row h3')].find((node) => node.getAttribute('title').startsWith('holiday-photos'));
+      const lineHeight = parseFloat(getComputedStyle(heading).lineHeight);
+      return { text: heading.textContent, font: getComputedStyle(heading).fontFamily, lines: Math.round(heading.getBoundingClientRect().height / lineHeight), scroll: heading.scrollHeight, client: heading.clientHeight };
+    });
+    assert.match(fit.font, /^Verdana/, 'the wide font applied');
+    assert.ok(fit.lines <= 2, `long name takes ${fit.lines} lines at ${width} with wide metrics`);
+    assert.ok(fit.scroll <= fit.client + 1, 'nothing is clipped');
+    assert.match(fit.text, /^holiday-photos.*….*\.zip$/, `start and extension stay visible at ${width}: ${fit.text}`);
+  }
+  await done(page);
+});
+
 scenario('rows: every state shows the exact copy, actions and menu items (macOS casing)', async () => {
   const page = await drop('all-states');
   await ready(page);
@@ -173,7 +202,11 @@ scenario('rows: every state shows the exact copy, actions and menu items (macOS 
     assert.match(fit.text, /^holiday-photos.*….*final-version-2026\.zip$|^holiday-photos.*….*\.zip$/, `extension stays visible at ${width}: ${fit.text}`);
   }
   await page.setViewportSize({ width: 400, height: 600 });
-  assert.equal(await page.locator('li.row h3', { hasText: '<img src=x onerror=alert(1)>.pdf' }).count(), 1);
+  // The hostile name is text (its full form in the title; the visible text
+  // may be middle-truncated, depending on the system font).
+  const hostile = await page.evaluate(() => [...document.querySelectorAll('li.row h3')].filter((h) => h.getAttribute('title') === '<img src=x onerror=alert(1)>.pdf').map((h) => h.textContent));
+  assert.equal(hostile.length, 1);
+  assert.match(hostile[0], /^<img src=x.*\.pdf$/);
   assert.equal(await page.evaluate(() => window.__stub.windows.length), 0);
   await done(page);
 });
@@ -757,15 +790,32 @@ scenario('share sheet: countdown and 2 minute and 1 minute announcements (fake c
   await done(page);
 });
 
-scenario('share sheet: button order follows the platform', async () => {
-  for (const [os, desktop, first] of [['mac', '', "They don't match"], ['linux', 'gnome', "They don't match"], ['windows', '', 'They match, send file'], ['linux', 'kde', 'They match, send file']]) {
-    const page = await drop('list', { os, desktop });
-    await ready(page);
-    await openShare(page, { state: 'check', link: LINK, words: WORDS, checkWords: ['apple', 'river', 'stone'], expiresAt: nowSeconds + 500 });
-    const rects = await page.evaluate(() => [...document.querySelectorAll('dialog .dialog-actions button')].map((b) => ({ t: b.textContent, x: b.getBoundingClientRect().left })).sort((a, b) => a.x - b.x));
-    assert.equal(rects[0].t, first, `${os} ${desktop}: leftmost button`);
-    assert.equal(rects[1].t === 'They match, send file', first === "They don't match", `${os} ${desktop}: primary side`);
-    await done(page);
+scenario('share sheet: button order follows the platform, and stacks primary first when it must', async () => {
+  // Default system font and wide sans metrics (the usual Linux default), at
+  // the default and the narrowest window: side by side the order follows the
+  // platform; stacked, the primary action is on top.
+  for (const font of [undefined, 'wide']) {
+    for (const width of [400, 340]) {
+      for (const [os, desktop, first] of [['mac', '', "They don't match"], ['linux', 'gnome', "They don't match"], ['windows', '', 'They match, send file'], ['linux', 'kde', 'They match, send file']]) {
+        const label = `${os} ${desktop} ${font || 'system'} font at ${width}`;
+        const page = await drop('list', { os, desktop, font, width, height: 640 });
+        await ready(page);
+        await openShare(page, { state: 'check', link: LINK, words: WORDS, checkWords: ['apple', 'river', 'stone'], expiresAt: nowSeconds + 500 });
+        const rects = await page.evaluate(() => [...document.querySelectorAll('dialog .dialog-actions button')].map((b) => { const r = b.getBoundingClientRect(); return { t: b.textContent, x: r.left, y: r.top, right: r.right }; }));
+        assert.equal(rects.length, 2, label);
+        const primary = rects.find((r) => r.t === 'They match, send file');
+        const secondary = rects.find((r) => r.t === "They don't match");
+        const viewport = await page.evaluate(() => document.documentElement.clientWidth);
+        assert.ok(rects.every((r) => r.x >= 0 && r.right <= viewport + 0.5), `${label}: buttons inside the window`);
+        if (Math.abs(primary.y - secondary.y) < 2) {
+          const leftmost = [...rects].sort((a, b) => a.x - b.x)[0].t;
+          assert.equal(leftmost, first, `${label}: leftmost button`);
+        } else {
+          assert.ok(primary.y < secondary.y, `${label}: stacked with the primary action on top`);
+        }
+        await done(page);
+      }
+    }
   }
 });
 

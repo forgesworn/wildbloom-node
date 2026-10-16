@@ -427,8 +427,12 @@ dialog.drop-scope.confirm[open] { display: grid; gap: 16px; }
 dialog.drop-scope.confirm::backdrop { background: var(--scrim); }
 dialog.drop-scope.flow-sheet { width: min(32rem, calc(100% - 32px)); max-height: calc(100% - 32px); border: 1px solid var(--field-border); border-radius: 8px; overflow-y: auto; }
 dialog.drop-scope.flow-sheet .flow { padding: 24px; }
-.dialog-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
-html[data-button-order="primary-left"] .dialog-actions { justify-content: flex-start; }
+/* Side by side in the platform's order.  When they do not fit (a narrow
+   window, a wide system font or large text), they stack with the primary
+   action on top: wrap-reverse lifts the later (primary) button for the
+   primary-right order; primary-left already has the primary first. */
+.dialog-actions { display: flex; flex-wrap: wrap-reverse; gap: 8px; justify-content: flex-end; }
+html[data-button-order="primary-left"] .dialog-actions { flex-wrap: wrap; justify-content: flex-start; }
 
 /* Share sheet */
 .share-step { display: grid; gap: 8px; }

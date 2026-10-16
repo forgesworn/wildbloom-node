@@ -96,8 +96,12 @@
     if (name.length <= max) return name;
     const dot = name.lastIndexOf('.');
     const ext = dot > 0 && name.length - dot <= 8 ? name.slice(dot) : '';
-    const tail = Math.max(ext.length + 12, 24);
-    const head = Math.max(max - tail - 1, 16);
+    // A long tail when there is room (the end of a name often tells versions
+    // apart), giving way as the space shrinks, so a wide font or a narrow
+    // window can always fit the name in two lines.  The extension stays.
+    const budget = Math.max(max - 1, ext.length + 2);
+    const tail = Math.min(Math.max(ext.length + 12, 24), Math.max(ext.length + 1, Math.floor(budget * 0.4)));
+    const head = Math.max(budget - tail, 1);
     return `${name.slice(0, head)}…${name.slice(name.length - tail)}`;
   }
   const hostOf = (url) => {
@@ -1082,6 +1086,10 @@
   }
   let fitWidth = 0;
   function watchWidth() {
+    // Names are fitted to the rendered font, so fit again once fonts settle.
+    document.fonts?.ready.then(() => fitNames());
+    document.fonts?.addEventListener?.('loadingdone', () => fitNames());
+    window.addEventListener('load', () => fitNames());
     if (!window.ResizeObserver) return;
     new ResizeObserver(() => {
       const width = el.files.clientWidth;
