@@ -407,17 +407,29 @@ fn file_key_entries(store: &MemoryStore) -> usize {
         .count()
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "needs WILDBLOOM_E2E_BIN_DIR with wildbloomd-local, wildbloomd-grants and foregather-server"]
-async fn drop_end_to_end() {
+/// The loopback services every journey needs.
+struct Services {
+    bin: PathBuf,
+    _work: tempfile::TempDir,
+    work_path: PathBuf,
+    bunker: String,
+    counts: Counts,
+    relay_api: String,
+    fg_port: u16,
+    online_url: String,
+    online: NodeEndpoint,
+    http: reqwest::Client,
+    _procs: Vec<Proc>,
+}
+
+async fn services() -> Option<Services> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let Some(bin) = std::env::var_os("WILDBLOOM_E2E_BIN_DIR").map(PathBuf::from) else {
         eprintln!("skipped: WILDBLOOM_E2E_BIN_DIR is not set");
-        return;
+        return None;
     };
     let work = tempfile::tempdir().unwrap();
     let work_path = work.path().to_path_buf();
-    let report = |step: &str| eprintln!("e2e: {step}");
 
     // Synthetic owner and signer keys, the Nostr relay and the NIP-46 signer.
     let owner = Keys::generate();
@@ -442,7 +454,7 @@ async fn drop_end_to_end() {
     // The Foregather live relay and the online node with the issuer.
     let fg_port = free_port();
     let operator_token = URL_SAFE_NO_PAD.encode(rand_bytes());
-    let _foregather = Proc(
+    let foregather = Proc(
         Command::new(bin.join("foregather-server"))
             .env("FOREGATHER_CREATE_TOKEN", &operator_token)
             .env("FOREGATHER_DB", work_path.join("foregather.sqlite"))
@@ -459,7 +471,7 @@ async fn drop_end_to_end() {
     super::engine::write_private_file(&token_file, operator_token.as_bytes()).unwrap();
     let online_port = free_port();
     let online_url = format!("http://localhost:{online_port}/");
-    let _online = Proc(
+    let online_node = Proc(
         Command::new(bin.join("wildbloomd-grants"))
             .args([
                 "--no-tor",
@@ -489,35 +501,89 @@ async fn drop_end_to_end() {
     let online = NodeEndpoint::parse(&online_url, true).unwrap();
     let http = reqwest::Client::new();
 
-    // ---------------------------------------------------- first run (D1-D3)
-    let watch_dir = work_path.join("home/Wildbloom");
+    Some(Services {
+        bin,
+        _work: work,
+        work_path,
+        bunker,
+        counts,
+        relay_api,
+        fg_port,
+        online_url,
+        online,
+        http,
+        _procs: vec![foregather, online_node],
+    })
+}
+
+/// A first-run engine, approved through the synthetic signer, with its
+/// recovery key confirmed.  Returns the engine, host, store and recovery key.
+async fn approved_engine(
+    svc: &Services,
+    name: &'static str,
+    watch_dir: &Path,
+) -> (Arc<Engine>, Arc<TestHost>, Arc<MemoryStore>, String) {
     let store = Arc::new(MemoryStore::default());
     let host = Arc::new(TestHost {
-        bin: bin.clone(),
-        work: work_path.clone(),
-        name: "first",
+        bin: svc.bin.clone(),
+        work: svc.work_path.clone(),
+        name,
         engine: OnceLock::new(),
         local: Mutex::new(None),
         shares: Mutex::new(Vec::new()),
         settings: Mutex::new(false),
     });
-    let engine = engine_for(&host, &store, &relay_api, &watch_dir);
+    let engine = engine_for(&host, &store, &svc.relay_api, watch_dir);
     assert_eq!(engine.first_run().unwrap().step, "node");
-    let check = engine.check_online_node(&online_url).await.unwrap();
+    let check = engine.check_online_node(&svc.online_url).await.unwrap();
     assert!(check.ok && check.limit_bytes > 0);
-    engine.set_online_node(Some(&online_url)).await.unwrap();
+    engine.set_online_node(Some(&svc.online_url)).await.unwrap();
     assert_eq!(engine.first_run().unwrap().step, "approve");
     assert!(
         host.local_node().endpoint.is_some(),
         "Q10 started the local node"
     );
-    approve(&engine, &bunker).await;
+    approve(&engine, &svc.bunker).await;
     assert_eq!(engine.first_run().unwrap().step, "recovery");
-    let signer_requests_after_approval = counts.total.load(Ordering::SeqCst);
-    assert_eq!(counts.sign.load(Ordering::SeqCst), 1, "one signature");
     let recovery_key = engine.recovery_key_for_display().unwrap().key.clone();
     engine.confirm_recovery_saved().unwrap();
     assert!(engine.first_run().is_none());
+    (engine, host, store, recovery_key)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs WILDBLOOM_E2E_BIN_DIR with wildbloomd-local, wildbloomd-grants and foregather-server"]
+async fn drop_end_to_end() {
+    let Some(svc) = services().await else {
+        return;
+    };
+    let Services {
+        bin,
+        work_path,
+        bunker,
+        counts,
+        relay_api,
+        online_url,
+        online,
+        http,
+        ..
+    } = &svc;
+    let (bin, work_path, bunker, relay_api, online_url, online, http) = (
+        bin.clone(),
+        work_path.clone(),
+        bunker.clone(),
+        relay_api.clone(),
+        online_url.clone(),
+        online.clone(),
+        http.clone(),
+    );
+    let report = |step: &str| eprintln!("e2e: {step}");
+
+    // ---------------------------------------------------- first run (D1-D3)
+    let watch_dir = work_path.join("home/Wildbloom");
+    let (engine, host, store, recovery_key) = approved_engine(&svc, "first", &watch_dir).await;
+    let signer_requests_after_approval = counts.total.load(Ordering::SeqCst);
+    assert_eq!(counts.sign.load(Ordering::SeqCst), 1, "one signature");
     report(&format!(
         "approved with {} signer requests ({} signature)",
         signer_requests_after_approval,
@@ -900,4 +966,107 @@ async fn drop_end_to_end() {
     assert_eq!(file_key_entries(&store2), 1);
     assert!(!engine2.status().recovery.confirmed);
     report("restore on a fresh app data dir recovered the file from the key list");
+}
+
+/// Waits for a JSON file the browser driver writes into the hand-off folder.
+async fn handoff_file(dir: &Path, name: &str, seconds: u64) -> Value {
+    let path = dir.join(name);
+    until(name, seconds, || {
+        std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+    })
+    .await
+}
+
+/// The owner side of a share to the real recipient page, driven in Chromium
+/// by `desktop/tests/drop-get-journey.mjs`.  The two talk through files in
+/// `WILDBLOOM_E2E_HANDOFF`: this test writes `share.json` (the link and words
+/// the owner would send and read out) and checks what the page saw.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs WILDBLOOM_E2E_BIN_DIR, WILDBLOOM_E2E_HANDOFF and the browser driver"]
+async fn drop_share_to_the_get_page() {
+    let Some(handoff) = std::env::var_os("WILDBLOOM_E2E_HANDOFF").map(PathBuf::from) else {
+        eprintln!("skipped: WILDBLOOM_E2E_HANDOFF is not set");
+        return;
+    };
+    let Some(svc) = services().await else {
+        return;
+    };
+    let watch_dir = svc.work_path.join("home/Wildbloom");
+    let (engine, host, _store, _key) = approved_engine(&svc, "get", &watch_dir).await;
+    let source = svc.work_path.join("Quarterly report.pdf");
+    let plain: Vec<u8> = (0..1_500_000u32).map(|i| (i * 13 + 5) as u8).collect();
+    std::fs::write(&source, &plain).unwrap();
+    let id = engine.add_paths(vec![source], None).await.unwrap().added[0].clone();
+    let check_engine = engine.clone();
+    until("2 copies", 60, || {
+        row(&check_engine, &id).filter(|r| r.state == "two_copies")
+    })
+    .await;
+    engine.share_start(&id, false).unwrap();
+    let ready = until("share link", 60, || {
+        host.shares
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|s| s.state == "ready")
+            .cloned()
+    })
+    .await;
+    let expected = super::hex_lower(&<sha2::Sha256 as sha2::Digest>::digest(&plain));
+    std::fs::write(
+        handoff.join("share.json"),
+        serde_json::json!({
+            "link": ready.link,
+            "words": ready.words.clone().unwrap().join(" "),
+            "relayUpstream": format!("http://127.0.0.1:{}", svc.fg_port),
+            "name": "Quarterly report.pdf",
+            "bytes": plain.len(),
+        })
+        .to_string(),
+    )
+    .unwrap();
+    eprintln!("e2e-get: link and words handed to the browser driver");
+    let check = until("check words", 120, || {
+        host.shares
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|s| s.state == "check")
+            .cloned()
+    })
+    .await;
+    let seen = handoff_file(&handoff, "recipient-words.json", 60).await;
+    assert_eq!(
+        seen["words"].as_str().unwrap(),
+        check.check_words.clone().unwrap().join(" "),
+        "the page and the owner show the same three words"
+    );
+    engine.share_verify(&id, true).unwrap();
+    until("sent", 60, || {
+        host.shares
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|s| s.state == "sent")
+            .cloned()
+    })
+    .await;
+    eprintln!("e2e-get: receipt received from the page");
+    let downloaded = handoff_file(&handoff, "downloaded.json", 120).await;
+    assert_eq!(downloaded["sha256"].as_str().unwrap(), expected);
+    assert_eq!(downloaded["bytes"].as_u64().unwrap(), plain.len() as u64);
+    assert_eq!(downloaded["name"].as_str().unwrap(), "Quarterly report.pdf");
+    eprintln!("e2e-get: the page saved the exact bytes");
+    let share = engine.index.share(&id).unwrap().unwrap();
+    engine.stop_sharing(&id).await.unwrap();
+    assert_eq!(
+        client::head(&svc.http, &svc.online, &share.sha256)
+            .await
+            .unwrap(),
+        None
+    );
+    std::fs::write(handoff.join("stopped.json"), "{}").unwrap();
+    eprintln!("e2e-get: stop sharing deleted the shared copy");
 }
