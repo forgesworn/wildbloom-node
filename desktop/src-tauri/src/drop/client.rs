@@ -159,8 +159,49 @@ fn is_tls(error: &reqwest::Error) -> bool {
     false
 }
 
-/// The longest a node may go without sending a byte of a response.
+/// The longest a node may go without sending a byte: the wait for response
+/// headers on reads, and the gap between body chunks on every transfer.  It
+/// is applied per chunk, never across a whole request, so a slow but steady
+/// transfer always completes.  (A client-wide reqwest read timeout is not
+/// used: it starts at send and an upload's progress does not reset it.)
 pub const READ_TIMEOUT: Duration = Duration::from_secs(60);
+
+static STALL_MS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(READ_TIMEOUT.as_millis() as u64);
+
+fn stall() -> Duration {
+    Duration::from_millis(STALL_MS.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Tests shorten the stall timeout to exercise it.
+#[cfg(test)]
+pub(crate) fn set_stall_for_tests(timeout: Duration) {
+    STALL_MS.store(
+        timeout.as_millis() as u64,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
+/// Sends a read request, waiting at most the stall timeout for its headers.
+async fn send_read(request: reqwest::RequestBuilder) -> Result<reqwest::Response, NodeError> {
+    match tokio::time::timeout(stall(), request.send()).await {
+        Err(_) => Err(NodeError::Unreachable),
+        Ok(result) => result.map_err(|e| NodeError::from_reqwest(&e)),
+    }
+}
+
+/// The next body chunk, or `Unreachable` if none arrives within the stall
+/// timeout.
+async fn next_chunk<S>(stream: &mut S) -> Result<Option<bytes::Bytes>, NodeError>
+where
+    S: futures_util::Stream<Item = reqwest::Result<bytes::Bytes>> + Unpin,
+{
+    match tokio::time::timeout(stall(), stream.next()).await {
+        Err(_) | Ok(Some(Err(_))) => Err(NodeError::Unreachable),
+        Ok(None) => Ok(None),
+        Ok(Some(Ok(chunk))) => Ok(Some(chunk)),
+    }
+}
 
 /// How long an upload of `size` bytes may take in all: ten minutes plus one
 /// second per 16 KiB, so a stalled receiver cannot hold a body open forever.
@@ -176,9 +217,6 @@ pub fn http_client() -> Client {
         .redirect(reqwest::redirect::Policy::none())
         .referer(false)
         .connect_timeout(Duration::from_secs(10))
-        // Every read (headers and each body chunk) must make progress: a node
-        // that stops sending fails the transfer instead of holding it open.
-        .read_timeout(READ_TIMEOUT)
         .user_agent(concat!("wildbloom-drop/", env!("CARGO_PKG_VERSION")))
         .build()
         .expect("the HTTP client configuration is static")
@@ -279,9 +317,8 @@ async fn read_bounded(response: reqwest::Response, max: usize) -> Result<Vec<u8>
         return Err(NodeError::Invalid);
     }
     let mut out = Vec::new();
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|_| NodeError::Unreachable)?;
+    let mut stream = Box::pin(response.bytes_stream());
+    while let Some(chunk) = next_chunk(&mut stream).await? {
         if out.len() + chunk.len() > max {
             return Err(NodeError::Invalid);
         }
@@ -423,11 +460,7 @@ pub async fn download_to_file(
     dest: &Path,
     progress: &mut (dyn FnMut(u64) + Send),
 ) -> Result<(), NodeError> {
-    let response = http
-        .get(node.url(sha256))
-        .send()
-        .await
-        .map_err(|e| NodeError::from_reqwest(&e))?;
+    let response = send_read(http.get(node.url(sha256))).await?;
     if response.status() != StatusCode::OK {
         return Err(NodeError::from_status(response.status()));
     }
@@ -442,9 +475,8 @@ pub async fn download_to_file(
         .map_err(|_| NodeError::Io)?;
     let mut hasher = Sha256::new();
     let mut received = 0u64;
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|_| NodeError::Unreachable)?;
+    let mut stream = Box::pin(response.bytes_stream());
+    while let Some(chunk) = next_chunk(&mut stream).await? {
         received += chunk.len() as u64;
         if received > size {
             return Err(NodeError::Mismatch);
@@ -468,12 +500,7 @@ pub async fn download_bytes(
     sha256: &str,
     max: usize,
 ) -> Result<Vec<u8>, NodeError> {
-    let response = http
-        .get(node.url(sha256))
-        .timeout(Duration::from_secs(60))
-        .send()
-        .await
-        .map_err(|e| NodeError::from_reqwest(&e))?;
+    let response = send_read(http.get(node.url(sha256))).await?;
     if response.status() != StatusCode::OK {
         return Err(NodeError::from_status(response.status()));
     }
@@ -513,24 +540,36 @@ pub async fn relay_body(
     size: u64,
     mut progress: impl FnMut(u64) + Send + 'static,
 ) -> Result<Body, NodeError> {
-    let response = http
-        .get(from.url(sha256))
-        .send()
-        .await
-        .map_err(|e| NodeError::from_reqwest(&e))?;
+    let response = send_read(http.get(from.url(sha256))).await?;
     if response.status() != StatusCode::OK {
         return Err(NodeError::from_status(response.status()));
     }
     if response.content_length().is_some_and(|n| n != size) {
         return Err(NodeError::Mismatch);
     }
-    let mut sent = 0u64;
-    let stream = response.bytes_stream().map(move |chunk| {
-        if let Ok(bytes) = &chunk {
-            sent += bytes.len() as u64;
-            progress(sent);
+    // A source that stops sending ends the upload (each chunk must arrive
+    // within the stall timeout); a steady one may take as long as it needs.
+    let source = Box::pin(response.bytes_stream());
+    let stream = futures_util::stream::unfold(Some((source, 0u64)), |state| async move {
+        let (mut source, sent) = state?;
+        match next_chunk(&mut source).await {
+            Ok(None) => None,
+            Ok(Some(chunk)) => {
+                let sent = sent + chunk.len() as u64;
+                Some(((Ok(chunk), sent), Some((source, sent))))
+            }
+            Err(_) => Some((
+                (
+                    Err(std::io::Error::from(std::io::ErrorKind::TimedOut)),
+                    sent,
+                ),
+                None,
+            )),
         }
-        chunk
+    })
+    .map(move |(item, sent): (std::io::Result<bytes::Bytes>, u64)| {
+        progress(sent);
+        item
     });
     Ok(Body::wrap_stream(stream))
 }
@@ -542,7 +581,7 @@ fn tokio_stream_from(
         use tokio::io::AsyncReadExt as _;
         let mut file = state?;
         let mut buffer = vec![0u8; 256 * 1024];
-        let read = tokio::time::timeout(READ_TIMEOUT, file.read(&mut buffer))
+        let read = tokio::time::timeout(stall(), file.read(&mut buffer))
             .await
             .unwrap_or_else(|_| Err(std::io::Error::from(std::io::ErrorKind::TimedOut)));
         match read {
@@ -756,6 +795,176 @@ mod tests {
             BLOSSOM_AUTH_LIFETIME
         );
         assert!(!event.content.trim().is_empty());
+    }
+
+    // ------------------------------------------------ stall regression tests
+
+    use tokio::io::AsyncReadExt as _;
+
+    /// The stall timeout the transfer tests use.
+    const STALL: Duration = Duration::from_millis(400);
+
+    /// Reads one HTTP/1.1 request head and its `Content-Length` body.
+    async fn read_request(socket: &mut tokio::net::TcpStream) -> usize {
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") {
+            socket.read_exact(&mut byte).await.unwrap();
+            head.push(byte[0]);
+        }
+        let head = String::from_utf8_lossy(&head).to_ascii_lowercase();
+        let length = head
+            .lines()
+            .find_map(|l| l.strip_prefix("content-length:"))
+            .map_or(0, |v| v.trim().parse().unwrap());
+        let mut body = vec![0u8; length];
+        socket.read_exact(&mut body).await.unwrap();
+        length
+    }
+
+    /// A one-request server; `serve` writes the response.
+    async fn server<F, Fut>(serve: F) -> NodeEndpoint
+    where
+        F: FnOnce(tokio::net::TcpStream) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send,
+    {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            serve(socket).await;
+        });
+        NodeEndpoint::parse(&format!("http://127.0.0.1:{port}/"), true).unwrap()
+    }
+
+    /// `n` chunks of `size` bytes, one every `every`.
+    fn steady(n: u32, size: usize, every: Duration) -> Body {
+        Body::wrap_stream(futures_util::stream::unfold(0u32, move |i| async move {
+            if i >= n {
+                return None;
+            }
+            tokio::time::sleep(every).await;
+            Some((
+                Ok::<_, std::io::Error>(bytes::Bytes::from(vec![b'x'; size])),
+                i + 1,
+            ))
+        }))
+    }
+
+    #[tokio::test]
+    async fn a_steady_upload_longer_than_the_stall_timeout_succeeds() {
+        set_stall_for_tests(STALL);
+        let node = server(|mut socket| async move {
+            assert_eq!(read_request(&mut socket).await, 8 * 1024);
+            socket
+                .write_all(b"HTTP/1.1 201 Created\r\ncontent-length: 0\r\n\r\n")
+                .await
+                .unwrap();
+        })
+        .await;
+        // Eight chunks 250 ms apart: two seconds in all, five stall timeouts.
+        let started = std::time::Instant::now();
+        let result = upload(
+            &http_client(),
+            &node,
+            &Keys::generate(),
+            &"ab".repeat(32),
+            8 * 1024,
+            steady(8, 1024, Duration::from_millis(250)),
+        )
+        .await;
+        assert_eq!(result, Ok(()));
+        assert!(started.elapsed() > STALL * 4);
+    }
+
+    #[tokio::test]
+    async fn a_steady_download_longer_than_the_stall_timeout_succeeds() {
+        set_stall_for_tests(STALL);
+        let chunk = vec![b'y'; 1000];
+        let sha = crate::drop::hex_lower(&Sha256::digest(chunk.repeat(6)));
+        let node = server(move |mut socket| async move {
+            read_request(&mut socket).await;
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 6000\r\n\r\n")
+                .await
+                .unwrap();
+            for _ in 0..6 {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                socket.write_all(&chunk).await.unwrap();
+            }
+        })
+        .await;
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("blob");
+        std::fs::write(&dest, b"").unwrap();
+        let result = download_to_file(&http_client(), &node, &sha, 6000, &dest, &mut |_| {}).await;
+        assert_eq!(result, Ok(()));
+        assert_eq!(std::fs::metadata(&dest).unwrap().len(), 6000);
+    }
+
+    #[tokio::test]
+    async fn a_stalled_download_fails_within_the_stall_timeout() {
+        set_stall_for_tests(STALL);
+        let node = server(|mut socket| async move {
+            read_request(&mut socket).await;
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 6000\r\n\r\nyyyy")
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        })
+        .await;
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("blob");
+        std::fs::write(&dest, b"").unwrap();
+        let started = std::time::Instant::now();
+        let result = download_to_file(
+            &http_client(),
+            &node,
+            &"ab".repeat(32),
+            6000,
+            &dest,
+            &mut |_| {},
+        )
+        .await;
+        assert_eq!(result, Err(NodeError::Unreachable));
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[tokio::test]
+    async fn a_stalled_relay_source_fails_the_upload() {
+        set_stall_for_tests(STALL);
+        let source = server(|mut socket| async move {
+            read_request(&mut socket).await;
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 6000\r\n\r\nzzzz")
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        })
+        .await;
+        // The destination reads whatever arrives and never answers early.
+        let destination = server(|mut socket| async move {
+            let mut sink = vec![0u8; 65_536];
+            while socket.read(&mut sink).await.is_ok_and(|n| n > 0) {}
+        })
+        .await;
+        let http = http_client();
+        let started = std::time::Instant::now();
+        let body = relay_body(&http, &source, &"ab".repeat(32), 6000, |_| {})
+            .await
+            .unwrap();
+        let result = upload(
+            &http,
+            &destination,
+            &Keys::generate(),
+            &"ab".repeat(32),
+            6000,
+            body,
+        )
+        .await;
+        assert!(result.is_err(), "{result:?}");
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     #[test]
