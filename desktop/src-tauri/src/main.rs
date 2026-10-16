@@ -960,6 +960,16 @@ fn restore_drop_window(app: &AppHandle) {
     let _ = window.set_position(tauri::PhysicalPosition::new(geometry.x, geometry.y));
 }
 
+/// The Drop window's canvas colour for the system theme (section 10), so
+/// the window never flashes the wrong theme before the page paints.
+fn paint_drop_background(window: &tauri::WebviewWindow, theme: tauri::Theme) {
+    let color = match theme {
+        tauri::Theme::Dark => tauri::window::Color(0x09, 0x0d, 0x0a, 0xff),
+        _ => tauri::window::Color(0xf4, 0xf3, 0xeb, 0xff),
+    };
+    let _ = window.set_background_color(Some(color));
+}
+
 fn title_case(mac: &'static str, other: &'static str) -> &'static str {
     if cfg!(target_os = "macos") {
         mac
@@ -1377,6 +1387,11 @@ fn main() {
                     let _ = app.emit_to(DROP_WINDOW, "drop://drag-info", info);
                 }
             }
+            WindowEvent::ThemeChanged(theme) if window.label() == DROP_WINDOW => {
+                if let Some(webview) = window.app_handle().get_webview_window(DROP_WINDOW) {
+                    paint_drop_background(&webview, *theme);
+                }
+            }
             WindowEvent::Focused(false) if window.label() == DROP_WINDOW => {
                 remember_drop_window(window.app_handle());
             }
@@ -1386,6 +1401,10 @@ fn main() {
             build_tray(app)?;
             build_app_menu(app)?;
             restore_drop_window(app.handle());
+            if let Some(window) = app.get_webview_window(DROP_WINDOW) {
+                let theme = window.theme().unwrap_or(tauri::Theme::Light);
+                paint_drop_background(&window, theme);
+            }
             #[cfg(feature = "native-acceptance")]
             acceptance::start(app.handle().clone());
             tauri::async_runtime::spawn(pools::load(app.handle().clone(), app.state::<Arc<pools::PoolManager>>().inner().clone()));
