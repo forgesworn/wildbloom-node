@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en-GB" class="drop-scope" data-os="" data-desktop="">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'"
+    />
+    <meta name="color-scheme" content="light dark" />
+    <title>Wildbloom Drop</title>
+    <link rel="stylesheet" href="drop.css" />
+  </head>
+  <body class="drop-body">
+    <div id="drop-app">
+      <header id="drop-header">
+        <div class="col status-bar">
+          <p id="status-line" class="status-line" role="status">
+            <span id="status-icon" class="icon-slot" aria-hidden="true"></span>
+            <span id="status-text"></span>
+          </p>
+          <button id="status-action" class="btn quiet" type="button" hidden></button>
+        </div>
+      </header>
+
+      <main id="drop-main">
+        <h1 class="sr-only">Wildbloom Drop</h1>
+
+        <div id="view-first" class="view" hidden></div>
+
+        <div id="view-drop" class="view" hidden>
+          <div class="col">
+            <div id="zone" class="zone">
+              <div class="zone-text">
+                <p id="zone-title" class="zone-title">Drop files here</p>
+                <p id="zone-body" class="zone-body">Wildbloom encrypts each file, keeps it on this computer and copies it to your online node.</p>
+              </div>
+              <div class="zone-actions">
+                <button id="add-files" class="btn primary" type="button">Add files…</button>
+                <button id="folder-toggle" class="btn quiet" type="button">Turn on your Wildbloom folder</button>
+              </div>
+            </div>
+            <div id="notices" class="notices" role="status"></div>
+            <div id="find" class="find" hidden>
+              <label for="find-input">Find a file</label>
+              <input id="find-input" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
+            </div>
+          </div>
+          <div id="list-region" class="col list-region">
+            <h2 id="files-heading" class="sr-only">Files</h2>
+            <ul id="files" class="files" aria-label="Kept files"></ul>
+            <p id="no-match" class="muted" hidden></p>
+          </div>
+        </div>
+
+        <div id="drag-overlay" class="drag-overlay" aria-hidden="true">
+          <p id="drag-message" class="drag-message"></p>
+        </div>
+        <div id="drop-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+      </main>
+
+      <footer id="drop-footer">
+        <div class="col footer-bar">
+          <span id="footer-online" class="muted"></span>
+          <button id="footer-settings" class="btn quiet" type="button">Settings</button>
+        </div>
+      </footer>
+    </div>
+    <script src="drop.js"></script>
+    <script src="share.js"></script>
+  </body>
+</html>
