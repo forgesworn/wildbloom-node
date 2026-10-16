@@ -16,9 +16,11 @@
 //! - [`RecoverySecret::to_display`] / [`RecoverySecret::parse`]: the `wbk1_` text.
 //! - [`RecoverySecret::identity`]: the recovery identity keypair, approved in the
 //!   same grant as the device key and the only key that uploads the key list.
-//! - [`KeyList`]: per-file keys and metadata.  [`KeyList::seal`] bumps `seq` and
-//!   seals; [`KeyList::open_newest`] picks the highest `seq` among fetched copies
-//!   and refuses one older than the last seen locally.
+//! - [`KeyList`]: per-file keys and metadata, with tombstones for removed files.
+//!   [`KeyList::seal`] bumps `seq` and seals; [`KeyList::open_newest`] opens
+//!   every fetched copy, merges them by file id (so forks between two computers
+//!   sharing one recovery secret both survive, and a tombstone keeps a removed
+//!   file removed), and refuses a result older than the last seen locally.
 //!
 //! # Derivations from the recovery secret
 //!
@@ -46,10 +48,13 @@
 //! {"v":"wildbloom-drop-keys/1","seq":<1..2^53-1>,"files":[
 //!   {"id":"<32 hex>","sha256":"<64 hex>","size":<envelope bytes>,"key":"wbk1_…",
 //!    "name":"<sanitised name>","type":"<media type>","bytes":<plaintext bytes>,
-//!    "added":<unix seconds>}, …]}
+//!    "added":<unix seconds>}, …],
+//!  "removed":[{"id":"<32 hex>","at":<unix seconds>}, …]}
 //! ```
 //!
-//! `seq` rises by one on every seal, so a node serving an older copy is caught.
+//! `removed` is sorted by strictly ascending `id` too, and no id may appear in
+//! both arrays.  `seq` rises by one on every seal, so a node serving an older
+//! copy is caught.
 //! The list is sealed as one FSWNENC2 envelope under the key list vault key,
 //! with private metadata `wildbloom-drop-keys.json` / `application/json`.  The
 //! decoder checks `v` first and refuses any other value with
@@ -395,12 +400,21 @@ pub struct KeyListEntry {
     pub added: u64,
 }
 
+/// A removed file: its id and when it was removed, in Unix seconds.  Kept so
+/// that merging with an older or forked copy cannot bring the file back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Tombstone {
+    pub id: FileId,
+    pub at: u64,
+}
+
 /// The owner's per-file keys and metadata, restored with the recovery secret.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KeyList {
-    /// 0 for a list never sealed; otherwise the `seq` of the last seal.
+    /// 0 for a list never sealed; otherwise the `seq` of the last seal or open.
     seq: u64,
     entries: Vec<KeyListEntry>,
+    removed: Vec<Tombstone>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -420,9 +434,12 @@ pub enum KeyListError {
     /// The newest copy offered is older than one this computer already saw.
     #[error("the newest key list offered (seq {newest}) is older than seq {last_seen}")]
     Rollback { last_seen: u64, newest: u64 },
-    /// Two different lists claim the same `seq`.
-    #[error("two different key lists claim seq {0}")]
+    /// Two copies at the same `seq` hold different entries for one file id.
+    #[error("two key list copies at seq {0} disagree about one file")]
     Conflict(u64),
+    /// The id belongs to a removed file and cannot be added again.
+    #[error("that file was removed from the key list")]
+    Removed,
     #[error("the key list sequence number is exhausted")]
     SeqExhausted,
 }
@@ -440,6 +457,14 @@ struct WireList {
     v: String,
     seq: u64,
     files: Vec<WireEntry>,
+    removed: Vec<WireTombstone>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireTombstone {
+    id: String,
+    at: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -489,9 +514,21 @@ impl KeyList {
             .map(|i| &self.entries[i])
     }
 
-    /// Adds an entry after validating it; a repeated id is refused.
+    /// Removed files, in ascending id order.
+    pub fn tombstones(&self) -> &[Tombstone] {
+        &self.removed
+    }
+
+    fn tombstone_index(&self, id: &FileId) -> Result<usize, usize> {
+        self.removed.binary_search_by(|t| t.id.cmp(id))
+    }
+
+    /// Adds an entry after validating it; a repeated or removed id is refused.
     pub fn insert(&mut self, entry: KeyListEntry) -> Result<(), KeyListError> {
         check_entry(&entry)?;
+        if self.tombstone_index(&entry.id).is_ok() {
+            return Err(KeyListError::Removed);
+        }
         match self.entries.binary_search_by(|e| e.id.cmp(&entry.id)) {
             Ok(_) => Err(KeyListError::DuplicateId),
             Err(at) => {
@@ -501,9 +538,35 @@ impl KeyList {
         }
     }
 
-    pub fn remove(&mut self, id: &FileId) -> Option<KeyListEntry> {
-        let at = self.entries.binary_search_by(|e| e.id.cmp(id)).ok()?;
-        Some(self.entries.remove(at))
+    /// Removes a file and records a tombstone at `removed_at` (Unix seconds),
+    /// even if this copy never held the file (another computer's copy may).
+    /// Returns the removed entry, if this copy had it.
+    pub fn remove(
+        &mut self,
+        id: &FileId,
+        removed_at: u64,
+    ) -> Result<Option<KeyListEntry>, KeyListError> {
+        if removed_at == 0 || removed_at > MAX_SAFE_INTEGER {
+            return Err(KeyListError::Malformed("removed"));
+        }
+        match self.tombstone_index(id) {
+            Ok(at) => {
+                let stone = &mut self.removed[at];
+                stone.at = stone.at.max(removed_at);
+            }
+            Err(at) => self.removed.insert(
+                at,
+                Tombstone {
+                    id: *id,
+                    at: removed_at,
+                },
+            ),
+        }
+        Ok(self
+            .entries
+            .binary_search_by(|e| e.id.cmp(id))
+            .ok()
+            .map(|at| self.entries.remove(at)))
     }
 
     /// The canonical version-1 plaintext at `seq`.  Contains every key, so it
@@ -526,11 +589,21 @@ impl KeyList {
                     added: e.added,
                 })
                 .collect(),
+            removed: self
+                .removed
+                .iter()
+                .map(|t| WireTombstone {
+                    id: t.id.to_string(),
+                    at: t.at,
+                })
+                .collect(),
         };
         // Reserve generously so the buffer never reallocates and leaves an
         // unzeroised copy: an entry is under 1,700 bytes even with maximal
-        // name and type.
-        let mut out = Zeroizing::new(Vec::with_capacity(96 + wire.files.len() * 1_700));
+        // name and type, and a tombstone under 64.
+        let mut out = Zeroizing::new(Vec::with_capacity(
+            128 + wire.files.len() * 1_700 + wire.removed.len() * 64,
+        ));
         serde_json::to_writer(&mut *out, &wire).expect("serialising plain data cannot fail");
         out
     }
@@ -576,9 +649,22 @@ impl KeyList {
             }
             entries.push(entry);
         }
+        let mut removed: Vec<Tombstone> = Vec::with_capacity(wire.removed.len());
+        for stone in &wire.removed {
+            let id = FileId::parse(&stone.id).ok_or(KeyListError::Malformed("removed"))?;
+            if stone.at == 0
+                || stone.at > MAX_SAFE_INTEGER
+                || removed.last().is_some_and(|t| t.id >= id)
+                || entries.binary_search_by(|e| e.id.cmp(&id)).is_ok()
+            {
+                return Err(KeyListError::Malformed("removed"));
+            }
+            removed.push(Tombstone { id, at: stone.at });
+        }
         let list = Self {
             seq: wire.seq,
             entries,
+            removed,
         };
         if list.to_canonical_json().as_slice() != bytes {
             return Err(KeyListError::Malformed("canonical form"));
@@ -617,46 +703,97 @@ impl KeyList {
         Self::from_canonical_json(&json)
     }
 
-    /// Opens every candidate copy (for example one per node) and returns the one
-    /// with the highest `seq`.  Copies that fail to open are skipped; if none
-    /// opens, the first failure is returned.  Two different lists with the
-    /// same top `seq` are a [`KeyListError::Conflict`], and a newest `seq` below
-    /// `last_seen` (the highest this computer has sealed or opened, 0 if none)
-    /// is a [`KeyListError::Rollback`].
+    /// Opens every candidate copy (for example one per node) and merges them
+    /// with [`KeyList::merge`].  Copies that fail to open are skipped; if none
+    /// opens, the first failure is returned.  A merged `seq` (the highest
+    /// among the copies) below `last_seen`, the highest this computer has
+    /// sealed or opened (0 if none), is a [`KeyListError::Rollback`].  The
+    /// result is independent of candidate order.
     pub fn open_newest(
         recovery: &RecoverySecret,
         candidates: &[&[u8]],
         last_seen: u64,
     ) -> Result<Self, KeyListError> {
-        let mut newest: Option<Self> = None;
+        let mut opened = Vec::with_capacity(candidates.len());
         let mut first_error = None;
         for candidate in candidates {
             match Self::open(recovery, candidate) {
-                Ok(list) => match &newest {
-                    Some(best) if best.seq > list.seq => {}
-                    Some(best) if best.seq == list.seq => {
-                        if *best != list {
-                            return Err(KeyListError::Conflict(list.seq));
-                        }
-                    }
-                    _ => newest = Some(list),
-                },
+                Ok(list) => opened.push(list),
                 Err(error) => {
                     first_error.get_or_insert(error);
                 }
             }
         }
-        let newest = match newest {
-            Some(list) => list,
-            None => return Err(first_error.unwrap_or(KeyListError::NoCandidates)),
-        };
-        if newest.seq < last_seen {
+        if opened.is_empty() {
+            return Err(first_error.unwrap_or(KeyListError::NoCandidates));
+        }
+        let merged = Self::merge(opened)?;
+        if merged.seq < last_seen {
             return Err(KeyListError::Rollback {
                 last_seen,
-                newest: newest.seq,
+                newest: merged.seq,
             });
         }
-        Ok(newest)
+        Ok(merged)
+    }
+
+    /// Merges copies by file id, so a fork between two computers keeps both
+    /// sides' additions:
+    ///
+    /// - tombstones are unioned, keeping the latest `at` per id, and remove
+    ///   that id's entry from every copy, so nothing removed comes back;
+    /// - each remaining id takes its entry from the highest-`seq` copy that
+    ///   holds it, and two copies at that `seq` holding different entries for
+    ///   it are a [`KeyListError::Conflict`] (entries never change once added);
+    /// - the result's `seq` is the highest among the copies, so its next seal
+    ///   is one above every copy.
+    ///
+    /// The result does not depend on the order of `lists`.
+    pub fn merge(lists: Vec<Self>) -> Result<Self, KeyListError> {
+        use std::collections::BTreeMap;
+        let seq = lists
+            .iter()
+            .map(|l| l.seq)
+            .max()
+            .ok_or(KeyListError::NoCandidates)?;
+        let mut removed: BTreeMap<FileId, u64> = BTreeMap::new();
+        for stone in lists.iter().flat_map(|l| l.removed.iter()) {
+            let at = removed.entry(stone.id).or_insert(stone.at);
+            *at = (*at).max(stone.at);
+        }
+        // Per id: the highest seq holding it and that seq's entry.
+        let mut chosen: BTreeMap<FileId, (u64, KeyListEntry)> = BTreeMap::new();
+        let mut disputed: BTreeMap<FileId, u64> = BTreeMap::new();
+        for list in &lists {
+            for entry in &list.entries {
+                if removed.contains_key(&entry.id) {
+                    continue;
+                }
+                match chosen.get(&entry.id) {
+                    Some((best, _)) if *best > list.seq => {}
+                    Some((best, existing)) if *best == list.seq => {
+                        if existing != entry {
+                            disputed.insert(entry.id, list.seq);
+                        }
+                    }
+                    _ => {
+                        disputed.remove(&entry.id);
+                        chosen.insert(entry.id, (list.seq, entry.clone()));
+                    }
+                }
+            }
+        }
+        if let Some(seq) = disputed.values().max() {
+            return Err(KeyListError::Conflict(*seq));
+        }
+        Ok(Self {
+            seq,
+            entries: chosen.into_values().map(|(_, entry)| entry).collect(),
+            removed: removed
+                .into_iter()
+                .map(|(id, at)| Tombstone { id, at })
+                .collect(),
+        })
     }
 }
 
@@ -945,7 +1082,7 @@ mod tests {
                 r#"{{"v":"wildbloom-drop-keys/1","seq":7,"files":["#,
                 r#"{{"id":"{id1}","sha256":"{h1}","size":65608,"key":"{k1}","name":"file-1.txt","type":"text/plain","bytes":43,"added":1900000000}},"#,
                 r#"{{"id":"{id2}","sha256":"{h2}","size":65608,"key":"{k2}","name":"file-2.txt","type":"text/plain","bytes":43,"added":1900000000}}"#,
-                r#"]}}"#
+                r#"],"removed":[]}}"#
             ),
             id1 = "01".repeat(16),
             h1 = "01".repeat(32),
@@ -956,9 +1093,10 @@ mod tests {
         );
         assert_eq!(text, expected);
         assert_eq!(KeyList::from_canonical_json(&json).unwrap(), list());
-        let empty =
-            KeyList::from_canonical_json(br#"{"v":"wildbloom-drop-keys/1","seq":1,"files":[]}"#)
-                .unwrap();
+        let empty = KeyList::from_canonical_json(
+            br#"{"v":"wildbloom-drop-keys/1","seq":1,"files":[],"removed":[]}"#,
+        )
+        .unwrap();
         assert_eq!(empty.seq(), 1);
         assert!(empty.entries().is_empty());
     }
@@ -966,9 +1104,10 @@ mod tests {
     #[test]
     fn seq_is_required_and_bounded() {
         for json in [
-            r#"{"v":"wildbloom-drop-keys/1","files":[]}"#,
-            r#"{"v":"wildbloom-drop-keys/1","seq":"1","files":[]}"#,
-            r#"{"v":"wildbloom-drop-keys/1","seq":-1,"files":[]}"#,
+            r#"{"v":"wildbloom-drop-keys/1","files":[],"removed":[]}"#,
+            r#"{"v":"wildbloom-drop-keys/1","seq":"1","files":[],"removed":[]}"#,
+            r#"{"v":"wildbloom-drop-keys/1","seq":-1,"files":[],"removed":[]}"#,
+            r#"{"v":"wildbloom-drop-keys/1","seq":1,"files":[]}"#,
         ] {
             assert_eq!(
                 KeyList::from_canonical_json(json.as_bytes()),
@@ -977,8 +1116,8 @@ mod tests {
             );
         }
         for json in [
-            r#"{"v":"wildbloom-drop-keys/1","seq":0,"files":[]}"#,
-            r#"{"v":"wildbloom-drop-keys/1","seq":9007199254740992,"files":[]}"#,
+            r#"{"v":"wildbloom-drop-keys/1","seq":0,"files":[],"removed":[]}"#,
+            r#"{"v":"wildbloom-drop-keys/1","seq":9007199254740992,"files":[],"removed":[]}"#,
         ] {
             assert_eq!(
                 KeyList::from_canonical_json(json.as_bytes()),
@@ -987,7 +1126,9 @@ mod tests {
             );
         }
         assert_eq!(
-            KeyList::from_canonical_json(br#"{"v":"wildbloom-drop-keys/1","files":[],"seq":1}"#),
+            KeyList::from_canonical_json(
+                br#"{"v":"wildbloom-drop-keys/1","files":[],"seq":1,"removed":[]}"#
+            ),
             Err(KeyListError::Malformed("canonical form"))
         );
     }
@@ -1026,18 +1167,57 @@ mod tests {
         ));
     }
 
+    /// A list at `seq` holding entries for `ids`.
+    fn at(seq: u64, ids: &[u8]) -> KeyList {
+        let mut list = KeyList::new();
+        for id in ids {
+            list.insert(entry(*id, *id * 0x10)).unwrap();
+        }
+        list.seq = seq;
+        list
+    }
+
+    fn ids(list: &KeyList) -> Vec<u8> {
+        list.entries().iter().map(|e| e.sha256[0]).collect()
+    }
+
     #[test]
-    fn open_newest_picks_the_highest_seq_and_refuses_rollback() {
+    fn open_newest_is_independent_of_candidate_order() {
+        let recovery = RecoverySecret::generate().unwrap();
+        let seal_at = |list: KeyList| {
+            let mut list = list;
+            list.seq -= 1;
+            list.seal(&recovery).unwrap()
+        };
+        // A5 and B5' forked from one seq-4 list; C6 is A's next seal.
+        let a5 = seal_at(at(5, &[1, 2]));
+        let b5 = seal_at(at(5, &[1, 3]));
+        let c6 = seal_at(at(6, &[1, 2, 4]));
+        let garbage = vec![0u8; 100];
+        let orders: [[&[u8]; 4]; 4] = [
+            [&a5, &b5, &c6, &garbage],
+            [&c6, &b5, &a5, &garbage],
+            [&b5, &garbage, &a5, &c6],
+            [&garbage, &c6, &a5, &b5],
+        ];
+        for order in orders {
+            let merged = KeyList::open_newest(&recovery, &order, 0).unwrap();
+            assert_eq!(merged.seq(), 6);
+            assert_eq!(ids(&merged), vec![1, 2, 3, 4]);
+        }
+        // The next seal is one above every copy.
+        let mut merged = KeyList::open_newest(&recovery, &[&a5, &b5, &c6], 6).unwrap();
+        merged.seal(&recovery).unwrap();
+        assert_eq!(merged.seq(), 7);
+    }
+
+    #[test]
+    fn open_newest_refuses_rollback_and_empty_input() {
         let recovery = RecoverySecret::generate().unwrap();
         let mut list = list();
         let old = list.seal(&recovery).unwrap(); // seq 8
         list.insert(entry(3, 0x30)).unwrap();
         let new = list.seal(&recovery).unwrap(); // seq 9
-        let garbage = vec![0u8; 100];
-
-        let newest = KeyList::open_newest(&recovery, &[&old, &garbage, &new, &old], 0).unwrap();
-        assert_eq!(newest.seq(), 9);
-        assert_eq!(newest.entries().len(), 3);
         assert_eq!(
             KeyList::open_newest(&recovery, &[&new, &new], 9)
                 .unwrap()
@@ -1057,19 +1237,100 @@ mod tests {
             Err(KeyListError::NoCandidates)
         );
         assert!(matches!(
-            KeyList::open_newest(&recovery, &[&garbage], 0),
+            KeyList::open_newest(&recovery, &[&[0u8; 100][..]], 0),
             Err(KeyListError::Envelope(_))
         ));
+    }
 
-        // Two different lists claiming one seq.
-        let mut fork = self::list();
-        fork.seq = 8;
-        fork.insert(entry(4, 0x40)).unwrap();
-        let forked = fork.seal(&recovery).unwrap(); // also seq 9
+    #[test]
+    fn merge_conflicts_only_at_the_deciding_seq() {
+        let mut altered = at(6, &[1]);
+        altered.entries[0].key = counting(0x99);
+        let conflicting = || vec![at(6, &[1, 2]), altered.clone(), at(5, &[3])];
         assert_eq!(
-            KeyList::open_newest(&recovery, &[&new, &forked], 0),
-            Err(KeyListError::Conflict(9))
+            KeyList::merge(conflicting()),
+            Err(KeyListError::Conflict(6))
         );
+        let mut reversed = conflicting();
+        reversed.reverse();
+        assert_eq!(KeyList::merge(reversed), Err(KeyListError::Conflict(6)));
+
+        // A disagreement at seq 5 is settled by a seq-6 copy of that file, in
+        // any order.
+        let mut altered5 = altered.clone();
+        altered5.seq = 5;
+        for lists in [
+            vec![at(5, &[1]), altered5.clone(), at(6, &[1])],
+            vec![at(6, &[1]), at(5, &[1]), altered5.clone()],
+        ] {
+            let merged = KeyList::merge(lists).unwrap();
+            assert_eq!(merged.entries()[0], entry(1, 0x10));
+        }
+    }
+
+    #[test]
+    fn a_fork_merge_keeps_both_sides_and_respects_tombstones() {
+        let recovery = RecoverySecret::generate().unwrap();
+        let mut base = at(4, &[1, 2]);
+        let shared = base.seal(&recovery).unwrap(); // seq 5 on both computers
+        let mut x = KeyList::open(&recovery, &shared).unwrap();
+        let mut y = KeyList::open(&recovery, &shared).unwrap();
+        // Computer X removes file 2; computer Y adds file 3.  Both seal seq 6.
+        x.remove(&FileId::from_bytes([2; 16]), 1_900_000_500)
+            .unwrap();
+        y.insert(entry(3, 0x30)).unwrap();
+        let x6 = x.seal(&recovery).unwrap();
+        let y6 = y.seal(&recovery).unwrap();
+        for order in [[&x6, &y6, &shared], [&shared, &y6, &x6]] {
+            let order: Vec<&[u8]> = order.iter().map(|v| v.as_slice()).collect();
+            let merged = KeyList::open_newest(&recovery, &order, 6).unwrap();
+            assert_eq!(merged.seq(), 6);
+            // Y's addition survives; X's removal is not undone by Y's copy.
+            assert_eq!(ids(&merged), vec![1, 3]);
+            assert_eq!(
+                merged.tombstones(),
+                &[Tombstone {
+                    id: FileId::from_bytes([2; 16]),
+                    at: 1_900_000_500
+                }]
+            );
+            // The merge round-trips, tombstone included, at seq 7.
+            let mut merged = merged;
+            let sealed = merged.seal(&recovery).unwrap();
+            let reopened = KeyList::open(&recovery, &sealed).unwrap();
+            assert_eq!(reopened.seq(), 7);
+            assert_eq!(reopened, merged);
+        }
+    }
+
+    #[test]
+    fn tombstones_are_validated_on_decode() {
+        let mut list = at(3, &[1]);
+        list.remove(&FileId::from_bytes([5; 16]), 1_900_000_000)
+            .unwrap();
+        let good = String::from_utf8(list.to_canonical_json().to_vec()).unwrap();
+        assert!(good.ends_with(&format!(
+            r#""removed":[{{"id":"{}","at":1900000000}}]}}"#,
+            "05".repeat(16)
+        )));
+        assert_eq!(KeyList::from_canonical_json(good.as_bytes()).unwrap(), list);
+        let in_both = good.replace(&"05".repeat(16), &"01".repeat(16));
+        let zero = good.replace("\"at\":1900000000", "\"at\":0");
+        let unsorted = good.replace(
+            r#""removed":["#,
+            &format!(r#""removed":[{{"id":"{}","at":1}},"#, "09".repeat(16)),
+        );
+        let duplicate = good.replace(
+            r#""removed":["#,
+            &format!(r#""removed":[{{"id":"{}","at":1}},"#, "05".repeat(16)),
+        );
+        for json in [in_both, zero, unsorted, duplicate] {
+            assert_eq!(
+                KeyList::from_canonical_json(json.as_bytes()),
+                Err(KeyListError::Malformed("removed")),
+                "{json}"
+            );
+        }
     }
 
     #[test]
@@ -1122,7 +1383,7 @@ mod tests {
                 )
             };
             format!(
-                r#"{{"v":"wildbloom-drop-keys/1","seq":7,"files":[{},{}]}}"#,
+                r#"{{"v":"wildbloom-drop-keys/1","seq":7,"files":[{},{}],"removed":[]}}"#,
                 one(b),
                 one(a)
             )
@@ -1188,7 +1449,22 @@ mod tests {
             list.get(&FileId::from_bytes([2; 16])).unwrap().key,
             counting(0x20)
         );
-        assert!(list.remove(&FileId::from_bytes([2; 16])).is_some());
+        let two = FileId::from_bytes([2; 16]);
+        assert!(list.remove(&two, 1_900_000_100).unwrap().is_some());
         assert_eq!(list.entries().len(), 1);
+        // A removed id cannot come back, and a second removal keeps the later time.
+        assert_eq!(list.insert(entry(2, 0x20)), Err(KeyListError::Removed));
+        assert!(list.remove(&two, 1_900_000_050).unwrap().is_none());
+        assert_eq!(
+            list.tombstones(),
+            &[Tombstone {
+                id: two,
+                at: 1_900_000_100
+            }]
+        );
+        assert_eq!(
+            list.remove(&two, 0),
+            Err(KeyListError::Malformed("removed"))
+        );
     }
 }

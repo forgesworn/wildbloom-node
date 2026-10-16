@@ -35,7 +35,8 @@ pub enum KeychainError {
     /// restarted after the keyring is started; otherwise a retry is enough.
     #[error("no Secret Service keyring is running on this computer")]
     SecretServiceMissing { restart_needed: bool },
-    /// The platform keychain could not be initialised.
+    /// macOS and Windows: the platform keychain could not be initialised.
+    /// keyring caches this for the process, so it also needs a restart.
     #[error("the system keychain is unavailable")]
     Unavailable,
     /// The keychain is locked or the owner refused access.
@@ -65,12 +66,14 @@ pub struct OsKeychain {
 }
 
 impl OsKeychain {
-    /// Initialises the platform store.  On Linux this reports a missing Secret
-    /// Service where the platform makes that visible at start-up; otherwise it
-    /// surfaces on the first operation, so first run should call [`Self::probe`].
+    /// Initialises the platform store.  keyring tries once per process and
+    /// caches the outcome, so any failure here needs an app restart: on Linux
+    /// it is `SecretServiceMissing { restart_needed: true }` whatever the cause.
+    /// A provider that goes away later surfaces on an operation instead, so
+    /// first run should also call [`Self::probe`].
     pub fn new() -> Result<Self, KeychainError> {
-        if let Err(error) = keyring::Entry::store_status() {
-            return Err(classify(error));
+        if keyring::Entry::store_status().is_err() {
+            return Err(store_init_failure());
         }
         Ok(Self {
             service: SERVICE.to_string(),
@@ -115,7 +118,7 @@ impl SecretStore for OsKeychain {
 fn classify(error: &keyring::Error) -> KeychainError {
     use keyring::Error as E;
     match error {
-        E::NoDefaultStore => missing_or(true, KeychainError::Unavailable),
+        E::NoDefaultStore => store_init_failure(),
         E::PlatformFailure(inner) => {
             if names_missing_secret_service(&inner.to_string()) {
                 missing_or(false, KeychainError::Platform("platform failure"))
@@ -133,6 +136,11 @@ fn classify(error: &keyring::Error) -> KeychainError {
         E::NotSupportedByStore(_) => KeychainError::Platform("unsupported operation"),
         _ => KeychainError::Platform("unknown"),
     }
+}
+
+/// A store that failed to start, which keyring will not retry in this process.
+fn store_init_failure() -> KeychainError {
+    missing_or(true, KeychainError::Unavailable)
 }
 
 /// On Linux a store that cannot start, or a D-Bus failure naming the Secret
@@ -378,6 +386,22 @@ mod tests {
             std::io::Error::other("locked"),
         )));
         assert_eq!(denied, KeychainError::Denied);
+    }
+
+    #[test]
+    fn any_store_start_failure_needs_a_restart_on_linux() {
+        let failure = store_init_failure();
+        if cfg!(target_os = "linux") {
+            assert_eq!(
+                failure,
+                KeychainError::SecretServiceMissing {
+                    restart_needed: true
+                }
+            );
+        } else {
+            assert_eq!(failure, KeychainError::Unavailable);
+        }
+        assert_eq!(classify(&keyring::Error::NoDefaultStore), failure);
     }
 
     #[test]
