@@ -17,6 +17,69 @@ pub fn isolate(mut context: tauri::Context<tauri::Wry>) -> tauri::Context<tauri:
     context
 }
 
+/// The keychain the acceptance build uses, chosen by
+/// `WILDBLOOM_ACCEPTANCE_KEYCHAIN`: `memory` (the default, a process-local
+/// store), `missing` (every open fails as a missing platform keychain does),
+/// or `os` (the real keychain under the disposable service name).
+pub fn keychain_factory() -> Option<crate::drop::engine::StoreFactory> {
+    use crate::drop::keychain::{KeychainError, SecretStore};
+    use std::sync::Arc;
+    match std::env::var("WILDBLOOM_ACCEPTANCE_KEYCHAIN").as_deref() {
+        Ok("os") => None,
+        Ok("missing") => Some(Box::new(|| {
+            Err(if cfg!(target_os = "linux") {
+                KeychainError::SecretServiceMissing {
+                    restart_needed: false,
+                }
+            } else {
+                KeychainError::Unavailable
+            })
+        })),
+        Ok("memory") | Err(_) => {
+            let store: Arc<dyn SecretStore> = Arc::new(MemoryKeychain::default());
+            Some(Box::new(move || Ok(store.clone())))
+        }
+        Ok(_) => panic!("WILDBLOOM_ACCEPTANCE_KEYCHAIN must be memory, missing or os"),
+    }
+}
+
+/// A process-local secret store for the acceptance build only.
+#[derive(Default)]
+struct MemoryKeychain(std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>);
+
+impl crate::drop::keychain::SecretStore for MemoryKeychain {
+    fn read(
+        &self,
+        account: &str,
+    ) -> Result<Option<zeroize::Zeroizing<Vec<u8>>>, crate::drop::keychain::KeychainError> {
+        Ok(self
+            .0
+            .lock()
+            .map_err(|_| crate::drop::keychain::KeychainError::Platform("lock"))?
+            .get(account)
+            .cloned()
+            .map(zeroize::Zeroizing::new))
+    }
+    fn write(
+        &self,
+        account: &str,
+        secret: &[u8],
+    ) -> Result<(), crate::drop::keychain::KeychainError> {
+        self.0
+            .lock()
+            .map_err(|_| crate::drop::keychain::KeychainError::Platform("lock"))?
+            .insert(account.to_owned(), secret.to_vec());
+        Ok(())
+    }
+    fn remove(&self, account: &str) -> Result<(), crate::drop::keychain::KeychainError> {
+        self.0
+            .lock()
+            .map_err(|_| crate::drop::keychain::KeychainError::Platform("lock"))?
+            .remove(account);
+        Ok(())
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Request {

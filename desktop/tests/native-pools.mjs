@@ -50,7 +50,7 @@ function passed(name) { evidence.checks.push(name); console.log(`PASS ${name}`);
 async function until(fn, label, timeout = 20000) {
   const end = Date.now() + timeout;
   while (Date.now() < end) { if (await fn()) return; await pause(100); }
-  throw new Error(`Timed out: ${label}`);
+  throw new Error(`Timed out: ${typeof label === 'function' ? label() : label}`);
 }
 async function bounded(promise, label, timeout = 15000) {
   let timer;
@@ -81,8 +81,8 @@ async function startNode(node, generation) {
     try { return (await fetch(`${node.origin}healthz`, { signal: AbortSignal.timeout(300) })).ok; } catch { return false; }
   }, 'storage node readiness');
 }
-function launchApp() {
-  const child = spawn(appBinary, [], { env: { ...process.env, WILDBLOOM_ACCEPTANCE_ID: runId }, stdio: ['pipe', 'pipe', 'pipe'] });
+function launchApp(extraEnv = {}) {
+  const child = spawn(appBinary, [], { env: { ...process.env, WILDBLOOM_ACCEPTANCE_ID: runId, ...extraEnv }, stdio: ['pipe', 'pipe', 'pipe'] });
   children.push(child);
   let serial = 0, buffer = '', webviewReady = false;
   const pending = new Map();
@@ -191,6 +191,23 @@ try {
     await until(async () => await app.evaluate('!!document.querySelector("#pool-import")') === true, 'native UI ready');
     return dirs.data_dir;
   }
+  // Wildbloom Drop with no reachable keychain (as on a Linux desktop without
+  // a Secret Service): first run must show the platform's keychain screen and
+  // Try again must answer, not hang.  The acceptance build then uses a
+  // process-local keychain, never the runner's or the developer's own.
+  {
+    app = launchApp({ WILDBLOOM_ACCEPTANCE_KEYCHAIN: 'missing' });
+    await until(app.ready, 'native page load (keychain missing)');
+    const heading = { darwin: 'Wildbloom needs your keychain', win32: 'Wildbloom needs Credential Manager', linux: 'Wildbloom needs your keyring' }[process.platform];
+    let shown = null;
+    await until(async () => { shown = await app.evaluate('document.querySelector("#view-first h2")?.textContent ?? null', 'drop'); return shown === heading; }, () => `keychain screen (showing ${JSON.stringify(shown)})`);
+    await app.evaluate('[...document.querySelectorAll("#view-first button")].find((b) => b.textContent === "Try again").click()', 'drop');
+    await until(async () => await app.evaluate('document.querySelector("#view-first [role=alert]")?.textContent === "Still can\'t reach it."', 'drop') === true, 'Try again answers');
+    const exited = once(app.child, 'exit');
+    await app.command('quit');
+    await exited;
+    passed('with no keychain, Drop first run shows the platform keychain screen and Try again answers without hanging');
+  }
   const dataDir = await boot();
   evidence.webview_user_agent = await app.evaluate('navigator.userAgent');
   await pause(500);
@@ -199,7 +216,11 @@ try {
   passed('native app starts without storage, signer or repair children');
   // Wildbloom Drop: a fresh profile opens the Drop window at first run step 1,
   // and the node window starts hidden.  No keychain entry is written.
-  await until(async () => await app.evaluate('!document.querySelector("#view-first")?.hidden && document.querySelector("#view-first")?.textContent.includes("Set up Wildbloom Drop")', 'drop') === true, 'Drop first run D1');
+  let firstRunView = null;
+  await until(async () => {
+    firstRunView = await app.evaluate('({ hidden: document.querySelector("#view-first")?.hidden ?? null, heading: document.querySelector("#view-first h2")?.textContent ?? null })', 'drop');
+    return firstRunView?.hidden === false && firstRunView.heading === 'Set up Wildbloom Drop';
+  }, () => `Drop first run D1 (showing ${JSON.stringify(firstRunView)})`);
   assert.equal((await app.command('status', '', 'drop')).visible, true, 'Drop window shown');
   assert.equal((await app.command('status')).visible, false, 'node window starts hidden');
   assert.equal(await app.evaluate('document.documentElement.dataset.os', 'drop'), process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'windows' : 'linux');

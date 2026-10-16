@@ -1269,6 +1269,10 @@ fn start_drop(app: &tauri::App, manager: Arc<NodeManager>) {
         drop::keychain::OsKeychain::with_service(&service)
             .map(|store| Arc::new(store) as Arc<dyn drop::keychain::SecretStore>)
     });
+    // The debug-only acceptance driver never touches the runner's or the
+    // developer's real keychain; release builds cannot compile this in.
+    #[cfg(feature = "native-acceptance")]
+    let factory = acceptance::keychain_factory().unwrap_or(factory);
     let host = Arc::new(drop::commands::TauriHost {
         app: handle.clone(),
         manager,
