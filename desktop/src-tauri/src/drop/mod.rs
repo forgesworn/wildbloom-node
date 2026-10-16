@@ -5,14 +5,19 @@
 //! and call into these modules:
 //!
 //! - [`envelope`]: streaming FSWNENC2 to private temp files, via the shared
-//!   `wildbloom-envelope` crate.  `encrypt_new_file` mints a fresh per-file key;
-//!   `drop_limits` and `SHARE_LIMITS` carry the Q13 size caps.
+//!   `wildbloom-envelope` crate.  `encrypt_new_file` mints a fresh per-file key
+//!   and refuses empty files; `drop_limits` and `SHARE_LIMITS` carry the Q13
+//!   size caps.  Call `sweep_stale_temp_files` on the temp directory at start-up,
+//!   before any Drop operation.
 //! - [`keychain`]: the OS keychain behind the `SecretStore` trait.  `DropKeychain`
 //!   holds the device secret, the recovery secret and per-file keys.  A missing
-//!   Linux Secret Service is the typed `KeychainError::SecretServiceMissing`.
-//! - [`device`]: the device keypair, the `wbk1_` recovery secret, the
-//!   HKDF-derived recovery identity, and the versioned key list sealed in FSWNENC2
-//!   vault mode under the recovery secret.
+//!   Linux Secret Service is the typed `KeychainError::SecretServiceMissing`,
+//!   which says whether the app must restart once a keyring is running.
+//! - [`device`]: single-flight first run, load (a missing secret means restore,
+//!   never regenerate) and restore; the device keypair, the `wbk1_` recovery
+//!   secret, the HKDF-derived recovery identity, and the versioned, sequenced key
+//!   list sealed in FSWNENC2 vault mode under a key derived from the recovery
+//!   secret.
 //! - [`descriptor`]: the `wildbloom-share/1` share descriptor builder and strict
 //!   validator.
 //!

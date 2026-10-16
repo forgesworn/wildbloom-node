@@ -3,35 +3,39 @@
 //!
 //! # API
 //!
-//! - [`DeviceKeys::generate`], [`DeviceKeys::load_or_create`]: the device's own
-//!   secp256k1 keypair, which signs uploads without a prompt per file.  Its
-//!   secret lives in the OS keychain.
-//! - [`RecoverySecret::generate`]: 32 random bytes, shown once to the owner as
-//!   `wbk1_` text ([`RecoverySecret::to_display`]) and accepted back by
-//!   [`RecoverySecret::parse`] on restore.
-//! - [`RecoverySecret::identity`]: the recovery identity keypair, derived as below.
-//!   It is approved in the same grant as the device key and is the only key
-//!   that uploads the key list.
-//! - [`KeyList`]: the per-file keys and file metadata.  [`KeyList::seal`] makes
-//!   an FSWNENC2 vault-mode envelope under the recovery secret (used directly as
-//!   the FSWNENC2 input key) and [`KeyList::open`] reverses it on restore.
+//! - [`identity_state`]: `Fresh` (first run), `Ready` (load) or `Partial` (an
+//!   interrupted first run or a lost entry: restore or reset, never silently
+//!   regenerate).
+//! - [`FirstRunLock::acquire`] then [`create_first_run`]: makes the device key
+//!   and the recovery secret once, under a file lock so two windows or two
+//!   instances cannot race.  It refuses if either secret already exists.
+//! - [`load_identity`], [`DeviceKeys::load`], [`RecoverySecret::load`]: a missing
+//!   entry is [`DeviceError::RestoreNeeded`], never a new key.
+//! - [`restore_identity`]: stores a recovery secret the owner typed back in and
+//!   makes a device key if there is none, refusing a different stored secret.
+//! - [`RecoverySecret::to_display`] / [`RecoverySecret::parse`]: the `wbk1_` text.
+//! - [`RecoverySecret::identity`]: the recovery identity keypair, approved in the
+//!   same grant as the device key and the only key that uploads the key list.
+//! - [`KeyList`]: per-file keys and metadata.  [`KeyList::seal`] bumps `seq` and
+//!   seals; [`KeyList::open_newest`] picks the highest `seq` among fetched copies
+//!   and refuses one older than the last seen locally.
 //!
-//! # Recovery identity derivation
+//! # Derivations from the recovery secret
 //!
 //! ```text
-//! okm = HKDF-SHA256(ikm  = recovery secret (32 bytes),
-//!                   salt = "wildbloom-drop/v1"                               (UTF-8),
-//!                   info = "wildbloom-drop/recovery-identity/secp256k1/v1"   (UTF-8),
-//!                   L    = 32)
-//! recovery identity secret key = okm, as a big-endian secp256k1 scalar
+//! HKDF-SHA256(ikm = recovery secret (32 bytes), salt = "wildbloom-drop/v1", L = 32,
+//!             info = "wildbloom-drop/recovery-identity/secp256k1/v1")
+//!   -> recovery identity secret key (big-endian secp256k1 scalar)
+//! HKDF-SHA256(ikm = recovery secret (32 bytes), salt = "wildbloom-drop/v1", L = 32,
+//!             info = "wildbloom-drop/key-list-vault/v1")
+//!   -> key list vault key, the FSWNENC2 input key for the key list
 //! ```
 //!
-//! The derivation fails closed if `okm` is zero or not below the curve order
-//! (probability about 2^-128); [`RecoverySecret::generate`] redraws in that case,
-//! so every recovery secret it hands out has an identity.  The FSWNENC2 key
-//! list envelope also uses the recovery secret as HKDF input, but with the
-//! envelope's own `info` (`forgesworn-aes-256-gcm-chunked/v2`) and a fresh random
-//! salt, so the two outputs are domain-separated.
+//! All strings are UTF-8 without a terminator.  The raw recovery secret is
+//! therefore never an FSWNENC2 input key, so it never meets a salt read from an
+//! envelope.  The identity derivation fails closed if the output is zero or not
+//! below the curve order (probability about 2^-128);
+//! [`RecoverySecret::generate`] redraws in that case.
 //!
 //! # Key list format, version 1
 //!
@@ -39,17 +43,19 @@
 //! escaping, entries sorted by strictly ascending `id`):
 //!
 //! ```text
-//! {"v":"wildbloom-drop-keys/1","files":[
+//! {"v":"wildbloom-drop-keys/1","seq":<1..2^53-1>,"files":[
 //!   {"id":"<32 hex>","sha256":"<64 hex>","size":<envelope bytes>,"key":"wbk1_…",
 //!    "name":"<sanitised name>","type":"<media type>","bytes":<plaintext bytes>,
 //!    "added":<unix seconds>}, …]}
 //! ```
 //!
-//! It is sealed as one FSWNENC2 envelope whose private metadata is
-//! `wildbloom-drop-keys.json` / `application/json`.  The decoder checks the
-//! version first and refuses any other `v` with [`KeyListError::UnsupportedVersion`],
-//! then re-encodes and compares so that only the canonical form is accepted.
-//! Local paths are deliberately absent.
+//! `seq` rises by one on every seal, so a node serving an older copy is caught.
+//! The list is sealed as one FSWNENC2 envelope under the key list vault key,
+//! with private metadata `wildbloom-drop-keys.json` / `application/json`.  The
+//! decoder checks `v` first and refuses any other value with
+//! [`KeyListError::UnsupportedVersion`], then requires `seq` and re-encodes and
+//! compares so that only the canonical form is accepted.  Local paths are
+//! deliberately absent.
 
 use super::FileId;
 use super::keychain::{DropKeychain, KeychainError, SecretStore};
@@ -57,6 +63,8 @@ use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::fmt;
+use std::fs::{File, OpenOptions};
+use std::path::Path;
 use wildbloom_envelope::{InputKey, KEY_BYTES, KeyError, Limits, MIN_ENVELOPE_BYTES};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -64,6 +72,8 @@ use zeroize::{Zeroize, Zeroizing};
 pub const RECOVERY_HKDF_SALT: &[u8] = b"wildbloom-drop/v1";
 /// HKDF info for the recovery identity.
 pub const RECOVERY_IDENTITY_INFO: &[u8] = b"wildbloom-drop/recovery-identity/secp256k1/v1";
+/// HKDF info for the key list vault key.
+pub const KEY_LIST_VAULT_INFO: &[u8] = b"wildbloom-drop/key-list-vault/v1";
 
 /// The key list's version tag.
 pub const KEY_LIST_VERSION: &str = "wildbloom-drop-keys/1";
@@ -73,6 +83,8 @@ pub const KEY_LIST_NAME: &str = "wildbloom-drop-keys.json";
 pub const KEY_LIST_MEDIA_TYPE: &str = "application/json";
 /// The key list's own envelope limit: 64 MiB is tens of thousands of files.
 pub const KEY_LIST_LIMITS: Limits = Limits::new(64 * 1024 * 1024);
+/// The first-run lock file's name inside the lock directory.
+pub const FIRST_RUN_LOCK_FILE: &str = "drop-first-run.lock";
 /// JavaScript's largest exact integer, so other implementations read numbers exactly.
 const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
 
@@ -88,6 +100,18 @@ pub enum DeviceError {
     RecoveryKeyEncoding,
     #[error("this recovery key has no valid recovery identity")]
     NoRecoveryIdentity,
+    /// A secret Drop needs is not in the keychain.  The owner restores with
+    /// their recovery key; a new key is never made in its place.
+    #[error("Drop's keys are missing from this computer; restore with the recovery key")]
+    RestoreNeeded,
+    #[error("Drop is already set up on this computer")]
+    AlreadyInitialised,
+    #[error("a different recovery key is already stored on this computer")]
+    DifferentRecoverySecret,
+    #[error("Drop set-up is already running")]
+    FirstRunInProgress,
+    #[error("the first-run lock could not be created")]
+    Lock(#[source] std::io::Error),
 }
 
 impl From<KeyError> for DeviceError {
@@ -111,15 +135,12 @@ impl DeviceKeys {
         Ok(Self(nostr::prelude::Keys::new(secret_key)))
     }
 
-    /// Loads the device key from the keychain, creating and storing one if
-    /// there is none yet.
-    pub fn load_or_create<S: SecretStore>(keychain: &DropKeychain<S>) -> Result<Self, DeviceError> {
-        if let Some(secret) = keychain.device_secret()? {
-            return Self::from_secret(&secret);
-        }
-        let keys = Self::generate();
-        keychain.set_device_secret(&keys.secret_bytes())?;
-        Ok(keys)
+    /// The stored device key; [`DeviceError::RestoreNeeded`] if there is none.
+    pub fn load<S: SecretStore>(keychain: &DropKeychain<S>) -> Result<Self, DeviceError> {
+        let secret = keychain
+            .device_secret()?
+            .ok_or(DeviceError::RestoreNeeded)?;
+        Self::from_secret(&secret)
     }
 
     pub fn secret_bytes(&self) -> Zeroizing<[u8; KEY_BYTES]> {
@@ -189,13 +210,22 @@ impl RecoverySecret {
         Self::from_input_key(InputKey::parse_wbk1(text.trim())?)
     }
 
+    /// The stored recovery secret; [`DeviceError::RestoreNeeded`] if there is none.
+    pub fn load<S: SecretStore>(keychain: &DropKeychain<S>) -> Result<Self, DeviceError> {
+        Self::from_input_key(
+            keychain
+                .recovery_secret()?
+                .ok_or(DeviceError::RestoreNeeded)?,
+        )
+    }
+
     /// The `wbk1_` text shown once at first run and saved in the recovery file.
     pub fn to_display(&self) -> Zeroizing<String> {
         self.0.to_wbk1()
     }
 
-    /// The FSWNENC2 input key for the key list (vault mode).
-    pub fn input_key(&self) -> &InputKey {
+    /// The raw secret, for keychain storage only.  It is never an FSWNENC2 key.
+    pub fn secret(&self) -> &InputKey {
         &self.0
     }
 
@@ -203,14 +233,10 @@ impl RecoverySecret {
         derive_identity(&self.0).expect("checked when the secret was constructed")
     }
 
-    /// Loads the recovery secret from the keychain, or generates and stores one.
-    pub fn load_or_create<S: SecretStore>(keychain: &DropKeychain<S>) -> Result<Self, DeviceError> {
-        if let Some(key) = keychain.recovery_secret()? {
-            return Self::from_input_key(key);
-        }
-        let secret = Self::generate()?;
-        keychain.set_recovery_secret(secret.input_key())?;
-        Ok(secret)
+    /// The FSWNENC2 input key for the key list (vault mode).
+    pub fn key_list_key(&self) -> InputKey {
+        let okm = expand(&self.0, KEY_LIST_VAULT_INFO);
+        InputKey::from_bytes(*okm)
     }
 }
 
@@ -220,14 +246,134 @@ impl fmt::Debug for RecoverySecret {
     }
 }
 
-fn derive_identity(secret: &InputKey) -> Result<RecoveryIdentity, DeviceError> {
+fn expand(secret: &InputKey, info: &[u8]) -> Zeroizing<[u8; KEY_BYTES]> {
     let hk = Hkdf::<Sha256>::new(Some(RECOVERY_HKDF_SALT), secret.expose());
     let mut okm = Zeroizing::new([0u8; KEY_BYTES]);
-    hk.expand(RECOVERY_IDENTITY_INFO, okm.as_mut())
+    hk.expand(info, okm.as_mut())
         .expect("32 bytes is a valid HKDF-SHA256 output length");
+    okm
+}
+
+fn derive_identity(secret: &InputKey) -> Result<RecoveryIdentity, DeviceError> {
+    let okm = expand(secret, RECOVERY_IDENTITY_INFO);
     let secret_key = nostr::prelude::SecretKey::from_slice(okm.as_ref())
         .map_err(|_| DeviceError::NoRecoveryIdentity)?;
     Ok(RecoveryIdentity(nostr::prelude::Keys::new(secret_key)))
+}
+
+/// What the keychain holds for Drop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IdentityState {
+    /// Neither secret: first run.
+    Fresh,
+    /// Both secrets: load them.
+    Ready,
+    /// Only one: an interrupted first run or a lost entry.  Restore or reset.
+    Partial,
+}
+
+pub fn identity_state<S: SecretStore>(
+    keychain: &DropKeychain<S>,
+) -> Result<IdentityState, DeviceError> {
+    let device = keychain.device_secret()?.is_some();
+    let recovery = keychain.recovery_secret()?.is_some();
+    Ok(match (device, recovery) {
+        (false, false) => IdentityState::Fresh,
+        (true, true) => IdentityState::Ready,
+        _ => IdentityState::Partial,
+    })
+}
+
+/// An exclusive lock held for the whole of first run or restore.  The OS
+/// releases it if the process dies, so it never goes stale.
+#[derive(Debug)]
+pub struct FirstRunLock {
+    _file: File,
+}
+
+impl FirstRunLock {
+    /// Takes the lock in `dir` (created private if missing), or
+    /// [`DeviceError::FirstRunInProgress`] if another holder has it.
+    pub fn acquire(dir: &Path) -> Result<Self, DeviceError> {
+        wildbloom_private_state::private_directory(dir).map_err(DeviceError::Lock)?;
+        let mut options = OpenOptions::new();
+        options.create(true).truncate(false).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let file = options
+            .open(dir.join(FIRST_RUN_LOCK_FILE))
+            .map_err(DeviceError::Lock)?;
+        wildbloom_private_state::check_file(&file).map_err(DeviceError::Lock)?;
+        fs2::FileExt::try_lock_exclusive(&file).map_err(|_| DeviceError::FirstRunInProgress)?;
+        Ok(Self { _file: file })
+    }
+}
+
+/// Drop's two long-lived secrets.
+#[derive(Debug)]
+pub struct DropIdentity {
+    pub device: DeviceKeys,
+    pub recovery: RecoverySecret,
+}
+
+/// Makes and stores the device key and recovery secret.  Refuses with
+/// [`DeviceError::AlreadyInitialised`] if either is already stored, so an
+/// existing recovery secret is never replaced.
+pub fn create_first_run<S: SecretStore>(
+    keychain: &DropKeychain<S>,
+    _lock: &FirstRunLock,
+) -> Result<DropIdentity, DeviceError> {
+    if identity_state(keychain)? != IdentityState::Fresh {
+        return Err(DeviceError::AlreadyInitialised);
+    }
+    let recovery = RecoverySecret::generate()?;
+    let device = DeviceKeys::generate();
+    keychain.set_device_secret(&device.secret_bytes())?;
+    if let Err(error) = keychain.set_recovery_secret(recovery.secret()) {
+        // Leave the keychain Fresh rather than Partial; nothing was shown yet.
+        let _ = keychain.remove_device_secret();
+        return Err(error.into());
+    }
+    Ok(DropIdentity { device, recovery })
+}
+
+/// Both stored secrets; [`DeviceError::RestoreNeeded`] if either is missing.
+pub fn load_identity<S: SecretStore>(
+    keychain: &DropKeychain<S>,
+) -> Result<DropIdentity, DeviceError> {
+    Ok(DropIdentity {
+        device: DeviceKeys::load(keychain)?,
+        recovery: RecoverySecret::load(keychain)?,
+    })
+}
+
+/// Stores the recovery secret the owner typed back in and makes this
+/// computer's device key if it has none.  A different stored recovery secret
+/// is refused, never overwritten.
+pub fn restore_identity<S: SecretStore>(
+    keychain: &DropKeychain<S>,
+    _lock: &FirstRunLock,
+    recovery: RecoverySecret,
+) -> Result<DropIdentity, DeviceError> {
+    match keychain.recovery_secret()? {
+        Some(stored) if stored != *recovery.secret() => {
+            return Err(DeviceError::DifferentRecoverySecret);
+        }
+        Some(_) => {}
+        None => keychain.set_recovery_secret(recovery.secret())?,
+    }
+    let device = match keychain.device_secret()? {
+        Some(secret) => DeviceKeys::from_secret(&secret)?,
+        None => {
+            let device = DeviceKeys::generate();
+            keychain.set_device_secret(&device.secret_bytes())?;
+            device
+        }
+    };
+    Ok(DropIdentity { device, recovery })
 }
 
 /// One file in the key list.
@@ -252,6 +398,8 @@ pub struct KeyListEntry {
 /// The owner's per-file keys and metadata, restored with the recovery secret.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KeyList {
+    /// 0 for a list never sealed; otherwise the `seq` of the last seal.
+    seq: u64,
     entries: Vec<KeyListEntry>,
 }
 
@@ -267,6 +415,16 @@ pub enum KeyListError {
     DuplicateId,
     #[error("the key list envelope could not be opened: {0}")]
     Envelope(String),
+    #[error("no key list copy was offered")]
+    NoCandidates,
+    /// The newest copy offered is older than one this computer already saw.
+    #[error("the newest key list offered (seq {newest}) is older than seq {last_seen}")]
+    Rollback { last_seen: u64, newest: u64 },
+    /// Two different lists claim the same `seq`.
+    #[error("two different key lists claim seq {0}")]
+    Conflict(u64),
+    #[error("the key list sequence number is exhausted")]
+    SeqExhausted,
 }
 
 impl From<wildbloom_envelope::Error> for KeyListError {
@@ -280,6 +438,7 @@ impl From<wildbloom_envelope::Error> for KeyListError {
 #[serde(deny_unknown_fields)]
 struct WireList {
     v: String,
+    seq: u64,
     files: Vec<WireEntry>,
 }
 
@@ -313,6 +472,11 @@ impl KeyList {
         Self::default()
     }
 
+    /// The `seq` of the last seal or open; 0 if never sealed.
+    pub fn seq(&self) -> u64 {
+        self.seq
+    }
+
     /// Entries in ascending id order.
     pub fn entries(&self) -> &[KeyListEntry] {
         &self.entries
@@ -342,11 +506,12 @@ impl KeyList {
         Some(self.entries.remove(at))
     }
 
-    /// The canonical version-1 plaintext.  Contains every key, so it is
-    /// zeroised on drop.
-    pub fn to_canonical_json(&self) -> Zeroizing<Vec<u8>> {
+    /// The canonical version-1 plaintext at `seq`.  Contains every key, so it
+    /// is zeroised on drop.
+    fn canonical_json_at(&self, seq: u64) -> Zeroizing<Vec<u8>> {
         let wire = WireList {
             v: KEY_LIST_VERSION.to_string(),
+            seq,
             files: self
                 .entries
                 .iter()
@@ -365,9 +530,14 @@ impl KeyList {
         // Reserve generously so the buffer never reallocates and leaves an
         // unzeroised copy: an entry is under 1,700 bytes even with maximal
         // name and type.
-        let mut out = Zeroizing::new(Vec::with_capacity(64 + wire.files.len() * 1_700));
+        let mut out = Zeroizing::new(Vec::with_capacity(96 + wire.files.len() * 1_700));
         serde_json::to_writer(&mut *out, &wire).expect("serialising plain data cannot fail");
         out
+    }
+
+    /// The canonical plaintext at the current `seq`.
+    pub fn to_canonical_json(&self) -> Zeroizing<Vec<u8>> {
+        self.canonical_json_at(self.seq)
     }
 
     /// Strict decode of version-1 plaintext.
@@ -379,6 +549,9 @@ impl KeyList {
         }
         let wire: WireList =
             serde_json::from_slice(bytes).map_err(|_| KeyListError::Malformed("shape"))?;
+        if wire.seq == 0 || wire.seq > MAX_SAFE_INTEGER {
+            return Err(KeyListError::Malformed("seq"));
+        }
         let mut entries = Vec::with_capacity(wire.files.len());
         for file in &wire.files {
             let entry = KeyListEntry {
@@ -403,34 +576,87 @@ impl KeyList {
             }
             entries.push(entry);
         }
-        let list = Self { entries };
+        let list = Self {
+            seq: wire.seq,
+            entries,
+        };
         if list.to_canonical_json().as_slice() != bytes {
             return Err(KeyListError::Malformed("canonical form"));
         }
         Ok(list)
     }
 
-    /// Seals the key list as an FSWNENC2 vault-mode envelope under the recovery
-    /// secret.  The result is ciphertext, safe to upload.
-    pub fn seal(&self, recovery: &RecoverySecret) -> Result<Vec<u8>, KeyListError> {
-        let json = self.to_canonical_json();
-        Ok(wildbloom_envelope::seal_bytes(
-            recovery.input_key(),
+    /// Seals the key list at `seq + 1` as an FSWNENC2 vault-mode envelope under
+    /// the key list vault key, and advances `seq` only if sealing succeeded.
+    /// The result is ciphertext, safe to upload.
+    pub fn seal(&mut self, recovery: &RecoverySecret) -> Result<Vec<u8>, KeyListError> {
+        let next = self
+            .seq
+            .checked_add(1)
+            .filter(|n| *n <= MAX_SAFE_INTEGER)
+            .ok_or(KeyListError::SeqExhausted)?;
+        let json = self.canonical_json_at(next);
+        let sealed = wildbloom_envelope::seal_bytes(
+            &recovery.key_list_key(),
             KEY_LIST_NAME,
             KEY_LIST_MEDIA_TYPE,
             &json,
             KEY_LIST_LIMITS,
-        )?)
+        )?;
+        self.seq = next;
+        Ok(sealed)
     }
 
-    /// Opens a sealed key list on restore.
+    /// Opens one sealed key list.
     pub fn open(recovery: &RecoverySecret, envelope: &[u8]) -> Result<Self, KeyListError> {
         let (metadata, json) =
-            wildbloom_envelope::open_bytes(recovery.input_key(), envelope, KEY_LIST_LIMITS)?;
+            wildbloom_envelope::open_bytes(&recovery.key_list_key(), envelope, KEY_LIST_LIMITS)?;
         if metadata.name != KEY_LIST_NAME || metadata.media_type != KEY_LIST_MEDIA_TYPE {
             return Err(KeyListError::NotAKeyList);
         }
         Self::from_canonical_json(&json)
+    }
+
+    /// Opens every candidate copy (for example one per node) and returns the one
+    /// with the highest `seq`.  Copies that fail to open are skipped; if none
+    /// opens, the first failure is returned.  Two different lists with the
+    /// same top `seq` are a [`KeyListError::Conflict`], and a newest `seq` below
+    /// `last_seen` (the highest this computer has sealed or opened, 0 if none)
+    /// is a [`KeyListError::Rollback`].
+    pub fn open_newest(
+        recovery: &RecoverySecret,
+        candidates: &[&[u8]],
+        last_seen: u64,
+    ) -> Result<Self, KeyListError> {
+        let mut newest: Option<Self> = None;
+        let mut first_error = None;
+        for candidate in candidates {
+            match Self::open(recovery, candidate) {
+                Ok(list) => match &newest {
+                    Some(best) if best.seq > list.seq => {}
+                    Some(best) if best.seq == list.seq => {
+                        if *best != list {
+                            return Err(KeyListError::Conflict(list.seq));
+                        }
+                    }
+                    _ => newest = Some(list),
+                },
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        let newest = match newest {
+            Some(list) => list,
+            None => return Err(first_error.unwrap_or(KeyListError::NoCandidates)),
+        };
+        if newest.seq < last_seen {
+            return Err(KeyListError::Rollback {
+                last_seen,
+                newest: newest.seq,
+            });
+        }
+        Ok(newest)
     }
 }
 
@@ -478,23 +704,31 @@ mod tests {
         }
     }
 
+    /// Two entries at seq 7.
     fn list() -> KeyList {
         let mut list = KeyList::new();
         list.insert(entry(2, 0x20)).unwrap();
         list.insert(entry(1, 0x10)).unwrap();
+        list.seq = 7;
         list
+    }
+
+    fn keychain() -> (Arc<MemoryStore>, DropKeychain<Arc<MemoryStore>>) {
+        let store = Arc::new(MemoryStore::default());
+        (store.clone(), DropKeychain::new(store))
     }
 
     /// Synthetic recovery secret 0x00..0x1f: test material only.  The expected
     /// values were computed independently (RFC 5869 HKDF and secp256k1 scalar
     /// multiplication in a separate script), not read back from this code.
     #[test]
-    fn recovery_identity_vector() {
+    fn recovery_derivation_vectors() {
         assert_eq!(RECOVERY_HKDF_SALT, b"wildbloom-drop/v1");
         assert_eq!(
             RECOVERY_IDENTITY_INFO,
             b"wildbloom-drop/recovery-identity/secp256k1/v1"
         );
+        assert_eq!(KEY_LIST_VAULT_INFO, b"wildbloom-drop/key-list-vault/v1");
         let secret = RecoverySecret::from_input_key(counting(0)).unwrap();
         let identity = secret.identity();
         assert_eq!(
@@ -505,21 +739,45 @@ mod tests {
             identity.public_key_hex(),
             "dc1fbd4e2105c9fafd35fcd3374f3e513d098227967ee1f8a703f246061613b0"
         );
-        // Deterministic: the same secret always gives the same identity.
+        assert_eq!(
+            secret.key_list_key(),
+            InputKey::from_bytes(std::array::from_fn(|i| {
+                u8::from_str_radix(
+                    &"e3d4547d81ac74018709cc8432a1452981499b1c4929c384caf82a3ed6253abb"
+                        [i * 2..i * 2 + 2],
+                    16,
+                )
+                .unwrap()
+            }))
+        );
+        // Deterministic: the same secret always gives the same outputs.
         let again = RecoverySecret::parse(&secret.to_display()).unwrap();
         assert_eq!(again.identity().public_key_hex(), identity.public_key_hex());
+        assert_eq!(again.key_list_key(), secret.key_list_key());
     }
 
     #[test]
-    fn recovery_identity_is_independent_of_the_key_list_envelope_key() {
-        // The identity secret must not equal the FSWNENC2 derivation of the same
-        // input under any salt the identity uses.
+    fn the_three_keys_are_distinct() {
         let secret = RecoverySecret::from_input_key(counting(0)).unwrap();
         let identity = secret.identity().keys().secret_key().to_secret_bytes();
-        let envelope_key =
-            wildbloom_envelope::derive_envelope_key(secret.input_key(), RECOVERY_HKDF_SALT);
-        assert_ne!(identity, *envelope_key);
-        assert_ne!(identity, *secret.input_key().expose());
+        let vault = *secret.key_list_key().expose();
+        let raw = *secret.secret().expose();
+        assert_ne!(identity, vault);
+        assert_ne!(identity, raw);
+        assert_ne!(vault, raw);
+    }
+
+    #[test]
+    fn the_key_list_is_not_sealed_under_the_raw_secret() {
+        let recovery = RecoverySecret::from_input_key(counting(0)).unwrap();
+        let sealed = list().seal(&recovery).unwrap();
+        assert!(
+            wildbloom_envelope::open_bytes(recovery.secret(), &sealed, KEY_LIST_LIMITS).is_err()
+        );
+        assert!(
+            wildbloom_envelope::open_bytes(&recovery.key_list_key(), &sealed, KEY_LIST_LIMITS)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -528,6 +786,7 @@ mod tests {
         let b = RecoverySecret::generate().unwrap();
         assert_ne!(a, b);
         assert_ne!(a.identity().public_key_hex(), b.identity().public_key_hex());
+        assert_ne!(a.key_list_key(), b.key_list_key());
         assert_eq!(a.to_display().len(), 48);
         assert!(a.to_display().starts_with("wbk1_"));
     }
@@ -564,21 +823,115 @@ mod tests {
     }
 
     #[test]
-    fn device_keys_round_trip_through_the_keychain() {
-        let store = Arc::new(MemoryStore::default());
-        let keychain = DropKeychain::new(store.clone());
-        let first = DeviceKeys::load_or_create(&keychain).unwrap();
-        let second = DeviceKeys::load_or_create(&keychain).unwrap();
-        assert_eq!(first.public_key_hex(), second.public_key_hex());
-        assert_eq!(first.public_key_hex().len(), 64);
+    fn first_run_creates_once_and_load_never_regenerates() {
+        let lock_dir = tempfile::tempdir().unwrap();
+        let (store, keychain) = keychain();
+        assert_eq!(identity_state(&keychain).unwrap(), IdentityState::Fresh);
+        assert!(matches!(
+            load_identity(&keychain),
+            Err(DeviceError::RestoreNeeded)
+        ));
+        assert!(store.accounts().is_empty(), "load must not create");
+
+        let lock = FirstRunLock::acquire(&lock_dir.path().join("locks")).unwrap();
+        let created = create_first_run(&keychain, &lock).unwrap();
+        assert_eq!(identity_state(&keychain).unwrap(), IdentityState::Ready);
+        assert!(matches!(
+            create_first_run(&keychain, &lock),
+            Err(DeviceError::AlreadyInitialised)
+        ));
+        let loaded = load_identity(&keychain).unwrap();
+        assert_eq!(loaded.recovery, created.recovery);
+        assert_eq!(
+            loaded.device.public_key_hex(),
+            created.device.public_key_hex()
+        );
         assert!(matches!(
             DeviceKeys::from_secret(&[0; 32]),
             Err(DeviceError::InvalidDeviceSecret)
         ));
+    }
 
-        let recovery = RecoverySecret::load_or_create(&keychain).unwrap();
-        assert_eq!(RecoverySecret::load_or_create(&keychain).unwrap(), recovery);
-        assert_eq!(store.accounts().len(), 2);
+    #[test]
+    fn a_lost_entry_is_partial_and_needs_restore() {
+        let lock_dir = tempfile::tempdir().unwrap();
+        let (_, keychain) = keychain();
+        let lock = FirstRunLock::acquire(&lock_dir.path().join("locks")).unwrap();
+        let created = create_first_run(&keychain, &lock).unwrap();
+
+        keychain.remove_device_secret().unwrap();
+        assert_eq!(identity_state(&keychain).unwrap(), IdentityState::Partial);
+        assert!(matches!(
+            DeviceKeys::load(&keychain),
+            Err(DeviceError::RestoreNeeded)
+        ));
+        assert!(matches!(
+            create_first_run(&keychain, &lock),
+            Err(DeviceError::AlreadyInitialised)
+        ));
+        // Restoring with the same recovery key makes a new device key and keeps
+        // the recovery secret.
+        let restored = restore_identity(&keychain, &lock, created.recovery.clone()).unwrap();
+        assert_eq!(restored.recovery, created.recovery);
+        assert_ne!(
+            restored.device.public_key_hex(),
+            created.device.public_key_hex()
+        );
+        assert_eq!(identity_state(&keychain).unwrap(), IdentityState::Ready);
+
+        // A different recovery key is refused, never overwritten.
+        let other = RecoverySecret::generate().unwrap();
+        assert!(matches!(
+            restore_identity(&keychain, &lock, other),
+            Err(DeviceError::DifferentRecoverySecret)
+        ));
+        assert_eq!(RecoverySecret::load(&keychain).unwrap(), created.recovery);
+    }
+
+    #[test]
+    fn a_failed_recovery_write_leaves_the_keychain_fresh() {
+        struct FailRecovery(MemoryStore);
+        impl SecretStore for FailRecovery {
+            fn read(&self, a: &str) -> Result<Option<Zeroizing<Vec<u8>>>, KeychainError> {
+                self.0.read(a)
+            }
+            fn write(&self, a: &str, s: &[u8]) -> Result<(), KeychainError> {
+                if a.contains("recovery") {
+                    return Err(KeychainError::Denied);
+                }
+                self.0.write(a, s)
+            }
+            fn remove(&self, a: &str) -> Result<(), KeychainError> {
+                self.0.remove(a)
+            }
+        }
+        let lock_dir = tempfile::tempdir().unwrap();
+        let keychain = DropKeychain::new(FailRecovery(MemoryStore::default()));
+        let lock = FirstRunLock::acquire(&lock_dir.path().join("locks")).unwrap();
+        assert!(matches!(
+            create_first_run(&keychain, &lock),
+            Err(DeviceError::Keychain(KeychainError::Denied))
+        ));
+        assert_eq!(identity_state(&keychain).unwrap(), IdentityState::Fresh);
+    }
+
+    #[test]
+    fn first_run_is_single_flight() {
+        let work = tempfile::tempdir().unwrap();
+        let dir = work.path().join("locks");
+        let held = FirstRunLock::acquire(&dir).unwrap();
+        assert!(matches!(
+            FirstRunLock::acquire(&dir),
+            Err(DeviceError::FirstRunInProgress)
+        ));
+        // From another thread too.
+        let path = dir.clone();
+        let other = std::thread::spawn(move || FirstRunLock::acquire(&path).map(|_| ()))
+            .join()
+            .unwrap();
+        assert!(matches!(other, Err(DeviceError::FirstRunInProgress)));
+        drop(held);
+        assert!(FirstRunLock::acquire(&dir).is_ok());
     }
 
     #[test]
@@ -589,7 +942,7 @@ mod tests {
         let k2 = counting(0x20).to_wbk1();
         let expected = format!(
             concat!(
-                r#"{{"v":"wildbloom-drop-keys/1","files":["#,
+                r#"{{"v":"wildbloom-drop-keys/1","seq":7,"files":["#,
                 r#"{{"id":"{id1}","sha256":"{h1}","size":65608,"key":"{k1}","name":"file-1.txt","type":"text/plain","bytes":43,"added":1900000000}},"#,
                 r#"{{"id":"{id2}","sha256":"{h2}","size":65608,"key":"{k2}","name":"file-2.txt","type":"text/plain","bytes":43,"added":1900000000}}"#,
                 r#"]}}"#
@@ -603,29 +956,68 @@ mod tests {
         );
         assert_eq!(text, expected);
         assert_eq!(KeyList::from_canonical_json(&json).unwrap(), list());
+        let empty =
+            KeyList::from_canonical_json(br#"{"v":"wildbloom-drop-keys/1","seq":1,"files":[]}"#)
+                .unwrap();
+        assert_eq!(empty.seq(), 1);
+        assert!(empty.entries().is_empty());
+    }
+
+    #[test]
+    fn seq_is_required_and_bounded() {
+        for json in [
+            r#"{"v":"wildbloom-drop-keys/1","files":[]}"#,
+            r#"{"v":"wildbloom-drop-keys/1","seq":"1","files":[]}"#,
+            r#"{"v":"wildbloom-drop-keys/1","seq":-1,"files":[]}"#,
+        ] {
+            assert_eq!(
+                KeyList::from_canonical_json(json.as_bytes()),
+                Err(KeyListError::Malformed("shape")),
+                "{json}"
+            );
+        }
+        for json in [
+            r#"{"v":"wildbloom-drop-keys/1","seq":0,"files":[]}"#,
+            r#"{"v":"wildbloom-drop-keys/1","seq":9007199254740992,"files":[]}"#,
+        ] {
+            assert_eq!(
+                KeyList::from_canonical_json(json.as_bytes()),
+                Err(KeyListError::Malformed("seq")),
+                "{json}"
+            );
+        }
         assert_eq!(
-            KeyList::from_canonical_json(br#"{"v":"wildbloom-drop-keys/1","files":[]}"#).unwrap(),
-            KeyList::new()
+            KeyList::from_canonical_json(br#"{"v":"wildbloom-drop-keys/1","files":[],"seq":1}"#),
+            Err(KeyListError::Malformed("canonical form"))
         );
     }
 
     #[test]
-    fn key_list_round_trips_sealed_under_the_recovery_secret() {
+    fn sealing_advances_seq_and_round_trips() {
         let recovery = RecoverySecret::generate().unwrap();
-        let sealed = list().seal(&recovery).unwrap();
-        assert_eq!(&sealed[..8], wildbloom_envelope::MAGIC);
-        let haystack = String::from_utf8_lossy(&sealed);
+        let mut list = list();
+        let first = list.seal(&recovery).unwrap();
+        assert_eq!(list.seq(), 8);
+        assert_eq!(&first[..8], wildbloom_envelope::MAGIC);
+        let haystack = String::from_utf8_lossy(&first);
         assert!(!haystack.contains("wbk1_") && !haystack.contains("file-1"));
-        assert_eq!(KeyList::open(&recovery, &sealed).unwrap(), list());
-        // Each seal draws a fresh salt.
-        assert_ne!(list().seal(&recovery).unwrap(), sealed);
+        let opened = KeyList::open(&recovery, &first).unwrap();
+        assert_eq!(opened, list);
+        let second = list.seal(&recovery).unwrap();
+        assert_eq!(list.seq(), 9);
+        assert_ne!(second, first);
+
+        let mut exhausted = KeyList::new();
+        exhausted.seq = MAX_SAFE_INTEGER;
+        assert_eq!(exhausted.seal(&recovery), Err(KeyListError::SeqExhausted));
+        assert_eq!(exhausted.seq(), MAX_SAFE_INTEGER);
 
         let wrong = RecoverySecret::generate().unwrap();
         assert!(matches!(
-            KeyList::open(&wrong, &sealed),
+            KeyList::open(&wrong, &first),
             Err(KeyListError::Envelope(_))
         ));
-        let mut tampered = sealed.clone();
+        let mut tampered = first.clone();
         let last = tampered.len() - 1;
         tampered[last] ^= 1;
         assert!(matches!(
@@ -635,11 +1027,57 @@ mod tests {
     }
 
     #[test]
+    fn open_newest_picks_the_highest_seq_and_refuses_rollback() {
+        let recovery = RecoverySecret::generate().unwrap();
+        let mut list = list();
+        let old = list.seal(&recovery).unwrap(); // seq 8
+        list.insert(entry(3, 0x30)).unwrap();
+        let new = list.seal(&recovery).unwrap(); // seq 9
+        let garbage = vec![0u8; 100];
+
+        let newest = KeyList::open_newest(&recovery, &[&old, &garbage, &new, &old], 0).unwrap();
+        assert_eq!(newest.seq(), 9);
+        assert_eq!(newest.entries().len(), 3);
+        assert_eq!(
+            KeyList::open_newest(&recovery, &[&new, &new], 9)
+                .unwrap()
+                .seq(),
+            9
+        );
+        // A node that only serves the old copy is caught.
+        assert_eq!(
+            KeyList::open_newest(&recovery, &[&old], 9),
+            Err(KeyListError::Rollback {
+                last_seen: 9,
+                newest: 8
+            })
+        );
+        assert_eq!(
+            KeyList::open_newest(&recovery, &[], 0),
+            Err(KeyListError::NoCandidates)
+        );
+        assert!(matches!(
+            KeyList::open_newest(&recovery, &[&garbage], 0),
+            Err(KeyListError::Envelope(_))
+        ));
+
+        // Two different lists claiming one seq.
+        let mut fork = self::list();
+        fork.seq = 8;
+        fork.insert(entry(4, 0x40)).unwrap();
+        let forked = fork.seal(&recovery).unwrap(); // also seq 9
+        assert_eq!(
+            KeyList::open_newest(&recovery, &[&new, &forked], 0),
+            Err(KeyListError::Conflict(9))
+        );
+    }
+
+    #[test]
     fn an_envelope_that_is_not_a_key_list_is_refused() {
         let recovery = RecoverySecret::generate().unwrap();
         let json = list().to_canonical_json();
         let other = wildbloom_envelope::seal_bytes(
-            recovery.input_key(),
+            &recovery.key_list_key(),
             "photo.json",
             "application/json",
             &json,
@@ -663,7 +1101,7 @@ mod tests {
             );
         }
         assert_eq!(
-            KeyList::from_canonical_json(br#"{"files":[]}"#),
+            KeyList::from_canonical_json(br#"{"seq":1,"files":[]}"#),
             Err(KeyListError::Malformed("shape"))
         );
     }
@@ -684,7 +1122,7 @@ mod tests {
                 )
             };
             format!(
-                r#"{{"v":"wildbloom-drop-keys/1","files":[{},{}]}}"#,
+                r#"{{"v":"wildbloom-drop-keys/1","seq":7,"files":[{},{}]}}"#,
                 one(b),
                 one(a)
             )

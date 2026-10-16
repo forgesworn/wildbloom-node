@@ -7,6 +7,23 @@ use wildbloom_envelope::{InputKey, Limits, Metadata, Progress, Sealed};
 
 pub use wildbloom_envelope::Error as EnvelopeError;
 
+/// Removes `.wildbloom-*.part` files a killed process left in the Drop temp
+/// directory.  Call once at start-up, before any Drop operation.  The temp
+/// directory must be private app data, never a synced or backed-up folder.
+pub fn sweep_stale_temp_files(temp_dir: &Path) -> Result<usize, EnvelopeError> {
+    wildbloom_envelope::sweep_stale_temp_files(temp_dir)
+}
+
+/// Why a new drop could not be encrypted.
+#[derive(Debug, thiserror::Error)]
+pub enum EncryptError {
+    /// An empty file, refused as the browser client refuses it.
+    #[error("the file is empty")]
+    EmptySource,
+    #[error(transparent)]
+    Envelope(#[from] EnvelopeError),
+}
+
 /// Q13: a shared copy carries at most 250 MB (decimal) of plaintext, which stays
 /// under the recipient page's 256 MiB after padding.
 pub const SHARE_MAX_PLAINTEXT_BYTES: u64 = 250_000_000;
@@ -53,13 +70,17 @@ pub struct EncryptedFile {
 
 /// Encrypts the file at `source` under a fresh random key into a private temp
 /// file in `temp_dir`.  The stored name is the sanitised final path component.
+/// An empty file is [`EncryptError::EmptySource`].
 pub fn encrypt_new_file(
     source: &Path,
     media_type: &str,
     limits: Limits,
     temp_dir: &Path,
     progress: Progress<'_>,
-) -> Result<EncryptedFile, EnvelopeError> {
+) -> Result<EncryptedFile, EncryptError> {
+    if std::fs::metadata(source).map_err(EnvelopeError::Io)?.len() == 0 {
+        return Err(EncryptError::EmptySource);
+    }
     let name = source
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -68,6 +89,10 @@ pub fn encrypt_new_file(
     let (sealed, file) = wildbloom_envelope::encrypt_file_to_private_temp(
         &key, source, &name, media_type, limits, temp_dir, progress,
     )?;
+    // The crate reads the length when it opens the file; check what it sealed.
+    if sealed.metadata.size == 0 {
+        return Err(EncryptError::EmptySource);
+    }
     Ok(EncryptedFile { key, sealed, file })
 }
 
@@ -137,5 +162,25 @@ mod tests {
             decrypt_to_private_temp(&b.key, a.file.path(), SHARE_LIMITS, &temp, &mut go()),
             Err(EnvelopeError::Authentication)
         ));
+    }
+
+    #[test]
+    fn an_empty_file_is_refused() {
+        let work = tempfile::tempdir().unwrap();
+        let source = work.path().join("empty.txt");
+        std::fs::write(&source, b"").unwrap();
+        let temp = work.path().join("private");
+        assert!(matches!(
+            encrypt_new_file(&source, "", SHARE_LIMITS, &temp, &mut go()),
+            Err(EncryptError::EmptySource)
+        ));
+        assert!(!temp.exists() || std::fs::read_dir(&temp).unwrap().count() == 0);
+    }
+
+    #[test]
+    fn the_startup_sweep_is_exposed() {
+        let work = tempfile::tempdir().unwrap();
+        let temp = work.path().join("private");
+        assert_eq!(sweep_stale_temp_files(&temp).unwrap(), 0);
     }
 }

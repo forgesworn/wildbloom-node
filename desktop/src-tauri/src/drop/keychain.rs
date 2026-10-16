@@ -29,9 +29,12 @@ const FILE_KEY_PREFIX: &str = "drop/file-key/";
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum KeychainError {
     /// Linux only: no Secret Service provider (or no D-Bus session) is running.
-    /// The first-run copy asks the owner to install or start a keyring.
+    /// The first-run copy asks the owner to install or start a keyring.  When
+    /// `restart_needed` is true the store failed to start when the app did, and
+    /// keyring caches that for the life of the process, so the app must be
+    /// restarted after the keyring is started; otherwise a retry is enough.
     #[error("no Secret Service keyring is running on this computer")]
-    SecretServiceMissing,
+    SecretServiceMissing { restart_needed: bool },
     /// The platform keychain could not be initialised.
     #[error("the system keychain is unavailable")]
     Unavailable,
@@ -112,10 +115,10 @@ impl SecretStore for OsKeychain {
 fn classify(error: &keyring::Error) -> KeychainError {
     use keyring::Error as E;
     match error {
-        E::NoDefaultStore => missing_or(KeychainError::Unavailable),
+        E::NoDefaultStore => missing_or(true, KeychainError::Unavailable),
         E::PlatformFailure(inner) => {
             if names_missing_secret_service(&inner.to_string()) {
-                missing_or(KeychainError::Platform("platform failure"))
+                missing_or(false, KeychainError::Platform("platform failure"))
             } else {
                 KeychainError::Platform("platform failure")
             }
@@ -134,9 +137,9 @@ fn classify(error: &keyring::Error) -> KeychainError {
 
 /// On Linux a store that cannot start, or a D-Bus failure naming the Secret
 /// Service, means no provider is running.  Elsewhere it is the fallback.
-fn missing_or(fallback: KeychainError) -> KeychainError {
+fn missing_or(restart_needed: bool, fallback: KeychainError) -> KeychainError {
     if cfg!(target_os = "linux") {
-        KeychainError::SecretServiceMissing
+        KeychainError::SecretServiceMissing { restart_needed }
     } else {
         fallback
     }
@@ -213,6 +216,11 @@ impl<S: SecretStore> DropKeychain<S> {
 
     pub fn remove_file_key(&self, id: &FileId) -> Result<(), KeychainError> {
         self.store.remove(&file_account(id))
+    }
+
+    /// Removes only the device secret (rolling back an interrupted first run).
+    pub fn remove_device_secret(&self) -> Result<(), KeychainError> {
+        self.store.remove(DEVICE_SECRET)
     }
 
     /// Removes the device and recovery secrets (used when the owner resets Drop).
@@ -339,11 +347,11 @@ mod tests {
     #[test]
     fn store_errors_pass_through_typed() {
         let (store, keychain) = keychain();
-        *store.fail_with.lock().unwrap() = Some(KeychainError::SecretServiceMissing);
-        assert_eq!(
-            keychain.device_secret().unwrap_err(),
-            KeychainError::SecretServiceMissing
-        );
+        let missing = KeychainError::SecretServiceMissing {
+            restart_needed: false,
+        };
+        *store.fail_with.lock().unwrap() = Some(missing.clone());
+        assert_eq!(keychain.device_secret().unwrap_err(), missing);
     }
 
     #[test]
@@ -357,7 +365,12 @@ mod tests {
         }
         let unavailable = classify(&keyring::Error::NoDefaultStore);
         if cfg!(target_os = "linux") {
-            assert_eq!(unavailable, KeychainError::SecretServiceMissing);
+            assert_eq!(
+                unavailable,
+                KeychainError::SecretServiceMissing {
+                    restart_needed: true
+                }
+            );
         } else {
             assert_eq!(unavailable, KeychainError::Unavailable);
         }
