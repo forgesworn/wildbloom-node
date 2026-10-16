@@ -140,7 +140,17 @@ pub struct Engine {
     pub(crate) wake: Notify,
     pub(crate) approval: Mutex<super::approve::ApprovalRuntime>,
     pub(crate) shares: Mutex<HashMap<String, super::share::ShareSession>>,
+    /// One share flow per file at a time.
+    pub(crate) share_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     pub(crate) watch_wake: Notify,
+    pub(crate) deletes_wake: Notify,
+    /// Rows removed while still being encrypted: their key and outbox file
+    /// must not be kept.
+    pub(crate) removed_ids: Mutex<std::collections::HashSet<String>>,
+    /// Held for writing while restore may replace the recovery secret, and
+    /// for reading by every add, so no file is keyed under a secret that is
+    /// about to change.
+    pub(crate) setup_lock: tokio::sync::RwLock<()>,
 }
 
 impl std::fmt::Debug for Engine {
@@ -190,6 +200,9 @@ pub(crate) mod kv {
     pub const LAST_CHECK: &str = "last_copy_check";
     /// A sealed key list has not reached every node it should be on.
     pub const KEY_LIST_PENDING: &str = "key_list_pending";
+    /// The key list could not be opened or sealed; shown in the status line.
+    pub const KEY_LIST_FAILED: &str = "key_list_failed";
+    pub const LOCAL_FRIEND_EXPIRY: &str = "local_friend_expiry";
 }
 
 impl Engine {
@@ -240,7 +253,11 @@ impl Engine {
             wake: Notify::new(),
             approval: Mutex::new(super::approve::ApprovalRuntime::default()),
             shares: Mutex::new(HashMap::new()),
+            share_locks: Mutex::new(HashMap::new()),
             watch_wake: Notify::new(),
+            deletes_wake: Notify::new(),
+            removed_ids: Mutex::new(std::collections::HashSet::new()),
+            setup_lock: tokio::sync::RwLock::new(()),
         });
         let _ = engine.keychain();
         Ok(engine)
@@ -263,7 +280,42 @@ impl Engine {
                 }
             }
         }
+        self.sweep_orphan_outbox();
+        // The index and keychain are the durable record of the key list.
+        self.keysync_wake.notify_one();
         self.spawn_workers();
+    }
+
+    /// Envelopes in the outbox whose row is gone (removed while encrypting,
+    /// or before a crash) are deleted.  Their keys were removed with the row.
+    fn sweep_orphan_outbox(&self) {
+        let Ok(entries) = std::fs::read_dir(self.cfg.data_dir.join("outbox")) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(id) = name.to_str().and_then(|n| n.strip_suffix(".fswn")) else {
+                continue;
+            };
+            let keep = self
+                .index
+                .file(id)
+                .ok()
+                .flatten()
+                .is_some_and(|f| f.local == local::PENDING);
+            if !keep {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+
+    /// Whether `id` was removed while its encryption was running.
+    pub(crate) fn was_removed(&self, id: &str) -> bool {
+        self.removed_ids
+            .lock()
+            .map(|r| r.contains(id))
+            .unwrap_or(true)
+            || self.index.file(id).ok().flatten().is_none()
     }
 
     // ------------------------------------------------------------ keychain
@@ -354,6 +406,17 @@ impl Engine {
             return None;
         }
         node.endpoint
+    }
+
+    /// The fixed expiry of the local node's friend grant for the Drop keys
+    /// (ten years from first use), so its grant identity never changes.
+    pub fn local_friend_expiry(&self) -> u64 {
+        if let Ok(Some(expiry)) = self.index.get_u64(kv::LOCAL_FRIEND_EXPIRY) {
+            return expiry;
+        }
+        let expiry = now() + 10 * 366 * 86_400;
+        let _ = self.index.set_u64(kv::LOCAL_FRIEND_EXPIRY, expiry);
+        expiry
     }
 
     /// The local node is listening: run pending uploads and the key list now.
@@ -470,6 +533,11 @@ impl Engine {
             },
         };
         let recovery = RecoveryStatus {
+            key_list: if self.key_list_failed() {
+                "failed"
+            } else {
+                "ok"
+            },
             saved_at: self.index.get_u64(kv::RECOVERY_SAVED_AT).ok().flatten(),
             confirmed: self
                 .index
@@ -551,6 +619,8 @@ impl Engine {
                     "shared"
                 }
                 Some(index::share::STOP_PENDING) => "stop_pending",
+                // Shown until the record is swept a day after it was marked.
+                Some(index::share::OWNER_ONLY) => "share_owner_only",
                 Some(index::share::ENDED)
                     if share
                         .and_then(|s| s.ended_at)
@@ -634,6 +704,7 @@ impl Engine {
     pub async fn drop_status(self: &Arc<Self>, recheck: Option<&str>) -> DropSnapshot {
         match recheck {
             Some("keychain") => self.recheck_keychain(),
+            Some("keylist") => self.sync_key_list_reporting().await,
             Some("online") => {
                 self.check_online().await;
                 self.wake.notify_one();
@@ -721,6 +792,7 @@ impl Engine {
                     .map_err(|_| CommandError::with_host("not_a_node", host_of(url)))?;
                 let origin = node.origin().to_owned();
                 if previous.as_deref() != Some(origin.as_str()) {
+                    self.end_shares_before_node_change().await?;
                     self.index.set(kv::ONLINE_URL, &origin).or_internal()?;
                     self.forget_approval()?;
                     self.requeue_all_online()?;
@@ -737,6 +809,9 @@ impl Engine {
                 }
             }
             None => {
+                if previous.is_some() {
+                    self.end_shares_before_node_change().await?;
+                }
                 self.index.unset(kv::ONLINE_URL).or_internal()?;
                 self.forget_approval()?;
                 for file in self.index.files().or_internal()? {
@@ -892,6 +967,7 @@ impl Engine {
         if paths.is_empty() {
             return Ok(result);
         }
+        let _setup = self.setup_lock.read().await;
         self.identity()?;
         let limit = self.drop_max_bytes();
         for path in paths {
@@ -993,6 +1069,9 @@ impl Engine {
                 limits,
                 &temp_dir,
                 &mut |done, total| {
+                    if engine.was_removed(&progress_id) {
+                        return ControlFlow::Break(());
+                    }
                     let percent = (done.saturating_mul(100) / total.max(1)).min(99) as u8;
                     engine.set_progress(&progress_id, percent);
                     ControlFlow::Continue(())
@@ -1000,6 +1079,12 @@ impl Engine {
             )
         })
         .await;
+        if self.was_removed(&id) {
+            // Removed while encrypting: the envelope (a temp file) drops here
+            // and no key is ever stored.
+            self.clear_progress(&id);
+            return;
+        }
         let encrypted = match outcome {
             Ok(Ok(encrypted)) => encrypted,
             _ => {
@@ -1034,7 +1119,17 @@ impl Engine {
             self.emit_row(&id);
             return;
         }
+        if self.was_removed(&id) {
+            // Removed between the check above and storing the key.
+            let _ = keychain.remove_file_key(&file_id);
+            let _ = std::fs::remove_file(&outbox);
+            self.clear_progress(&id);
+            return;
+        }
         let _ = self.index.set_envelope(&id, &sha, size);
+        let _ = self
+            .index
+            .set_media_type(&id, &encrypted.sealed.metadata.media_type);
         let _ = self.index.set_local(&id, local::PENDING);
         {
             let mut keylist = self.keylist.lock().await;
@@ -1289,42 +1384,56 @@ impl Engine {
     }
 
     /// Deletes both copies, any shared copy and the key.  The original file is
-    /// never touched.  Deletions a node cannot take now are queued.
+    /// never touched.  Deletions a node cannot take now are queued against
+    /// the node that holds the copy.
     pub async fn remove(self: &Arc<Self>, id: &str) -> CommandResult<()> {
         let file = self
             .index
             .file(id)
             .or_internal()?
             .ok_or(CommandError::code("not_found"))?;
+        // An encryption still running for this row sees the flag and keeps
+        // neither its key nor its envelope.
+        if let Ok(mut removed) = self.removed_ids.lock() {
+            removed.insert(id.to_owned());
+        }
         self.cancel_share_session(id).await;
+        let at = now();
         if let Some(sha) = &file.sha256 {
             self.index
-                .queue_delete("local", sha, "device")
+                .queue_delete("local", sha, "device", 0)
                 .or_internal()?;
-            if file.online != online::NONE {
+            if file.online != online::NONE
+                && let Some(online) = self.online_endpoint()
+            {
                 self.index
-                    .queue_delete("online", sha, "device")
+                    .queue_delete(online.origin(), sha, "device", 0)
                     .or_internal()?;
             }
         }
         if let Some(share) = self.index.share(id).or_internal()?
-            && share.state != index::share::ENDED
+            && matches!(
+                share.state.as_str(),
+                index::share::OPEN | index::share::SENT | index::share::STOP_PENDING
+            )
         {
             self.index
-                .queue_delete("online", &share.sha256, "device")
+                .queue_delete(&share.origin, &share.sha256, "device", 0)
                 .or_internal()?;
             if let Some(share_id) = FileId::parse(&share.share_id) {
                 let _ = self.keychain()?.remove_file_key(&share_id);
             }
         }
         if let Some(file_id) = FileId::parse(id) {
+            // The tombstone is durable before the key goes, so no rebuilt key
+            // list can bring the file back.
+            self.index.add_tombstone(id, at).or_internal()?;
             self.keychain()?
                 .remove_file_key(&file_id)
                 .map_err(|e| keychain_error(&e))?;
             let mut keylist = self.keylist.lock().await;
-            let _ = self.load_key_list(&mut keylist);
             if let Some(list) = keylist.as_mut() {
-                let _ = list.remove(&file_id, now());
+                let _ = list.remove(&file_id, at);
             }
         }
         let _ = std::fs::remove_file(self.outbox_path(id));
@@ -1337,7 +1446,7 @@ impl Engine {
         Ok(())
     }
 
-    /// Sends every queued deletion a node can take now.
+    /// Sends every queued deletion that is due to the node it was queued for.
     pub(crate) async fn run_pending_deletes(self: &Arc<Self>) {
         let Ok(deletes) = self.index.pending_deletes() else {
             return;
@@ -1345,10 +1454,14 @@ impl Engine {
         let Ok(identity) = self.identity() else {
             return;
         };
+        let now = now();
         for delete in deletes {
+            if delete.not_before > now {
+                continue;
+            }
             let node = match delete.node.as_str() {
                 "local" => self.local_endpoint(),
-                _ => self.online_endpoint(),
+                origin => NodeEndpoint::parse(origin, self.cfg.allow_loopback_http).ok(),
             };
             let Some(node) = node else { continue };
             let recovery;
@@ -1363,14 +1476,33 @@ impl Engine {
                 Ok(()) => {
                     let _ = self.index.finish_delete(&delete);
                 }
-                // A grant that ended cannot delete; its claims moved to the
-                // owner, so there is nothing left for this key to remove.
-                Err(NodeError::Unauthorised) if delete.node == "online" => {
-                    if self.approval_active() {
+                // The approval for this node has ended: its claims moved to
+                // the node's owner, and this key can never delete them.  Stop
+                // retrying, and tell the owner a shared copy needs them.
+                Err(NodeError::Unauthorised) if delete.node != "local" => {
+                    let current = self
+                        .online_endpoint()
+                        .is_some_and(|online| online.origin() == delete.node);
+                    if current && self.approval_active() {
                         continue;
                     }
+                    let _ = self.index.finish_delete(&delete);
+                    self.mark_owner_only(&delete.sha256);
                 }
                 Err(_) => {}
+            }
+        }
+    }
+
+    /// A shared copy this computer can no longer delete.
+    fn mark_owner_only(&self, sha256: &str) {
+        for share in self.index.shares().unwrap_or_default() {
+            if share.sha256 == sha256 && share.state != index::share::ENDED {
+                let mut record = share.clone();
+                record.state = index::share::OWNER_ONLY.into();
+                record.ended_at = Some(now());
+                let _ = self.index.put_share(&record);
+                self.emit_row(&share.file_id);
             }
         }
     }
@@ -1415,7 +1547,8 @@ pub(crate) fn host_of(url: &str) -> String {
                 None => h.to_owned(),
             })
         })
-        .unwrap_or_else(|| url.to_owned())
+        // Never echo input that is not an address back into the UI.
+        .unwrap_or_else(|| "that address".to_owned())
 }
 
 /// `npub1…` for a 64-hex public key; the hex itself if it does not parse.
@@ -1452,6 +1585,13 @@ pub(crate) fn write_private_file(path: &Path, bytes: &[u8]) -> std::io::Result<(
         options.mode(0o600);
     }
     let mut file = options.open(path)?;
+    // `mode` applies only when the file is created; an existing file is
+    // made private before anything is written to it.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
     file.write_all(bytes)?;
     file.sync_all()
 }

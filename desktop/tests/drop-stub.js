@@ -27,6 +27,7 @@
     row('f12', 'quote.pdf', 'shared', { sharedUntil: nowSeconds + 20 * 3600 }),
     row('f13', 'draft.txt', 'stop_pending'),
     row('f14', 'receipt.pdf', 'sharing_ended', { sharingEnded: nowSeconds - 1800 }),
+    row('f18', 'minutes.pdf', 'share_owner_only'),
     row('f15', 'broken.bin', 'unreadable', { bytes: 0 }),
     row('f16', 'holiday-photos-from-the-summer-trip-to-the-coast-with-everyone-final-version-2026.zip', 'two_copies', { bytes: 240_000_000 }),
     row('f17', '<img src=x onerror=alert(1)>.pdf', 'two_copies'),
@@ -41,7 +42,7 @@
     keychain: 'ok',
     online: { configured: true, url: 'https://storage.example', host: 'storage.example', reachable: true, failedChecks: 0, usedBytes: 1_200_000_000, limitBytes: 5_000_000_000, full: false },
     approval: { state: 'active', byNpub: NPUB, deviceNpub: NPUB, until: nowSeconds + 300 * DAY, limitBytes: 5_000_000_000 },
-    recovery: { savedAt: nowSeconds - 20 * DAY, confirmed: true },
+    recovery: { keyList: 'ok', savedAt: nowSeconds - 20 * DAY, confirmed: true },
     watchFolder: { enabled: false, path: '~/Wildbloom' },
     limits: { dropMaxBytes: 1_000_000_000, shareMaxBytes: 250_000_000 },
     browserApproval: false,
@@ -68,7 +69,8 @@
     if (flag === 'unreachable') state.online = { ...state.online, reachable: false, failedChecks: 3 };
     if (flag === 'full') state.online = { ...state.online, full: true };
     if (flag === 'ends') state.approval = { ...state.approval, until: nowSeconds + 12 * DAY };
-    if (flag === 'recovery') state.recovery = { confirmed: false };
+    if (flag === 'recovery') state.recovery = { keyList: 'ok', confirmed: false };
+    if (flag === 'keylist') state.recovery = { ...state.recovery, keyList: 'failed' };
     if (flag === 'folder') state.watchFolder = { enabled: true, path: '~/Wildbloom' };
     if (flag === 'no-online') noOnline();
     if (flag === 'good') files = goodRows();
@@ -96,6 +98,7 @@
       return { os: os === 'mac' ? 'macos' : os, desktop: params.get('desktop') === 'kde' ? 'KDE' : params.get('desktop') === 'gnome' ? 'ubuntu:GNOME' : '', computerName: 'Test computer' };
     },
     drop_status: (args) => {
+      if (args && args.recheck === 'keylist' && stub.keyListFixed) stub.state.recovery.keyList = 'ok';
       if (args && args.recheck === 'keychain' && stub.keychainFixed) {
         stub.state.keychain = 'ok';
         if (stub.state.firstRun && stub.state.firstRun.step === 'keychain') stub.state.firstRun.step = 'node';
@@ -121,7 +124,8 @@
     pick_files: () => ({ added: [], refused: [], duplicates: [] }),
     retry: () => undefined,
     copy_back: () => undefined,
-    save_copy: () => ({ folder: 'Downloads' }),
+    save_copy: () => (stub.saveCancelled ? null : { folder: 'Downloads' }),
+    open_drop_flow: () => undefined,
     remove: ({ id }) => { stub.files = stub.files.filter((item) => item.id !== id); stub.emit('drop://file', { id, removed: true }); },
     stop_sharing: () => undefined,
     check_online_node: ({ url }) => {
@@ -144,7 +148,7 @@
     renew_approval: ({ bunkerUrl }) => defaults.approve_device({ bunkerUrl }),
     cancel_approval: () => { stub.approval = { state: 'idle' }; },
     recovery_key_for_display: () => ({ key: KEY }),
-    save_recovery_file: () => ({ filename: 'Wildbloom recovery key.txt' }),
+    save_recovery_file: () => (stub.saveCancelled ? null : { filename: 'Wildbloom recovery key.txt' }),
     confirm_recovery_saved: () => { stub.state.firstRun = null; stub.state.recovery = { savedAt: nowSeconds, confirmed: true }; },
     restore: ({ recoveryKey, url }) => {
       if (url && url.includes('nofiles')) throw { code: 'no_files', host: hostOf(url) };

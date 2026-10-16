@@ -96,6 +96,11 @@ pub fn resolve(status: &DropStatus, rows: &[FileRow], now: u64) -> StatusLine {
             plural(failed, "file has", "files have")
         ));
     }
+    if status.recovery.key_list == "failed" {
+        return attention(
+            "Wildbloom couldn't update the list it needs to restore your files. Your files are safe on this computer.",
+        );
+    }
     if copying > 0 {
         return StatusLine {
             text: format!(
@@ -168,6 +173,7 @@ mod tests {
                 limit_bytes: None,
             },
             recovery: RecoveryStatus {
+                key_list: "ok",
                 saved_at: None,
                 confirmed: true,
             },
@@ -217,6 +223,13 @@ mod tests {
             resolve(&s, &[row("copying"), row("queued")], now).text,
             "Copying 2 files to your online node"
         );
+        s.recovery.key_list = "failed";
+        assert!(
+            resolve(&s, &[row("copying")], now)
+                .text
+                .starts_with("Wildbloom couldn't update the list")
+        );
+        s.recovery.key_list = "ok";
         s.online.failed_checks = 3;
         assert!(resolve(&s, &[], now).text.starts_with("Can't reach"));
         s.approval.state = "expired";

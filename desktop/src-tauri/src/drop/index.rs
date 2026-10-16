@@ -46,6 +46,9 @@ pub mod share {
     pub const STOP_PENDING: &str = "stop_pending";
     /// Deleted; the row shows "sharing ended" for 24 hours.
     pub const ENDED: &str = "ended";
+    /// The approval ended before the copy could be deleted: the node moved
+    /// it to its owner, so only the owner can remove it now.
+    pub const OWNER_ONLY: &str = "owner_only";
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -72,6 +75,8 @@ pub struct ShareRecord {
     pub file_id: String,
     /// The shared copy's own id: its key is the keychain's file key for it.
     pub share_id: String,
+    /// The online node origin the shared copy was uploaded to.
+    pub origin: String,
     pub sha256: String,
     pub size: u64,
     pub state: String,
@@ -80,12 +85,16 @@ pub struct ShareRecord {
     pub ended_at: Option<u64>,
 }
 
-/// A deletion still owed to a node.  `signer` is `device` or `recovery`.
+/// A deletion still owed to a node.  `node` is `local` or the online node's
+/// origin at the time the deletion was queued (never "whatever is configured
+/// now").  `signer` is `device` or `recovery`.  It is not sent before
+/// `not_before` (Unix seconds).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingDelete {
     pub node: String,
     pub sha256: String,
     pub signer: String,
+    pub not_before: u64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -135,6 +144,7 @@ CREATE INDEX IF NOT EXISTS files_plain ON files(plain_sha256);
 CREATE TABLE IF NOT EXISTS shares (
   file_id TEXT PRIMARY KEY,
   share_id TEXT NOT NULL,
+  origin TEXT NOT NULL,
   sha256 TEXT NOT NULL,
   size INTEGER NOT NULL,
   state TEXT NOT NULL,
@@ -146,7 +156,12 @@ CREATE TABLE IF NOT EXISTS deletes (
   node TEXT NOT NULL,
   sha256 TEXT NOT NULL,
   signer TEXT NOT NULL,
+  not_before INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (node, sha256, signer)
+);
+CREATE TABLE IF NOT EXISTS removed (
+  id TEXT PRIMARY KEY,
+  at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS watch_seen (
   path TEXT NOT NULL,
@@ -187,12 +202,13 @@ fn share_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ShareRecord> {
     Ok(ShareRecord {
         file_id: row.get(0)?,
         share_id: row.get(1)?,
-        sha256: row.get(2)?,
-        size: row.get::<_, i64>(3)? as u64,
-        state: row.get(4)?,
-        sent_at: row.get::<_, Option<i64>>(5)?.map(|v| v as u64),
-        delete_at: row.get::<_, Option<i64>>(6)?.map(|v| v as u64),
-        ended_at: row.get::<_, Option<i64>>(7)?.map(|v| v as u64),
+        origin: row.get(2)?,
+        sha256: row.get(3)?,
+        size: row.get::<_, i64>(4)? as u64,
+        state: row.get(5)?,
+        sent_at: row.get::<_, Option<i64>>(6)?.map(|v| v as u64),
+        delete_at: row.get::<_, Option<i64>>(7)?.map(|v| v as u64),
+        ended_at: row.get::<_, Option<i64>>(8)?.map(|v| v as u64),
     })
 }
 
@@ -342,6 +358,16 @@ impl Index {
         })
     }
 
+    pub fn set_media_type(&self, id: &str, media_type: &str) -> Result<(), IndexError> {
+        self.with(|db| {
+            db.execute(
+                "UPDATE files SET media_type = ?2 WHERE id = ?1",
+                params![id, media_type],
+            )
+            .map(|_| ())
+        })
+    }
+
     pub fn set_local(&self, id: &str, state: &str) -> Result<(), IndexError> {
         self.with(|db| {
             db.execute(
@@ -409,7 +435,7 @@ impl Index {
     pub fn share(&self, file_id: &str) -> Result<Option<ShareRecord>, IndexError> {
         self.with(|db| {
             db.query_row(
-                "SELECT file_id, share_id, sha256, size, state, sent_at, delete_at, ended_at FROM shares WHERE file_id = ?1",
+                "SELECT file_id, share_id, origin, sha256, size, state, sent_at, delete_at, ended_at FROM shares WHERE file_id = ?1",
                 [file_id],
                 share_from_row,
             )
@@ -420,7 +446,7 @@ impl Index {
     pub fn shares(&self) -> Result<Vec<ShareRecord>, IndexError> {
         self.with(|db| {
             let mut statement = db.prepare(
-                "SELECT file_id, share_id, sha256, size, state, sent_at, delete_at, ended_at FROM shares",
+                "SELECT file_id, share_id, origin, sha256, size, state, sent_at, delete_at, ended_at FROM shares",
             )?;
             statement
                 .query_map([], share_from_row)?
@@ -431,12 +457,13 @@ impl Index {
     pub fn put_share(&self, share: &ShareRecord) -> Result<(), IndexError> {
         self.with(|db| {
             db.execute(
-                "INSERT INTO shares (file_id, share_id, sha256, size, state, sent_at, delete_at, ended_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-                 ON CONFLICT(file_id) DO UPDATE SET share_id = excluded.share_id, sha256 = excluded.sha256, size = excluded.size, state = excluded.state,
+                "INSERT INTO shares (file_id, share_id, origin, sha256, size, state, sent_at, delete_at, ended_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 ON CONFLICT(file_id) DO UPDATE SET share_id = excluded.share_id, origin = excluded.origin, sha256 = excluded.sha256, size = excluded.size, state = excluded.state,
                  sent_at = excluded.sent_at, delete_at = excluded.delete_at, ended_at = excluded.ended_at",
                 params![
                     share.file_id,
                     share.share_id,
+                    share.origin,
                     share.sha256,
                     int(share.size),
                     share.state,
@@ -458,11 +485,20 @@ impl Index {
 
     // ----------------------------------------------------------- deletes
 
-    pub fn queue_delete(&self, node: &str, sha256: &str, signer: &str) -> Result<(), IndexError> {
+    /// Queues a deletion on `node` (`local` or an online origin) that may be
+    /// sent from `not_before` on.
+    pub fn queue_delete(
+        &self,
+        node: &str,
+        sha256: &str,
+        signer: &str,
+        not_before: u64,
+    ) -> Result<(), IndexError> {
         self.with(|db| {
             db.execute(
-                "INSERT OR IGNORE INTO deletes (node, sha256, signer) VALUES (?1, ?2, ?3)",
-                params![node, sha256, signer],
+                "INSERT INTO deletes (node, sha256, signer, not_before) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(node, sha256, signer) DO UPDATE SET not_before = MIN(not_before, excluded.not_before)",
+                params![node, sha256, signer, int(not_before)],
             )
             .map(|_| ())
         })
@@ -470,13 +506,15 @@ impl Index {
 
     pub fn pending_deletes(&self) -> Result<Vec<PendingDelete>, IndexError> {
         self.with(|db| {
-            let mut statement = db.prepare("SELECT node, sha256, signer FROM deletes")?;
+            let mut statement =
+                db.prepare("SELECT node, sha256, signer, not_before FROM deletes")?;
             statement
                 .query_map([], |r| {
                     Ok(PendingDelete {
                         node: r.get(0)?,
                         sha256: r.get(1)?,
                         signer: r.get(2)?,
+                        not_before: r.get::<_, i64>(3)?.max(0) as u64,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()
@@ -491,6 +529,36 @@ impl Index {
             )
             .map(|_| ())
         })
+    }
+
+    // -------------------------------------------------------- tombstones
+
+    /// Records a removed file, so a key list rebuilt from the index keeps it
+    /// removed even if the in-memory list was never loaded.
+    pub fn add_tombstone(&self, id: &str, at: u64) -> Result<(), IndexError> {
+        self.with(|db| {
+            db.execute(
+                "INSERT INTO removed (id, at) VALUES (?1, ?2)
+                 ON CONFLICT(id) DO UPDATE SET at = MAX(at, excluded.at)",
+                params![id, int(at)],
+            )
+            .map(|_| ())
+        })
+    }
+
+    pub fn tombstones(&self) -> Result<Vec<(String, u64)>, IndexError> {
+        self.with(|db| {
+            let mut statement = db.prepare("SELECT id, at FROM removed")?;
+            statement
+                .query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)?.max(0) as u64)))?
+                .collect::<rusqlite::Result<Vec<_>>>()
+        })
+    }
+
+    /// Clears every tombstone (used when an unfinished set-up takes a
+    /// different recovery key, whose key list starts empty).
+    pub fn clear_tombstones(&self) -> Result<(), IndexError> {
+        self.with(|db| db.execute("DELETE FROM removed", []).map(|_| ()))
     }
 
     // ------------------------------------------------------- watch folder
@@ -569,6 +637,7 @@ mod tests {
             .put_share(&ShareRecord {
                 file_id: "a".into(),
                 share_id: "dd".repeat(16),
+                origin: "https://storage.example/".into(),
                 sha256: "cc".repeat(32),
                 size: 70_000,
                 state: share::SENT.into(),
@@ -578,13 +647,19 @@ mod tests {
             })
             .unwrap();
         assert_eq!(index.online_used_bytes().unwrap(), 135_608);
+        let node = "https://storage.example/";
         index
-            .queue_delete("online", &"cc".repeat(32), "device")
+            .queue_delete(node, &"cc".repeat(32), "device", 50)
             .unwrap();
         index
-            .queue_delete("online", &"cc".repeat(32), "device")
+            .queue_delete(node, &"cc".repeat(32), "device", 9)
             .unwrap();
-        assert_eq!(index.pending_deletes().unwrap().len(), 1);
+        let deletes = index.pending_deletes().unwrap();
+        assert_eq!(deletes.len(), 1);
+        assert_eq!((deletes[0].node.as_str(), deletes[0].not_before), (node, 9));
+        index.add_tombstone("b", 5).unwrap();
+        index.add_tombstone("b", 3).unwrap();
+        assert_eq!(index.tombstones().unwrap(), vec![("b".to_string(), 5)]);
 
         index.set_u64("last_seen_seq", 7).unwrap();
         assert_eq!(index.get_u64("last_seen_seq").unwrap(), Some(7));

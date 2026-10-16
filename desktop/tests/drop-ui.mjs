@@ -121,6 +121,7 @@ const EXPECTED_ROWS = {
   f13: { status: '2 copies · removing shared copy when online', menu: ['Save a Copy…'] },
   f14: { status: `2 copies · sharing ended ${clockTime(nowSeconds - 1800)} today`, share: true, menu: ['Share…', 'Save a Copy…', 'Remove…'] },
   f15: { status: "Couldn't read this file. Check you can open it, then add it again.", inline: 'Remove', menu: null },
+  f18: { status: '2 copies · only your online node’s owner can remove the shared copy now', share: true, menu: ['Share…', 'Save a Copy…', 'Remove…'] },
 };
 
 scenario('rows: every state shows the exact copy, actions and menu items (macOS casing)', async () => {
@@ -200,6 +201,8 @@ const STATUS_CASES = [
   ['no-online', 'ends', 'Files have 1 copy, on this computer.', 'Add online node'],
   ['good', 'ends,recovery', 'Approval for this computer ends on 28 October 2026.', 'Renew'],
   ['good', 'recovery', "Your recovery key isn't saved yet.", 'Save it'],
+  ['list', 'keylist', '1 file has only 1 copy.', 'Retry all'],
+  ['good', 'keylist', "Wildbloom couldn't update the list it needs to restore your files. Your files are safe on this computer.", 'Try again'],
   ['good', '', 'All 5 files have 2 copies.', null],
   ['empty', '', 'No files yet', null],
   ['empty', 'no-online', 'Files have 1 copy, on this computer.', 'Add online node'],
@@ -568,7 +571,7 @@ scenario('confirm dialogs: Stop sharing and Remove copy, Cancel focused, order p
   await menuAction(page, 'Save');
   await page.waitForFunction(() => document.querySelector('#notices').textContent.startsWith('Saved'));
   assert.equal(await text(page.locator('#notices')), 'Saved holiday.jpg to Downloads.');
-  assert.deepEqual((await calls(page, 'save_copy')).at(-1).args, { id: 'f1', path: '/tmp/test/Wildbloom recovery key.txt' });
+  assert.deepEqual((await calls(page, 'save_copy')).at(-1).args, { id: 'f1' }, 'Rust opens the save dialog; the page names no path');
   await done(page);
 });
 
@@ -911,7 +914,7 @@ scenario('first run D3: key display, save and copy, Finish gating', async () => 
   await flow.locator('button', { hasText: 'Save recovery file…' }).click();
   await page.waitForFunction(() => document.querySelector('#view-first [role="status"]')?.textContent.startsWith('Saved'));
   assert.equal(await text(flow.locator('[role="status"]')), 'Saved to Wildbloom recovery key.txt.');
-  assert.deepEqual((await calls(page, 'save_recovery_file')).at(-1).args, { path: '/tmp/test/Wildbloom recovery key.txt' });
+  assert.equal((await calls(page, 'save_recovery_file')).at(-1).args, undefined, 'Rust opens the save dialog; the page names no path');
   await checkbox.check();
   assert.equal(await finish.isEnabled(), true);
   await finish.click();
@@ -1067,13 +1070,33 @@ scenario('settings: section order, values, actions and sheets', async () => {
   await sheet.waitFor({ state: 'detached' });
   assert.equal((await calls(page, 'cancel_approval')).length, 1, 'dismissing a waiting sheet cancels the approval');
 
+  // The recovery key is shown only in the Drop window: the node window asks
+  // Rust to open it there and never reads the key itself.
   await section.locator('#drop-recovery').click();
+  await page.waitForFunction(() => window.__stub.calls.some((c) => c.command === 'open_drop_flow'));
+  assert.deepEqual((await calls(page, 'open_drop_flow')).at(-1).args, { flow: 'recovery' });
+  assert.equal(await page.locator('dialog.flow-sheet').count(), 0);
+  assert.equal((await calls(page, 'recovery_key_for_display')).length, 0);
+  assert.equal((await calls(page, 'confirm_recovery_saved')).length, 0);
+  await done(page);
+});
+
+scenario('drop window: the node window\'s "Save recovery key again" opens the recovery sheet here', async () => {
+  const page = await drop('good');
+  await ready(page);
+  await page.evaluate(() => window.__stub.emit('drop://open-flow', { flow: 'recovery' }));
+  const sheet = page.locator('dialog.flow-sheet');
   await sheet.locator('.key').waitFor();
   assert.equal(await sheet.locator('input[type="checkbox"]').count(), 0, 'the checkbox is not required again');
-  assert.equal(await sheet.locator('button', { hasText: 'Done' }).isEnabled(), true);
   await sheet.locator('button', { hasText: 'Done' }).click();
   await sheet.waitFor({ state: 'detached' });
   assert.equal((await calls(page, 'confirm_recovery_saved')).length, 0);
+  // A cancelled Rust save dialog leaves no notice.
+  await page.evaluate(() => { window.__stub.saveCancelled = true; });
+  await page.locator('li.row[data-id="f1"] [data-ctl="more"]').click();
+  await menuAction(page, 'Save');
+  await page.waitForFunction(() => window.__stub.calls.some((c) => c.command === 'save_copy'));
+  assert.equal(await text(page.locator('#notices')), '');
   await done(page);
 });
 

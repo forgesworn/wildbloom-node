@@ -589,12 +589,9 @@
         h('div', { class: 'inline' },
           h('button', { class: 'btn secondary', type: 'button', onclick: async () => {
             try {
-              let path;
-              if (tauri.dialog?.save) {
-                path = await tauri.dialog.save({ defaultPath: 'Wildbloom recovery key.txt', filters: [{ name: 'Text', extensions: ['txt'] }] });
-                if (!path) return;
-              }
-              const result = await call('save_recovery_file', { path: path ?? null });
+              // Rust opens the save dialog; the page never names a path.
+              const result = await call('save_recovery_file');
+              if (!result) return;
               used = true;
               saved.textContent = `Saved to ${result.filename}.`;
               update();
@@ -852,7 +849,7 @@
 
   /* ---------- row model ---------- */
 
-  const TWO_COPIES = new Set(['two_copies', 'shared', 'sharing_ended', 'stop_pending']);
+  const TWO_COPIES = new Set(['two_copies', 'shared', 'sharing_ended', 'stop_pending', 'share_owner_only']);
   const FAILED = new Set(['failed', 'missing_online']);
   const BUSY = new Set(['encrypting', 'queued', 'copying']);
 
@@ -876,6 +873,7 @@
       case 'shared': return { icon: 'check', extra: 'share', tone: 'success', lead: '2 copies', rest: [meta(`shared until ${until(row.sharedUntil)}`)] };
       case 'stop_pending': return { icon: 'pending', tone: 'muted', lead: '2 copies', rest: [meta('removing shared copy when online')] };
       case 'sharing_ended': return { icon: 'check', tone: 'success', lead: '2 copies', rest: [meta(`sharing ended ${until(row.sharingEnded)}`)] };
+      case 'share_owner_only': return { icon: 'alert', tone: 'warning', lead: '2 copies', rest: [meta('only your online node’s owner can remove the shared copy now')] };
       case 'unreadable': return { icon: 'alert', tone: 'error', lead: "Couldn't read this file. Check you can open it, then add it again.", rest: [] };
       default: return { icon: 'ring', tone: 'muted', lead: String(row.state || ''), rest: [] };
     }
@@ -898,6 +896,7 @@
       case 'queued':
       case 'copying':
       case 'two_copies':
+      case 'share_owner_only':
       case 'sharing_ended': return [online ? ITEM.share() : null, ITEM.save(), ITEM.remove()].filter(Boolean);
       case 'no_online':
       case 'waiting':
@@ -911,7 +910,7 @@
       default: return [];
     }
   }
-  const canShare = (row) => ['queued', 'copying', 'two_copies', 'sharing_ended', 'shared'].includes(row.state) || row.state === 'no_online';
+  const canShare = (row) => ['queued', 'copying', 'two_copies', 'sharing_ended', 'share_owner_only', 'shared'].includes(row.state) || row.state === 'no_online';
   function inlineAction(row) {
     switch (row.state) {
       case 'failed': return { label: 'Retry', aria: `Retry copying ${row.name}`, run: () => call('retry', { id: row.id }) };
@@ -931,12 +930,8 @@
       } else if (action === 'retry' || action === 'copy-again') await call('retry', { id });
       else if (action === 'copy-back') await call('copy_back', { id });
       else if (action === 'save') {
-        let path;
-        if (tauri.dialog?.save) {
-          path = await tauri.dialog.save({ defaultPath: row.name });
-          if (!path) return;
-        }
-        const result = await call('save_copy', { id, path: path ?? null });
+        // Rust opens the save dialog; the page never names a path.
+        const result = await call('save_copy', { id });
         if (result) notice(`Saved ${row.name} to ${result.folder || 'your computer'}.`);
       } else if (action === 'stop') {
         const yes = await confirmDialog({
@@ -1143,6 +1138,7 @@
     if (state.online.configured && (state.online.failedChecks || 0) > 2) return { id: 'unreachable', icon: 'alert', tone: 'warning', text: "Can't reach your online node. Files stay on this computer and copy when it's back.", action: { label: 'Try now', run: () => refreshStatus({ recheck: 'online' }) } };
     if (state.online.full) return { id: 'full', icon: 'alert', tone: 'warning', text: 'Your online space is full. New files stay on this computer.', action: { label: 'Settings', run: openNodeSettings } };
     if (failed > 0) return { id: 'failed', icon: 'alert', tone: 'warning', text: `${failed} ${plural(failed, 'file has', 'files have')} only 1 copy.`, action: { label: 'Retry all', run: () => call('retry', { id: null }) } };
+    if (state.recovery && state.recovery.keyList === 'failed') return { id: 'keylist', icon: 'alert', tone: 'warning', text: "Wildbloom couldn't update the list it needs to restore your files. Your files are safe on this computer.", action: { label: 'Try again', run: () => refreshStatus({ recheck: 'keylist' }) } };
     if (copying > 0) return { id: 'copying', icon: 'up', tone: 'accent', text: `Copying ${copying} ${plural(copying, 'file', 'files')} to your online node`, action: null };
     if (!state.online.configured) return { id: 'no-online', icon: 'ring', tone: 'muted', text: 'Files have 1 copy, on this computer.', action: { label: 'Add online node', run: (opener) => openFlowSheet({ sequence: ['node', 'approve'], refresh: refreshStatus, browserApproval: state.browserApproval }, opener).then(refreshAfter) } };
     if (approval.state === 'active' && approval.until && approval.until - nowSeconds < 30 * 86400) return { id: 'ends', icon: 'ring', tone: 'warning', text: `Approval for this computer ends on ${fullDate(approval.until)}.`, action: { label: 'Renew', run: (opener) => openFlowSheet({ sequence: ['approve'], renew: true, refresh: refreshStatus, browserApproval: state.browserApproval }, opener).then(refreshAfter) } };
@@ -1426,6 +1422,13 @@
       if (!payload) return;
       mergeStatus(payload);
       render();
+    });
+    listen('drop://open-flow', (payload) => {
+      // The node window's "Save recovery key again…" opens here: only this
+      // window may read the recovery key.
+      if (payload && payload.flow === 'recovery' && !state.firstRun && !document.querySelector('dialog[open]')) {
+        openFlowSheet({ sequence: ['recovery'], resave: state.recovery?.confirmed !== false, label: 'Recovery key', refresh: refreshStatus }, el.footerSettings).then(refreshAfter);
+      }
     });
     listen('drop://notice', (payload) => {
       if (payload && payload.kind === 'keeps_running') notice('Wildbloom keeps running. Open it again from your apps.');

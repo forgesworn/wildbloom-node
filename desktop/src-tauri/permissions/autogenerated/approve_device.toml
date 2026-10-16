@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-approve-device"
+description = "Enables the approve_device command without any pre-configured scope."
+commands.allow = ["approve_device"]
+
+[[permission]]
+identifier = "deny-approve-device"
+description = "Denies the approve_device command without any pre-configured scope."
+commands.deny = ["approve_device"]

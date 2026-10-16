@@ -27,7 +27,7 @@ Conventions
 | Command | Args | Returns |
 |---|---|---|
 | `platform_info` | none | `{ os: "macos" \| "windows" \| "linux", desktop: string, computerName: string }`. `desktop` is `XDG_CURRENT_DESKTOP` on Linux (for example `ubuntu:GNOME`, `KDE`), else `""`. The UI sets `data-os` (`mac`, `windows`, `linux`), `data-desktop` (`gnome`, `kde`, `other`) and `data-button-order` on `<html>`. |
-| `drop_status` | `{ recheck?: "keychain" \| "online" }` | `DropStatus` plus `files: FileRow[]`. `recheck` asks Rust to probe again before answering ("Try again" and "Try now"). |
+| `drop_status` | `{ recheck?: "keychain" \| "online" \| "keylist" }` | `DropStatus` plus `files: FileRow[]`. `recheck` asks Rust to probe again before answering ("Try again" and "Try now"; `keylist` reseals the key list). |
 
 `DropStatus`
 
@@ -40,7 +40,7 @@ Conventions
             failedChecks: number, usedBytes: number, limitBytes: number, full: boolean },
   approval: { state: "none" | "active" | "expired", byNpub?: string, deviceNpub?: string,
               until?: number, limitBytes?: number },
-  recovery: { savedAt?: number, confirmed: boolean },
+  recovery: { keyList: "ok" | "failed", savedAt?: number, confirmed: boolean },
   watchFolder: { enabled: boolean, path: string },       // path is for display, for example "~/Wildbloom"
   limits: { dropMaxBytes: number, shareMaxBytes: number },
   browserApproval: boolean                                  // true once the browser route exists; hides or shows its link
@@ -54,6 +54,11 @@ Conventions
   "Can't reach your online node" above 2.
 - `approval.until - now < 30 days` while `active` shows the renewal line.
 - `recovery.confirmed: false` is only expected after a restore that skipped saving.
+- `recovery.keyList: "failed"` means the encrypted key list could not be opened or sealed
+  (files are kept on this computer, but a restore would not see the newest ones until it
+  is). **Added.** The status line shows, after "{n} files have only 1 copy": "Wildbloom
+  couldn't update the list it needs to restore your files. Your files are safe on this
+  computer." with "Try again" (`drop_status` with `recheck: "keylist"`).
 - The status line (spec 6.1) is resolved in `drop.js` from these fields and the rows, in the
   priority order of the spec. The tray tooltip and menu status item (Rust) must resolve the
   same order from the same data; the copy is in section 6.1 of the design spec.
@@ -64,25 +69,28 @@ Conventions
 { id: string, name: string, bytes: number, added: number,
   state: "encrypting" | "queued" | "copying" | "two_copies" | "no_online" | "waiting" | "failed"
        | "missing_online" | "online_full" | "missing_local" | "restoring" | "shared"
-       | "stop_pending" | "sharing_ended" | "unreadable",
+       | "stop_pending" | "sharing_ended" | "share_owner_only" | "unreadable",
   progress: number | null,         // 0 to 100, for encrypting, copying, restoring
   sharedUntil?: number,            // state "shared"
   sharingEnded?: number,           // state "sharing_ended" (shown for 24 h)
   inWatchFolder?: boolean }        // adds a line to the Remove confirmation
 ```
 
-States map one to one onto the rows table in section 6.2. `name` is the display name
+States map one to one onto the rows table in section 6.2, plus `share_owner_only` (**added**):
+the approval ended before the shared copy could be deleted, so the node moved it to its owner
+and only the owner can remove it. Copy "2 copies · only your online node’s owner can remove
+the shared copy now", warning icon, menu as "2 copies". Shown for a day. `name` is the display name
 (never a path). Rust should send at most about four `drop://file` updates a second per row.
 
 ### Files
 
 | Command | Args | Returns |
 |---|---|---|
-| `add_paths` | `{ paths: string[] }` | `AddResult` |
+| `add_paths` | `{ paths: string[] }` | `AddResult`. Only paths from a native drop on the Drop window in the last minute are accepted (Rust records them from the window's drop event); any other path is refused as `unreadable`, so the page cannot name a file for Drop to read. |
 | `pick_files` | none (Rust opens the native picker) | `AddResult` (empty lists if cancelled) |
 | `retry` | `{ id: string \| null }` | nothing. `null` means every failed row ("Retry all"). Also used for "Copy again". |
 | `copy_back` | `{ id }` | nothing |
-| `save_copy` | `{ id, path: string \| null }` | `{ folder: string }` (display name of the folder, for "Saved {name} to {folder}."). The UI passes the path from `dialog.save` when that plugin is available; `null` means Rust should open the native save dialog itself. |
+| `save_copy` | `{ id }` | `{ folder: string }` (display name of the folder, for "Saved {name} to {folder}."), or `null` if the owner cancelled. **Changed:** Rust always opens the native save dialog; the page never names a path. |
 | `remove` | `{ id }` | nothing |
 
 `AddResult`
@@ -104,7 +112,8 @@ States map one to one onto the rows table in section 6.2. `name` is the display 
 | `approval_status` | none | `ApprovalStatus` (below). The UI calls it when the approval step opens and then once a second while waiting. |
 | `cancel_approval` | none | nothing. Also called when a sheet or step is dismissed while waiting. |
 | `recovery_key_for_display` | none | `{ key: string }` (the `wbk1_` string, ungrouped). |
-| `save_recovery_file` | `{ path: string \| null }` | `{ filename: string }`. `null` means Rust opens the native save dialog; the UI passes the chosen path when `dialog.save` exists. |
+| `save_recovery_file` | none | `{ filename: string }`, or `null` if cancelled. **Changed:** Rust always opens the native save dialog. |
+| `open_drop_flow` | `{ flow: "recovery" }` | nothing. **Added**, for the node window: shows the Drop window and sends it `drop://open-flow`, so the recovery key is only ever read by the Drop window. |
 | `confirm_recovery_saved` | none | nothing. Marks the key as saved and ends first run (`firstRun` becomes null). |
 | `restore` | `{ recoveryKey: string \| null, recoveryFile: string \| null, url: string \| null }` | `{ next: "approve" \| "done", host?: string }`. Exactly one of `recoveryKey` and `recoveryFile` is set. `recoveryFile` is a path from `dialog.open`; Rust reads it, and uses its online node address when `url` is null. Rejects `{ code, host }` with `bad_key`, `no_answer`, `not_a_node`, `tls`, `offline`. `approve` means the new computer must be approved next; the restore itself continues in Rust after approval. |
 | `set_watch_folder` | `{ enabled: boolean }` | nothing |
@@ -164,6 +173,7 @@ rejection shows `relay_unreachable`.
 | `drop://status` | `DropStatus` without `files` | Any change outside the rows. Merged into the UI's copy. The node window listens too. |
 | `share://state` | `ShareState` with `id` | State of the open share. Ignored when no sheet is open for that `id`. |
 | `drop://notice` | `{ kind: "keeps_running" }` | **Added.** Shown as an inline notice, "Wildbloom keeps running. Open it again from your apps." Send it once, before hiding the window, when the window is closed on a desktop with no tray (GNOME without AppIndicator). |
+| `drop://open-flow` | `{ flow: "recovery" }` | **Added.** Open the recovery key sheet ("Save recovery key again…", checkbox not required) in the Drop window. |
 | `drop://drag-info` | `{ files: number, folders: number, tooBig: number }` | **Added.** The webview cannot inspect paths. When Rust receives the window's drag-enter (it carries paths) it classifies them and emits this so the overlay can say "Folders can't be added yet" or "Too big to add". `tooBig` counts files over `limits.dropMaxBytes`. Optional: without it the overlay just says "Drop to keep 2 copies". |
 
 The UI also listens to Tauri's own `tauri://drag-enter`, `tauri://drag-leave` and
@@ -179,7 +189,7 @@ degrades quietly if it is missing, but the behaviours below need these permissio
 |---|---|---|
 | `__TAURI__.event.listen` | events above | `core:event:default` |
 | `__TAURI__.menu.Menu`, `__TAURI__.dpi.LogicalPosition` | native row menu (`Menu.new`, `popup`), shown from the ⋯ button or right click | `core:menu:default` |
-| `__TAURI__.dialog.save`, `.open` | recovery file, "Save a copy", "Open recovery file" | `dialog:allow-save`, `dialog:allow-open` |
+| `__TAURI__.dialog.open` | "Open recovery file" | `dialog:allow-open` (save dialogs are opened by Rust, so `dialog:allow-save` is not granted) |
 | `__TAURI__.clipboardManager.writeText` | Copy link, Copy words, Copy key, Copy public key | `clipboard-manager:allow-write-text` |
 | `__TAURI__.clipboardManager.readText` | **Added.** The Paste buttons (signer link, recovery key). Falls back to `navigator.clipboard.readText`, then to focusing the field so the user can press Cmd-V or Ctrl-V. | `clipboard-manager:allow-read-text` (not in the spec's list) |
 | `__TAURI__.webviewWindow.WebviewWindow.getByLabel("main")` then `show()`, `setFocus()` | "Open node settings", "Settings", Cmd-, and Ctrl-, | `core:webview:allow-get-all-webviews`, `core:window:allow-show`, `core:window:allow-set-focus` (show and the webview listing are **added**). If Rust prefers, route this through a command and change `openNodeSettings` in `drop.js`. |
@@ -188,6 +198,19 @@ Keyboard: the UI handles Cmd/Ctrl-O (add files), Shift-Cmd/Ctrl-O (open the fold
 Shift-Cmd/Ctrl-S (share the focused row), Cmd/Ctrl-F (find) and Cmd/Ctrl-comma (node
 settings), and blocks F5 and Cmd/Ctrl-R. Native menu accelerators that consume the same
 keys are fine; a key the native menu takes never reaches the page, so nothing runs twice.
+
+## Commands per window
+
+Every app command is listed in the build's app manifest, so a window can call only what its
+capability allows:
+
+- **Drop window** (`capabilities/drop-window.json`): every Drop command above except
+  `open_drop_flow`. No node settings, pool or updater commands.
+- **Node window** (`capabilities/default.json`): its own node, pool and update commands, plus
+  `platform_info`, `drop_status`, `check_online_node`, `set_online_node`, `approve_device`,
+  `renew_approval`, `approval_status`, `cancel_approval`, `set_watch_folder`,
+  `open_watch_folder` and `open_drop_flow`. It cannot share, remove or save files, restore, or
+  read or save the recovery key.
 
 ## Behaviour Rust can rely on
 

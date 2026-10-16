@@ -50,6 +50,10 @@ pub struct ApprovalSummary {
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RecoveryStatus {
+    /// `"ok"`, or `"failed"` when the key list could not be opened or sealed
+    /// (files are kept; the recovery key cannot restore new ones until it is
+    /// sealed again).
+    pub key_list: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub saved_at: Option<u64>,
     pub confirmed: bool,
@@ -265,6 +269,13 @@ impl Drop for ShareState {
 #[serde(rename_all = "camelCase")]
 pub struct Notice {
     pub kind: &'static str,
+}
+
+/// `drop://open-flow`: the node window asked the Drop window to open a flow.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenFlow {
+    pub flow: &'static str,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]

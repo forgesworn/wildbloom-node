@@ -476,13 +476,26 @@ async fn start_node_sidecar(
         arguments.push(pubkey.into());
     }
     // Wildbloom Drop's device key and recovery identity write to the local
-    // node too.  They are trusted here, not shown in the Owner field.
+    // node too; they are trusted here, not shown in the Owner field.  On a
+    // loopback-only node they are owners.  When the node is reachable from
+    // outside (Tor, or direct with a public URL) they get a bounded friend
+    // grant instead, so a leaked device key cannot act as the node's owner.
+    // The expiry is fixed once and reused, because the node keys friend
+    // claims by grant, and a new expiry on every start would orphan them.
     if let Some(engine) = app
         .try_state::<drop::commands::DropSlot>()
         .and_then(|s| s.0.get().cloned())
     {
+        let exposed = settings.transport == Transport::Tor || settings.direct_public_url.is_some();
+        let expiry = engine.local_friend_expiry();
         for pubkey in engine.local_trusted_keys() {
-            if settings.allowed_pubkey.as_ref() != Some(&pubkey) {
+            if settings.allowed_pubkey.as_ref() == Some(&pubkey) {
+                continue;
+            }
+            if exposed {
+                arguments.push("--friend-grant".into());
+                arguments.push(format!("{pubkey}:{quota_bytes}:{expiry}").into());
+            } else {
                 arguments.push("--allow-pubkey".into());
                 arguments.push(pubkey.into());
             }
@@ -1318,6 +1331,7 @@ fn main() {
         .manage(managed)
         .manage(pool_manager)
         .manage(drop::commands::DropSlot::default())
+        .manage(drop::commands::NativeDrops::default())
         .invoke_handler(tauri::generate_handler![
             node_status,
             save_settings,
@@ -1356,7 +1370,8 @@ fn main() {
             drop::commands::share_again,
             drop::commands::share_verify,
             drop::commands::share_cancel,
-            drop::commands::stop_sharing
+            drop::commands::stop_sharing,
+            drop::commands::open_drop_flow
         ])
         .on_window_event(|window, event| match event {
             WindowEvent::CloseRequested { api, .. } => {
@@ -1395,6 +1410,15 @@ fn main() {
                 if let Some(webview) = window.app_handle().get_webview_window(DROP_WINDOW) {
                     paint_drop_background(&webview, *theme);
                 }
+            }
+            WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. })
+                if window.label() == DROP_WINDOW =>
+            {
+                // Only paths the OS handed over here may be added by the page.
+                window
+                    .app_handle()
+                    .state::<drop::commands::NativeDrops>()
+                    .record(paths);
             }
             WindowEvent::Focused(false) if window.label() == DROP_WINDOW => {
                 remember_drop_window(window.app_handle());

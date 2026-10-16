@@ -1,13 +1,36 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-window",
-  "description": "The Wildbloom Node status and settings window",
+  "description": "The Wildbloom Node status and settings window, with the Drop settings section",
   "windows": [
     "main"
   ],
   "permissions": [
     "core:default",
-    "dialog:allow-save",
-    "clipboard-manager:allow-write-text"
+    "clipboard-manager:allow-write-text",
+    "allow-node-status",
+    "allow-save-settings",
+    "allow-restart-node",
+    "allow-check-for-update",
+    "allow-install-update",
+    "allow-import-pool",
+    "allow-pool-status",
+    "allow-start-pool",
+    "allow-stop-pool",
+    "allow-remove-pool",
+    "allow-review-pool-cleanup",
+    "allow-clear-pool-cleanup",
+    "allow-open-pool-client",
+    "allow-platform-info",
+    "allow-drop-status",
+    "allow-set-watch-folder",
+    "allow-open-watch-folder",
+    "allow-check-online-node",
+    "allow-set-online-node",
+    "allow-approve-device",
+    "allow-renew-approval",
+    "allow-approval-status",
+    "allow-cancel-approval",
+    "allow-open-drop-flow"
   ]
 }

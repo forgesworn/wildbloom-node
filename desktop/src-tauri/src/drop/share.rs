@@ -40,11 +40,29 @@ const POLL: Duration = Duration::from_millis(250);
 
 type RelaySlot = Arc<Mutex<Option<(Relay, Arc<InviterSession>)>>>;
 
+/// A shared copy being made: its key is in the keychain and its blob may be
+/// on the online node, but no share record names it yet.  An aborted flow
+/// deletes both.
+struct PendingCopy {
+    share_id: FileId,
+    sha256: String,
+    origin: String,
+}
+
+type PendingSlot = Arc<Mutex<Option<PendingCopy>>>;
+
 pub(crate) struct ShareSession {
     generation: u64,
     task: tokio::task::JoinHandle<()>,
     verify: Arc<Mutex<Option<oneshot::Sender<bool>>>>,
     relay: RelaySlot,
+    pending: PendingSlot,
+}
+
+/// What a stopped flow leaves to clean up.
+struct Leftovers {
+    relay: RelaySlot,
+    pending: PendingSlot,
 }
 
 /// What a pairing ended in, short of `sent`.
@@ -103,19 +121,35 @@ impl Engine {
         if self.writable_online().is_none() {
             return Err(CommandError::code("node_unreachable"));
         }
-        self.stop_share_task(id);
+        if let Some(leftovers) = self.stop_share_task(id) {
+            let engine = self.clone();
+            self.rt
+                .spawn(async move { engine.clean_up(leftovers).await });
+        }
         let generation = self.next_share_generation();
         let verify = Arc::new(Mutex::new(None));
         let slot: RelaySlot = Arc::new(Mutex::new(None));
+        let pending: PendingSlot = Arc::new(Mutex::new(None));
         let engine = self.clone();
         let task_id = id.to_owned();
         let task_verify = verify.clone();
         let task_slot = slot.clone();
+        let task_pending = pending.clone();
+        let lock = self.share_lock(id);
         let task = self.rt.spawn(async move {
+            // One flow per file: a replaced flow's clean-up and this one
+            // never interleave their records.
+            let _turn = lock.lock().await;
             // Every path ends in a state the sheet can show; nothing that
             // fails part-way leaves it waiting.
             let state = engine
-                .run_share(&task_id, again, task_verify, task_slot.clone())
+                .run_share(
+                    &task_id,
+                    again,
+                    task_verify,
+                    task_slot.clone(),
+                    task_pending,
+                )
                 .await
                 .unwrap_or_else(|| ShareState::new(&task_id, "relay_unreachable"));
             engine.emit_share_if_current(&task_id, generation, state);
@@ -128,6 +162,7 @@ impl Engine {
                 task,
                 verify,
                 relay: slot,
+                pending,
             },
         );
         let mut state = ShareState::new(id, "preparing");
@@ -159,11 +194,47 @@ impl Engine {
         self.host.emit_share(&state);
     }
 
-    /// Stops a running pairing without touching the shared copy.
-    fn stop_share_task(&self, id: &str) -> Option<RelaySlot> {
+    fn share_lock(&self, id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self.share_locks.lock().unwrap_or_else(|e| e.into_inner());
+        locks.entry(id.to_owned()).or_default().clone()
+    }
+
+    /// Stops a running flow.  The shared copy it already recorded is left
+    /// alone; what it had not recorded yet comes back as leftovers.
+    fn stop_share_task(&self, id: &str) -> Option<Leftovers> {
         let session = self.shares.lock().ok()?.remove(id)?;
         session.task.abort();
-        Some(session.relay)
+        Some(Leftovers {
+            relay: session.relay,
+            pending: session.pending,
+        })
+    }
+
+    /// Ends a stopped flow's relay session, and deletes a shared copy it was
+    /// still making (its key and, if uploaded, its blob).
+    async fn clean_up(self: &Arc<Self>, leftovers: Leftovers) {
+        self.delete_relay_session(&leftovers.relay).await;
+        let pending = leftovers.pending.lock().ok().and_then(|mut p| p.take());
+        let Some(pending) = pending else { return };
+        if let Ok(keychain) = self.keychain() {
+            let _ = keychain.remove_file_key(&pending.share_id);
+        }
+        let deleted = match (
+            NodeEndpoint::parse(&pending.origin, self.cfg.allow_loopback_http),
+            self.identity(),
+        ) {
+            (Ok(node), Ok(identity)) => {
+                client::delete(&self.http, &node, identity.device.keys(), &pending.sha256)
+                    .await
+                    .is_ok()
+            }
+            _ => false,
+        };
+        if !deleted {
+            let _ = self
+                .index
+                .queue_delete(&pending.origin, &pending.sha256, "device", 0);
+        }
     }
 
     async fn delete_relay_session(&self, slot: &RelaySlot) {
@@ -173,11 +244,27 @@ impl Engine {
         }
     }
 
-    /// Used by Remove: ends the pairing; the copy is deleted by the caller.
-    pub(crate) async fn cancel_share_session(&self, id: &str) {
-        if let Some(slot) = self.stop_share_task(id) {
-            self.delete_relay_session(&slot).await;
+    /// Used by Remove: ends the pairing; the recorded copy is deleted by the
+    /// caller.
+    pub(crate) async fn cancel_share_session(self: &Arc<Self>, id: &str) {
+        if let Some(leftovers) = self.stop_share_task(id) {
+            self.clean_up(leftovers).await;
         }
+    }
+
+    /// Before the online node changes: end every live share on the old node
+    /// (deleted there now, or queued against that node).
+    pub(crate) async fn end_shares_before_node_change(self: &Arc<Self>) -> CommandResult<()> {
+        for share in self.index.shares().or_internal()? {
+            self.cancel_share_session(&share.file_id).await;
+            if matches!(
+                share.state.as_str(),
+                index::share::OPEN | index::share::SENT | index::share::STOP_PENDING
+            ) {
+                self.delete_share_copy(&share, true).await;
+            }
+        }
+        Ok(())
     }
 
     pub fn share_verify(&self, id: &str, matches: bool) -> CommandResult<Option<ShareState>> {
@@ -200,8 +287,8 @@ impl Engine {
     /// The sheet closed: end the live session, and delete the shared copy if
     /// nothing was ever sent with it.
     pub async fn share_cancel(self: &Arc<Self>, id: &str) -> CommandResult<()> {
-        if let Some(slot) = self.stop_share_task(id) {
-            self.delete_relay_session(&slot).await;
+        if let Some(leftovers) = self.stop_share_task(id) {
+            self.clean_up(leftovers).await;
         }
         if let Some(share) = self.index.share(id).or_internal()?
             && share.state == index::share::OPEN
@@ -216,7 +303,10 @@ impl Engine {
     pub async fn stop_sharing(self: &Arc<Self>, id: &str) -> CommandResult<()> {
         self.cancel_share_session(id).await;
         if let Some(share) = self.index.share(id).or_internal()?
-            && share.state != index::share::ENDED
+            && matches!(
+                share.state.as_str(),
+                index::share::OPEN | index::share::SENT | index::share::STOP_PENDING
+            )
         {
             self.delete_share_copy(&share, true).await;
         }
@@ -228,8 +318,12 @@ impl Engine {
     /// Deletes a shared copy.  `keep_record` leaves an `ended` record so the
     /// row shows "sharing ended" for a day.
     async fn delete_share_copy(self: &Arc<Self>, share: &ShareRecord, keep_record: bool) {
-        let deleted = match (self.online_endpoint(), self.identity()) {
-            (Some(node), Ok(identity)) => {
+        // Deleted on the node the copy was uploaded to, whatever is set up now.
+        let deleted = match (
+            NodeEndpoint::parse(&share.origin, self.cfg.allow_loopback_http),
+            self.identity(),
+        ) {
+            (Ok(node), Ok(identity)) => {
                 client::delete(&self.http, &node, identity.device.keys(), &share.sha256)
                     .await
                     .is_ok()
@@ -237,7 +331,9 @@ impl Engine {
             _ => false,
         };
         if !deleted {
-            let _ = self.index.queue_delete("online", &share.sha256, "device");
+            let _ = self
+                .index
+                .queue_delete(&share.origin, &share.sha256, "device", 0);
         }
         if let (Some(share_id), Ok(keychain)) = (FileId::parse(&share.share_id), self.keychain()) {
             let _ = keychain.remove_file_key(&share_id);
@@ -280,7 +376,7 @@ impl Engine {
                     let _ = self.index.put_share(&record);
                     self.emit_row(&share.file_id);
                 }
-                index::share::ENDED
+                index::share::ENDED | index::share::OWNER_ONLY
                     if share
                         .ended_at
                         .is_some_and(|at| now.saturating_sub(at) >= SHARE_KEEP_SECONDS) =>
@@ -302,13 +398,12 @@ impl Engine {
         }
     }
 
-    /// The existing shared copy, if `again` allows reuse and it still exists.
+    /// The existing shared copy, if it was never sent and is still on this
+    /// node.  A sent copy is never reused: its recipient was told when it is
+    /// deleted, and a new send must not move that time.
     async fn reusable_copy(self: &Arc<Self>, id: &str, node: &NodeEndpoint) -> Option<ShareCopy> {
         let share = self.index.share(id).ok().flatten()?;
-        if !matches!(
-            share.state.as_str(),
-            index::share::OPEN | index::share::SENT
-        ) {
+        if share.state != index::share::OPEN || share.origin != node.origin() {
             return None;
         }
         let share_id = FileId::parse(&share.share_id)?;
@@ -331,6 +426,7 @@ impl Engine {
         id: &str,
         node: &NodeEndpoint,
         progress: Arc<dyn Fn(u8) + Send + Sync>,
+        pending: &PendingSlot,
     ) -> Result<ShareCopy, Ended> {
         let file = self.index.file(id).ok().flatten().ok_or(Ended::Node)?;
         let identity = self.identity().map_err(|_| Ended::Node)?;
@@ -368,6 +464,15 @@ impl Engine {
         let sha256 = hex_lower(&sealed.sha256);
         let size = sealed.envelope_bytes;
         let keychain = self.keychain().map_err(|_| Ended::Node)?;
+        // Recorded before the key is stored, so an abort from here on is
+        // cleaned up.
+        if let Ok(mut slot) = pending.lock() {
+            *slot = Some(PendingCopy {
+                share_id,
+                sha256: sha256.clone(),
+                origin: node.origin().to_owned(),
+            });
+        }
         keychain
             .set_file_key(&share_id, &key)
             .map_err(|_| Ended::Node)?;
@@ -389,6 +494,9 @@ impl Engine {
         .is_err()
         {
             let _ = keychain.remove_file_key(&share_id);
+            if let Ok(mut slot) = pending.lock() {
+                *slot = None;
+            }
             return Err(Ended::Node);
         }
         drop(envelope);
@@ -407,6 +515,7 @@ impl Engine {
         again: bool,
         verify: Arc<Mutex<Option<oneshot::Sender<bool>>>>,
         slot: RelaySlot,
+        pending: PendingSlot,
     ) -> Option<ShareState> {
         let ended = |reason: Ended| Some(ShareState::new(id, reason.state()));
         let (Some(node), Ok(identity), Ok(Some(file))) =
@@ -438,21 +547,31 @@ impl Engine {
                         engine.emit_share(state);
                     }
                 });
-                match self.make_share_copy(id, &node, progress).await {
+                match self.make_share_copy(id, &node, progress, &pending).await {
                     Ok(copy) => copy,
                     Err(reason) => return ended(reason),
                 }
             }
         };
         if fresh {
-            // One shared copy per file: a new copy replaces an older one,
-            // which is deleted now (its link may not have been used yet, but
-            // the index tracks only the current copy).
+            // One shared copy per file in the index: a new copy replaces an
+            // older one.  An unsent one goes now; a sent one keeps the
+            // deletion time its recipient was told.
             if let Some(old) = previous.filter(|p| {
                 p.sha256 != copy.sha256
-                    && (p.state == index::share::SENT || p.state == index::share::OPEN)
+                    && matches!(
+                        p.state.as_str(),
+                        index::share::SENT | index::share::OPEN | index::share::STOP_PENDING
+                    )
             }) {
-                let _ = self.index.queue_delete("online", &old.sha256, "device");
+                let not_before = if old.state == index::share::SENT {
+                    old.delete_at.unwrap_or(0)
+                } else {
+                    0
+                };
+                let _ = self
+                    .index
+                    .queue_delete(&old.origin, &old.sha256, "device", not_before);
                 if let (Some(old_id), Ok(keychain)) =
                     (FileId::parse(&old.share_id), self.keychain())
                 {
@@ -462,6 +581,7 @@ impl Engine {
             let _ = self.index.put_share(&ShareRecord {
                 file_id: id.to_owned(),
                 share_id: copy.share_id.to_string(),
+                origin: node.origin().to_owned(),
                 sha256: copy.sha256.clone(),
                 size: copy.size,
                 state: index::share::OPEN.into(),
@@ -469,6 +589,10 @@ impl Engine {
                 delete_at: None,
                 ended_at: None,
             });
+        }
+        // The record names the copy now; it is no longer an orphan.
+        if let Ok(mut slot) = pending.lock() {
+            *slot = None;
         }
         let mut state = ShareState::new(id, "preparing");
         state.progress = Some(100);
@@ -638,6 +762,7 @@ impl Engine {
         let _ = self.index.put_share(&ShareRecord {
             file_id: id.to_owned(),
             share_id: copy.share_id.to_string(),
+            origin: node.origin().to_owned(),
             sha256: copy.sha256.clone(),
             size: copy.size,
             state: index::share::SENT.into(),

@@ -16,6 +16,42 @@ use tauri_plugin_dialog::DialogExt as _;
 #[derive(Default)]
 pub struct DropSlot(pub OnceLock<Arc<Engine>>);
 
+/// Paths the operating system handed over in a native drop on the Drop
+/// window.  `add_paths` accepts only these, so the webview cannot name an
+/// arbitrary file for Drop to read and copy.
+#[derive(Default)]
+pub struct NativeDrops(std::sync::Mutex<Vec<(PathBuf, std::time::Instant)>>);
+
+/// How long a dropped path stays acceptable to `add_paths`.
+const DROP_WINDOW_SECONDS: u64 = 60;
+
+impl NativeDrops {
+    pub fn record(&self, paths: &[PathBuf]) {
+        let mut recent = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let now = std::time::Instant::now();
+        recent.retain(|(_, at)| now.duration_since(*at).as_secs() < DROP_WINDOW_SECONDS);
+        recent.extend(paths.iter().map(|p| (p.clone(), now)));
+    }
+
+    /// Splits `paths` into those from a recent native drop (taken, so each
+    /// drop is used once) and the rest.
+    fn take(&self, paths: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<PathBuf>) {
+        let mut recent = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let now = std::time::Instant::now();
+        recent.retain(|(_, at)| now.duration_since(*at).as_secs() < DROP_WINDOW_SECONDS);
+        let (mut ok, mut refused) = (Vec::new(), Vec::new());
+        for path in paths {
+            if let Some(at) = recent.iter().position(|(p, _)| *p == path) {
+                recent.swap_remove(at);
+                ok.push(path);
+            } else {
+                refused.push(path);
+            }
+        }
+        (ok, refused)
+    }
+}
+
 /// Tray items that follow the status line.
 pub struct TrayItems {
     pub status: tauri::menu::MenuItem<Wry>,
@@ -195,9 +231,33 @@ pub async fn drop_status(
 }
 
 #[tauri::command]
-pub async fn add_paths(slot: State<'_, DropSlot>, paths: Vec<String>) -> CommandResult<AddResult> {
-    let paths = paths.into_iter().map(PathBuf::from).collect();
-    engine(&slot)?.add_paths(paths, None).await
+pub async fn add_paths(
+    slot: State<'_, DropSlot>,
+    drops: State<'_, NativeDrops>,
+    paths: Vec<String>,
+) -> CommandResult<AddResult> {
+    let (mut dropped, mut refused) = drops.take(paths.into_iter().map(PathBuf::from).collect());
+    if !refused.is_empty() {
+        // The page's drop event can race the window event that records it.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let (late, still) = drops.take(refused);
+        dropped.extend(late);
+        refused = still;
+    }
+    let mut result = engine(&slot)?.add_paths(dropped, None).await?;
+    for path in refused {
+        result.refused.push(Refused {
+            name: wildbloom_envelope::sanitise_name(
+                &path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            ),
+            reason: "unreadable",
+            limit_bytes: None,
+        });
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -216,12 +276,12 @@ pub async fn copy_back(slot: State<'_, DropSlot>, id: String) -> CommandResult<(
 }
 
 #[tauri::command]
-pub async fn save_copy(
-    slot: State<'_, DropSlot>,
-    id: String,
-    path: Option<String>,
-) -> CommandResult<SavedCopy> {
-    engine(&slot)?.save_copy(&id, path.map(PathBuf::from)).await
+pub async fn save_copy(slot: State<'_, DropSlot>, id: String) -> CommandResult<Option<SavedCopy>> {
+    // The save dialog is always Rust's: the webview never names a path.
+    match engine(&slot)?.save_copy(&id, None).await {
+        Err(error) if error.code == "cancelled" => Ok(None),
+        other => other.map(Some),
+    }
 }
 
 #[tauri::command]
@@ -277,12 +337,31 @@ pub async fn recovery_key_for_display(
 #[tauri::command]
 pub async fn save_recovery_file(
     slot: State<'_, DropSlot>,
-    path: Option<String>,
-) -> CommandResult<SavedRecoveryFile> {
+) -> CommandResult<Option<SavedRecoveryFile>> {
     let engine = engine(&slot)?;
-    tokio::task::spawn_blocking(move || engine.save_recovery_file(path.map(PathBuf::from)))
+    match tokio::task::spawn_blocking(move || engine.save_recovery_file(None))
         .await
         .map_err(|_| CommandError::code("internal"))?
+    {
+        Err(error) if error.code == "cancelled" => Ok(None),
+        other => other.map(Some),
+    }
+}
+
+/// From the node window: open a Drop flow (`recovery`, to save the
+/// recovery key again) in the Drop window, which alone may read the key.
+#[tauri::command]
+pub async fn open_drop_flow(app: AppHandle, flow: String) -> CommandResult<()> {
+    if flow != "recovery" {
+        return Err(CommandError::code("bad_flow"));
+    }
+    if let Some(window) = app.get_webview_window("drop") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    app.emit_to("drop", "drop://open-flow", OpenFlow { flow: "recovery" })
+        .map_err(|_| CommandError::code("internal"))
 }
 
 #[tauri::command]

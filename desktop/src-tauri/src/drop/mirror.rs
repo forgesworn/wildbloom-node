@@ -32,6 +32,21 @@ impl Engine {
         self.rt.spawn(async move { engine.keysync_loop().await });
         let engine = self.clone();
         self.rt.spawn(async move { engine.watch_loop().await });
+        let engine = self.clone();
+        self.rt.spawn(async move { engine.deletes_loop().await });
+    }
+
+    /// Queued deletions and the 24-hour share deletions run on their own
+    /// timer, so a long upload never holds them up.
+    async fn deletes_loop(self: Arc<Self>) {
+        loop {
+            self.run_pending_deletes().await;
+            self.sweep_shares().await;
+            tokio::select! {
+                _ = self.deletes_wake.notified() => {}
+                _ = tokio::time::sleep(Duration::from_secs(60)) => {}
+            }
+        }
     }
 
     async fn mirror_loop(self: Arc<Self>) {
@@ -62,17 +77,11 @@ impl Engine {
             if self.index.get_bool(kv::FIRST_RUN_DONE).unwrap_or(false)
                 || self.index.get_bool(kv::RESTORE_PENDING).unwrap_or(false)
             {
-                let _ = self.sync_key_list().await;
-            } else {
-                // Not yet set up: seal locally once first run finishes.
-                let _ = self.sync_key_list_if_identity().await;
+                self.sync_key_list_reporting().await;
+            } else if self.identity().is_ok() {
+                // Not yet set up: seal what there is, locally at least.
+                self.sync_key_list_reporting().await;
             }
-        }
-    }
-
-    async fn sync_key_list_if_identity(self: &Arc<Self>) {
-        if self.identity().is_ok() {
-            let _ = self.sync_key_list().await;
         }
     }
 
@@ -153,8 +162,7 @@ impl Engine {
             }
             self.upload_online(&file.id).await;
         }
-        self.run_pending_deletes().await;
-        self.sweep_shares().await;
+        self.deletes_wake.notify_one();
         let reachable = self
             .online_rt
             .lock()

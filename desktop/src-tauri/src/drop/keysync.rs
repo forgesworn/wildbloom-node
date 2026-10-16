@@ -8,7 +8,7 @@
 //! the network to know the current list.
 
 use super::client::{self, NodeEndpoint};
-use super::device::{self, KeyList, KeyListError, RecoverySecret};
+use super::device::{self, KeyList, KeyListEntry, KeyListError, RecoverySecret};
 use super::engine::{
     Engine, OrInternal as _, device_error, host_of, internal, kv, write_private_file,
 };
@@ -29,7 +29,11 @@ impl Engine {
 
     /// Loads the key list into `slot` if it is not loaded yet: the local sealed
     /// copy, checked against the last seen `seq`, or an empty list on a
-    /// computer that never sealed one.
+    /// computer that never sealed one.  Either way the list is then
+    /// reconciled with the index, so nothing the index and keychain know about
+    /// can be missing from it.  A local copy that cannot be opened (or is older
+    /// than one already seen) is an error: the caller marks the key list as
+    /// failed and the next sync rebuilds it from the nodes' copies.
     pub(crate) fn load_key_list(&self, slot: &mut Option<KeyList>) -> CommandResult<()> {
         if slot.is_some() {
             return Ok(());
@@ -40,35 +44,134 @@ impl Engine {
             .get_u64(kv::LAST_SEEN_SEQ)
             .or_internal()?
             .unwrap_or(0);
-        let list = match std::fs::read(self.sealed_key_list_path()) {
+        let mut list = match std::fs::read(self.sealed_key_list_path()) {
             Ok(bytes) => KeyList::open_newest(&recovery, &[&bytes], last_seen)
                 .map_err(|e| internal(e.to_string()))?,
-            Err(_) if last_seen == 0 => KeyList::new(),
-            // The local copy is gone; the next sync merges the nodes' copies,
-            // which must be at least `last_seen`.
+            // Never sealed here, or the local copy is gone: the next sync
+            // merges the nodes' copies, which must be at least `last_seen`.
             Err(_) => KeyList::new(),
         };
+        self.reconcile_key_list(&mut list)?;
         *slot = Some(list);
         Ok(())
     }
 
-    /// Seals the current key list and puts it on both nodes, merging any
-    /// copies the online node holds first (another computer with the same
-    /// recovery key may have added files).  Previous copies are deleted once
-    /// the new one is stored.
+    /// Adds every kept file the index has an envelope and a keychain key for,
+    /// and applies every recorded removal.  The index and the keychain are the
+    /// durable record; the in-memory list is never the only copy of an entry.
+    pub(crate) fn reconcile_key_list(&self, list: &mut KeyList) -> CommandResult<()> {
+        for (id, at) in self.index.tombstones().or_internal()? {
+            if let Some(file_id) = FileId::parse(&id) {
+                let _ = list.remove(&file_id, at.max(1));
+            }
+        }
+        let keychain = self.keychain()?;
+        for file in self.index.files().or_internal()? {
+            if matches!(file.local.as_str(), local::UNREADABLE | local::ENCRYPTING) {
+                continue;
+            }
+            let (Some(sha), Some(size), Some(file_id)) = (
+                file.sha256.as_deref().and_then(super::parse_sha256),
+                file.size,
+                FileId::parse(&file.id),
+            ) else {
+                continue;
+            };
+            if list.get(&file_id).is_some() || list.tombstones().iter().any(|t| t.id == file_id) {
+                continue;
+            }
+            let Some(key) = keychain
+                .file_key(&file_id)
+                .map_err(|e| super::engine::keychain_error(&e))?
+            else {
+                continue;
+            };
+            let media_type =
+                wildbloom_envelope::normalise_media_type(&file.media_type).unwrap_or_default();
+            let _ = list.insert(KeyListEntry {
+                id: file_id,
+                sha256: sha,
+                size,
+                key,
+                name: file.name.clone(),
+                media_type,
+                bytes: file.bytes,
+                added: file.added,
+            });
+        }
+        Ok(())
+    }
+
+    /// Seals `list`, keeps the sealed copy and its `seq` locally.
+    fn seal_locally(
+        &self,
+        list: &mut KeyList,
+        recovery: &RecoverySecret,
+    ) -> CommandResult<Vec<u8>> {
+        let sealed = list.seal(recovery).map_err(|e| internal(e.to_string()))?;
+        write_private_file(&self.sealed_key_list_path(), &sealed)
+            .map_err(|_| internal("could not keep the key list"))?;
+        self.index
+            .set_u64(kv::LAST_SEEN_SEQ, list.seq())
+            .or_internal()?;
+        self.index
+            .set_bool(kv::KEY_LIST_FAILED, false)
+            .or_internal()?;
+        Ok(sealed)
+    }
+
+    /// The key list problem shown in the status line, if any.
+    pub(crate) fn key_list_failed(&self) -> bool {
+        self.index.get_bool(kv::KEY_LIST_FAILED).unwrap_or(false)
+    }
+
+    /// Runs one sync and records whether it left the key list failed.
+    pub(crate) async fn sync_key_list_reporting(self: &Arc<Self>) {
+        let result = self.sync_key_list().await;
+        if result.is_err() {
+            let _ = self.index.set_bool(kv::KEY_LIST_FAILED, true);
+            let _ = self.index.set_bool(kv::KEY_LIST_PENDING, true);
+        }
+        self.emit_status();
+    }
+
+    /// Reconciles the key list with the index, seals it locally first (before
+    /// any network work), merges any copies the online node holds (another
+    /// computer with the same recovery key may have added files), and puts the
+    /// result on both nodes.  Previous copies are deleted once the new one is
+    /// stored.
     pub(crate) async fn sync_key_list(self: &Arc<Self>) -> CommandResult<()> {
         let _turn = self.keysync.lock().await;
         let identity = self.identity()?;
         let recovery = identity.recovery.clone();
         let recovery_keys = recovery.identity().keys().clone();
         let mut slot = self.keylist.lock().await;
-        self.load_key_list(&mut slot)?;
-        let mut list = slot.clone().expect("loaded above");
+        let mut list = match self.load_key_list(&mut slot) {
+            Ok(()) => slot.clone().expect("loaded above"),
+            // An unreadable local copy: rebuild from the index and let the
+            // nodes' copies supply the sequence number.
+            Err(_) => {
+                self.index
+                    .set_bool(kv::KEY_LIST_FAILED, true)
+                    .or_internal()?;
+                let mut fresh = KeyList::new();
+                self.reconcile_key_list(&mut fresh)?;
+                fresh
+            }
+        };
+        self.reconcile_key_list(&mut list)?;
         let last_seen = self
             .index
             .get_u64(kv::LAST_SEEN_SEQ)
             .or_internal()?
             .unwrap_or(0);
+        // 1. Durable on this computer before anything touches the network.
+        let mut sealed = None;
+        if list.seq() >= last_seen {
+            sealed = Some(self.seal_locally(&mut list, &recovery)?);
+            *slot = Some(list.clone());
+        }
+        // 2. Merge the online node's copies.
         let online = self.writable_online();
         let mut merged_away = Vec::new();
         if let Some(node) = &online
@@ -88,7 +191,11 @@ impl Engine {
                 }
             }
             match KeyList::merge(copies) {
-                Ok(merged) if merged.seq() >= last_seen => list = merged,
+                Ok(merged) if merged.seq() >= last_seen && merged != list => {
+                    list = merged;
+                    sealed = None;
+                }
+                Ok(merged) if merged.seq() >= last_seen => {}
                 // A conflicting or rolled-back set is not merged; this
                 // computer's own list is still sealed and kept.
                 _ => merged_away.clear(),
@@ -96,18 +203,20 @@ impl Engine {
         }
         if list.seq() < last_seen {
             // Without the nodes' copies the next seal could be older than one
-            // already published; wait until the online node can be read.
+            // already published; the entries stay in the index and keychain
+            // and are reconciled in on the next attempt.
             self.index
                 .set_bool(kv::KEY_LIST_PENDING, true)
                 .or_internal()?;
+            self.index
+                .set_bool(kv::KEY_LIST_FAILED, true)
+                .or_internal()?;
             return Ok(());
         }
-        let sealed = list.seal(&recovery).map_err(|e| internal(e.to_string()))?;
-        write_private_file(&self.sealed_key_list_path(), &sealed)
-            .map_err(|_| internal("could not keep the key list"))?;
-        self.index
-            .set_u64(kv::LAST_SEEN_SEQ, list.seq())
-            .or_internal()?;
+        let sealed = match sealed {
+            Some(sealed) => sealed,
+            None => self.seal_locally(&mut list, &recovery)?,
+        };
         *slot = Some(list);
         drop(slot);
         let sha = hex_lower(&Sha256::digest(&sealed));
@@ -124,7 +233,7 @@ impl Engine {
             )
             .await
             .is_ok();
-            stored.push(("local", kv::KEY_LIST_LOCAL_SHA, ok));
+            stored.push(("local".to_owned(), kv::KEY_LIST_LOCAL_SHA, ok));
         }
         if let Some(node) = &online {
             let ok = client::upload(
@@ -137,7 +246,7 @@ impl Engine {
             )
             .await
             .is_ok();
-            stored.push(("online", kv::KEY_LIST_ONLINE_SHA, ok));
+            stored.push((node.origin().to_owned(), kv::KEY_LIST_ONLINE_SHA, ok));
         }
         // Retried on the next mirror pass, when a node comes back or the
         // local node finishes starting.
@@ -151,19 +260,23 @@ impl Engine {
             if !ok {
                 continue;
             }
+            // `<node>|<sha256>`: a previous copy is deleted where it was put.
             if let Some(previous) = self.index.get(key).or_internal()?
-                && previous != sha
+                && let Some((previous_node, previous_sha)) = previous.split_once('|')
+                && previous_sha != sha
             {
                 self.index
-                    .queue_delete(node, &previous, "recovery")
+                    .queue_delete(previous_node, previous_sha, "recovery", 0)
                     .or_internal()?;
             }
-            self.index.set(key, &sha).or_internal()?;
-            if node == "online" {
+            self.index
+                .set(key, &format!("{node}|{sha}"))
+                .or_internal()?;
+            if key == kv::KEY_LIST_ONLINE_SHA {
                 for old in &merged_away {
                     if *old != sha {
                         self.index
-                            .queue_delete("online", old, "recovery")
+                            .queue_delete(&node, old, "recovery", 0)
                             .or_internal()?;
                     }
                 }
@@ -183,6 +296,8 @@ impl Engine {
         recovery_file: Option<PathBuf>,
         url: Option<&str>,
     ) -> CommandResult<RestoreResult> {
+        // No drop may start while the recovery secret can still change.
+        let _setup = self.setup_lock.write().await;
         let (key_text, file_url) = match (recovery_key, recovery_file) {
             (Some(key), None) => (key.trim().to_owned(), None),
             (None, Some(path)) => read_recovery_file(&path)?,
@@ -212,9 +327,28 @@ impl Engine {
             && stored != *recovery.secret()
         {
             if first && self.index.files().or_internal()?.is_empty() {
+                // Nothing of the old secret may outlive it: an approval in
+                // flight names its recovery identity, and the old key list
+                // state would be checked against the wrong list.
+                self.cancel_approval()?;
                 keychain
                     .set_recovery_secret(recovery.secret())
                     .map_err(|e| super::engine::keychain_error(&e))?;
+                for key in [
+                    kv::LAST_SEEN_SEQ,
+                    kv::KEY_LIST_LOCAL_SHA,
+                    kv::KEY_LIST_ONLINE_SHA,
+                    kv::KEY_LIST_PENDING,
+                    kv::KEY_LIST_FAILED,
+                ] {
+                    self.index.unset(key).or_internal()?;
+                }
+                self.index.clear_tombstones().or_internal()?;
+                match std::fs::remove_file(self.sealed_key_list_path()) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(_) => return Err(internal("could not clear the old key list")),
+                }
             } else {
                 return Err(CommandError::with_host("wrong_key", host_of(&url)));
             }

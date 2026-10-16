@@ -899,6 +899,32 @@ async fn drop_end_to_end() {
     assert_eq!(file_key_entries(&store), 1, "its keychain entry is gone");
     assert_eq!(super::engine::sha256_file(&watched).unwrap(), watched_sha);
     report("remove deleted both copies and the key; the original is untouched");
+
+    // Remove while still encrypting (M3): no key and no outbox file survive.
+    let big = originals.join("large scan.bin");
+    std::fs::write(&big, vec![7u8; 60_000_000]).unwrap();
+    let keys_before = file_key_entries(&store);
+    let early = engine
+        .add_paths(vec![big.clone()], None)
+        .await
+        .unwrap()
+        .added[0]
+        .clone();
+    engine.remove(&early).await.unwrap();
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert_eq!(
+        file_key_entries(&store),
+        keys_before,
+        "no key kept for a removed row"
+    );
+    assert!(engine.index.file(&early).unwrap().is_none());
+    let outbox: Vec<_> = std::fs::read_dir(work_path.join("first/drop/outbox"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name())
+        .collect();
+    assert!(outbox.is_empty(), "no outbox envelope kept: {outbox:?}");
+    report("remove during encryption kept neither a key nor an envelope");
     // Let the key list carry the removal.
     let key_engine = engine.clone();
     until("key list after removal", 30, || {
@@ -966,6 +992,35 @@ async fn drop_end_to_end() {
     assert_eq!(file_key_entries(&store2), 1);
     assert!(!engine2.status().recovery.confirmed);
     report("restore on a fresh app data dir recovered the file from the key list");
+
+    // Changing the online node first ends live shares on the old node (M2).
+    host2.shares.lock().unwrap().clear();
+    engine2.share_start(&id, false).unwrap();
+    until("share link on the restored computer", 60, || {
+        host2
+            .shares
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|s| s.state == "ready")
+            .cloned()
+    })
+    .await;
+    let live = engine2.index.share(&id).unwrap().unwrap();
+    assert_eq!(live.origin, online.origin());
+    assert_eq!(
+        client::head(&http, &online, &live.sha256).await.unwrap(),
+        Some(live.size)
+    );
+    let elsewhere = format!("http://localhost:{}/", free_port());
+    engine2.set_online_node(Some(&elsewhere)).await.unwrap();
+    assert_eq!(
+        client::head(&http, &online, &live.sha256).await.unwrap(),
+        None,
+        "the live share was deleted on the old node before the change"
+    );
+    assert!(engine2.index.pending_deletes().unwrap().is_empty());
+    report("changing the online node deleted the live share on the old node first");
 }
 
 /// Waits for a JSON file the browser driver writes into the hand-off folder.

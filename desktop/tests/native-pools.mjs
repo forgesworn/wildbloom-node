@@ -204,6 +204,21 @@ try {
   assert.equal((await app.command('status')).visible, false, 'node window starts hidden');
   assert.equal(await app.evaluate('document.documentElement.dataset.os', 'drop'), process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'windows' : 'linux');
   passed('fresh profile opens the Drop window at first run step 1 with platform_info from Rust; node window hidden');
+  // Each window may call only its own commands (app manifest + capabilities).
+  async function invokeOutcome(command, window) {
+    await app.evaluate(`(window.__outcome = null, window.__TAURI__.core.invoke(${JSON.stringify(command)}).then(() => { window.__outcome = 'allowed'; }, (e) => { window.__outcome = 'refused: ' + String(e?.message ?? e); }), true)`, window);
+    let outcome = null;
+    await until(async () => { outcome = await app.evaluate('window.__outcome', window); return outcome !== null; }, `${command} outcome`);
+    return outcome;
+  }
+  for (const command of ['recovery_key_for_display', 'share_start', 'save_recovery_file', 'remove']) {
+    assert.match(await invokeOutcome(command), /not allowed/i, `node window must not call ${command}`);
+  }
+  for (const command of ['node_status', 'save_settings', 'import_pool', 'open_drop_flow']) {
+    assert.match(await invokeOutcome(command, 'drop'), /not allowed/i, `Drop window must not call ${command}`);
+  }
+  assert.equal(await invokeOutcome('drop_status'), 'allowed', 'node window reads Drop status');
+  passed('per-window command permissions: the node window cannot read the recovery key or share, the Drop window cannot reach node settings or pools');
 
   const importAction = `(()=>{
     const transfer=new DataTransfer(); transfer.items.add(new File([${JSON.stringify(JSON.stringify(receipt))}], 'receipt.json', {type:'application/json'}));

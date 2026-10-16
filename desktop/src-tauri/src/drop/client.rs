@@ -159,6 +159,15 @@ fn is_tls(error: &reqwest::Error) -> bool {
     false
 }
 
+/// The longest a node may go without sending a byte of a response.
+pub const READ_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// How long an upload of `size` bytes may take in all: ten minutes plus one
+/// second per 16 KiB, so a stalled receiver cannot hold a body open forever.
+pub fn upload_deadline(size: u64) -> Duration {
+    Duration::from_secs(600 + size / (16 * 1024))
+}
+
 /// The HTTP client every Drop request uses: no ambient proxy, no redirects,
 /// bounded connect time and no referrer.
 pub fn http_client() -> Client {
@@ -167,6 +176,9 @@ pub fn http_client() -> Client {
         .redirect(reqwest::redirect::Policy::none())
         .referer(false)
         .connect_timeout(Duration::from_secs(10))
+        // Every read (headers and each body chunk) must make progress: a node
+        // that stops sending fails the transfer instead of holding it open.
+        .read_timeout(READ_TIMEOUT)
         .user_agent(concat!("wildbloom-drop/", env!("CARGO_PKG_VERSION")))
         .build()
         .expect("the HTTP client configuration is static")
@@ -294,6 +306,7 @@ pub async fn upload(
         .header("X-SHA-256", sha256)
         .header(header::CONTENT_LENGTH, size)
         .header(header::CONTENT_TYPE, ENVELOPE_MEDIA_TYPE)
+        .timeout(upload_deadline(size))
         .body(body)
         .send()
         .await
@@ -480,6 +493,7 @@ pub async fn file_body(
         .await
         .map_err(|_| NodeError::Io)?;
     let mut sent = 0u64;
+    // A local disk read that stalls fails the upload rather than hanging it.
     let stream = tokio_stream_from(file).map(move |chunk| {
         if let Ok(bytes) = &chunk {
             sent += bytes.len() as u64;
@@ -528,7 +542,10 @@ fn tokio_stream_from(
         use tokio::io::AsyncReadExt as _;
         let mut file = state?;
         let mut buffer = vec![0u8; 256 * 1024];
-        match file.read(&mut buffer).await {
+        let read = tokio::time::timeout(READ_TIMEOUT, file.read(&mut buffer))
+            .await
+            .unwrap_or_else(|_| Err(std::io::Error::from(std::io::ErrorKind::TimedOut)));
+        match read {
             Ok(0) => None,
             Ok(n) => {
                 buffer.truncate(n);
@@ -739,6 +756,15 @@ mod tests {
             BLOSSOM_AUTH_LIFETIME
         );
         assert!(!event.content.trim().is_empty());
+    }
+
+    #[test]
+    fn uploads_have_a_size_bound_deadline() {
+        assert_eq!(upload_deadline(0), Duration::from_secs(600));
+        assert_eq!(
+            upload_deadline(1024 * 1024 * 1024),
+            Duration::from_secs(600 + 65_536)
+        );
     }
 
     #[test]

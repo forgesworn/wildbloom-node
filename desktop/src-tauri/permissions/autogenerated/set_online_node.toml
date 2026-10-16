@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-online-node"
+description = "Enables the set_online_node command without any pre-configured scope."
+commands.allow = ["set_online_node"]
+
+[[permission]]
+identifier = "deny-set-online-node"
+description = "Denies the set_online_node command without any pre-configured scope."
+commands.deny = ["set_online_node"]

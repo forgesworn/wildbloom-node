@@ -153,6 +153,16 @@ impl Engine {
         if !matches!(uri, NostrConnectUri::Bunker { .. }) {
             return Err(CommandError::code("bad_link"));
         }
+        // The signer's relays carry the owner's approval: TLS only, except a
+        // loopback relay in test builds.
+        if !uri.relays().iter().all(|relay| {
+            let url = relay.as_str();
+            url.starts_with("wss://")
+                || (self.cfg.allow_loopback_http
+                    && (url.starts_with("ws://127.0.0.1:") || url.starts_with("ws://localhost:")))
+        }) {
+            return Err(CommandError::code("bad_link"));
+        }
         let node = self.online_endpoint().ok_or(CommandError::with_message(
             "refused",
             "No online node is set up.",
@@ -205,6 +215,9 @@ impl Engine {
             owner: None,
         };
         // A fresh client key per session: nothing about this connection is kept.
+        // Warning: nostr-connect's `tracing` debug output includes the NIP-46
+        // messages, the connect secret among them.  This app installs no
+        // tracing subscriber; never add one that records debug level here.
         let connect = match NostrConnect::new(uri, Keys::generate(), self.cfg.signer_timeout, None)
         {
             Ok(connect) => connect,
@@ -324,19 +337,17 @@ impl Engine {
         if self.index.get(kv::APPROVAL_BY).ok().flatten().is_none() {
             return;
         }
-        match client::grant_status(&self.http, &node, identity.device.keys()).await {
-            Ok(Some(status)) => {
-                if let Some(until) = status.until {
-                    let _ = self.index.set_u64(kv::APPROVAL_UNTIL, until);
-                }
-                let _ = self
-                    .index
-                    .set_bool(kv::APPROVAL_REVOKED, status.state != "active");
+        // Only the node's own status answer ends the approval locally; a 403
+        // or 404 (or no answer) is not a revocation.
+        if let Ok(Some(status)) =
+            client::grant_status(&self.http, &node, identity.device.keys()).await
+        {
+            if let Some(until) = status.until {
+                let _ = self.index.set_u64(kv::APPROVAL_UNTIL, until);
             }
-            Ok(None) => {
-                let _ = self.index.set_bool(kv::APPROVAL_REVOKED, true);
-            }
-            Err(_) => {}
+            let _ = self
+                .index
+                .set_bool(kv::APPROVAL_REVOKED, status.state != "active");
         }
     }
 }

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-open-pool-client"
+description = "Enables the open_pool_client command without any pre-configured scope."
+commands.allow = ["open_pool_client"]
+
+[[permission]]
+identifier = "deny-open-pool-client"
+description = "Denies the open_pool_client command without any pre-configured scope."
+commands.deny = ["open_pool_client"]

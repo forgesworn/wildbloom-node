@@ -237,8 +237,14 @@ elements.checkUpdate.addEventListener("click", async () => {
   ui.renew.addEventListener("click", (event) => {
     runFlow({ sequence: ["approve"], renew: true, browserApproval: Boolean(snapshot?.browserApproval), label: "Renew approval" }, event.currentTarget);
   });
-  ui.recoveryButton.addEventListener("click", (event) => {
-    runFlow({ sequence: ["recovery"], resave: snapshot?.recovery?.confirmed !== false, label: "Recovery key" }, event.currentTarget);
+  ui.recoveryButton.addEventListener("click", async () => {
+    // The recovery key is shown only in the Drop window.
+    showError("");
+    try {
+      await Drop.call("open_drop_flow", { flow: "recovery" });
+    } catch (error) {
+      showError(error.message || "Couldn't open Wildbloom Drop.");
+    }
   });
   ui.copy.addEventListener("click", async () => {
     const npub = snapshot?.approval?.deviceNpub;
