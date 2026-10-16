@@ -104,13 +104,13 @@ function launchApp() {
     for (const wait of pending.values()) { clearTimeout(wait.timer); wait.reject(new Error(`Native app exited during ${wait.op}: code=${code}, signal=${signal}`)); }
     pending.clear();
   });
-  const command = (op, script = '') => new Promise((resolve, reject) => {
+  const command = (op, script = '', window = undefined) => new Promise((resolve, reject) => {
     const id = ++serial;
     const timer = setTimeout(() => { pending.delete(id); reject(new Error(`Native driver timed out: ${op}`)); }, 15000);
     pending.set(id, { resolve, reject, timer, op });
-    child.stdin.write(`${JSON.stringify({ id, op, script })}\n`);
+    child.stdin.write(`${JSON.stringify(window ? { id, op, script, window } : { id, op, script })}\n`);
   });
-  const evaluate = (script) => command('eval', `(()=>{try{return (${script});}catch(e){return {driver_error:String(e)}}})()`);
+  const evaluate = (script, window) => command('eval', `(()=>{try{return (${script});}catch(e){return {driver_error:String(e)}}})()`, window);
   return { child, command, evaluate, ready: () => webviewReady };
 }
 // WebKitGTK and WebView2 have their own children. Count only real daemon
@@ -197,6 +197,13 @@ try {
   assert.equal((await descendants(app.child.pid)).length, 0, 'Fresh app must not start a node/repair automatically');
   assert.equal(signatures(), 0);
   passed('native app starts without storage, signer or repair children');
+  // Wildbloom Drop: a fresh profile opens the Drop window at first run step 1,
+  // and the node window starts hidden.  No keychain entry is written.
+  await until(async () => await app.evaluate('!document.querySelector("#view-first")?.hidden && document.querySelector("#view-first")?.textContent.includes("Set up Wildbloom Drop")', 'drop') === true, 'Drop first run D1');
+  assert.equal((await app.command('status', '', 'drop')).visible, true, 'Drop window shown');
+  assert.equal((await app.command('status')).visible, false, 'node window starts hidden');
+  assert.equal(await app.evaluate('document.documentElement.dataset.os', 'drop'), process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'windows' : 'linux');
+  passed('fresh profile opens the Drop window at first run step 1 with platform_info from Rust; node window hidden');
 
   const importAction = `(()=>{
     const transfer=new DataTransfer(); transfer.items.add(new File([${JSON.stringify(JSON.stringify(receipt))}], 'receipt.json', {type:'application/json'}));

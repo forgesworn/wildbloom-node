@@ -24,6 +24,9 @@ struct Request {
     op: String,
     #[serde(default)]
     script: String,
+    /// The window to act on; the node window when absent.
+    #[serde(default)]
+    window: Option<String>,
 }
 
 fn reply(id: u64, value: Value) {
@@ -67,7 +70,12 @@ pub fn start(app: AppHandle) {
                 app.exit(1);
                 return;
             };
-            let Some(window) = app.get_webview_window("main") else {
+            let label = request.window.as_deref().unwrap_or("main");
+            if !matches!(label, "main" | "drop") {
+                app.exit(1);
+                return;
+            }
+            let Some(window) = app.get_webview_window(label) else {
                 app.exit(1);
                 return;
             };
