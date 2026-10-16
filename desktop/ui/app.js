@@ -152,5 +152,126 @@ elements.checkUpdate.addEventListener("click", async () => {
   }
 });
 
+// Wildbloom Drop settings (section 9.5). Changes apply immediately and are not
+// part of "Save and restart". All state lives in Rust; this is a view over it.
+(() => {
+  const Drop = window.WildbloomDrop;
+  const $ = (id) => document.getElementById(id);
+  const ui = {
+    nodeUrl: $("drop-node-url"), nodeStatus: $("drop-node-status"), nodeChange: $("drop-node-change"),
+    npub: $("drop-device-npub"), approval: $("drop-approval-text"), copy: $("drop-device-copy"), copyStatus: $("drop-device-status"), renew: $("drop-renew"),
+    folder: $("drop-folder"), folderHint: $("drop-folder-hint"), folderShow: $("drop-folder-show"),
+    recovery: $("drop-recovery-text"), recoveryButton: $("drop-recovery"), error: $("drop-settings-error"),
+  };
+  let snapshot = null;
+  let copyTimer = null;
+
+  function showError(text) {
+    ui.error.textContent = text || "";
+    ui.error.hidden = !text;
+  }
+
+  function render() {
+    const online = snapshot?.online;
+    const approval = snapshot?.approval || { state: "none" };
+    const configured = Boolean(online?.configured);
+    ui.nodeUrl.textContent = configured ? online.url : "";
+    ui.nodeUrl.hidden = !configured;
+    const unreachable = configured && (online.reachable === false || (online.failedChecks || 0) > 0);
+    ui.nodeStatus.textContent = !snapshot ? "Not available yet."
+      : !configured ? "Not set up"
+      : unreachable ? "Can't reach it right now"
+      : `Connected · ${Drop.formatBytes(online.usedBytes)} of ${Drop.formatBytes(online.limitBytes)} used`;
+    ui.nodeStatus.classList.toggle("warn", unreachable);
+    ui.nodeChange.textContent = configured ? "Change…" : "Add online node…";
+    ui.nodeChange.disabled = !snapshot;
+
+    ui.npub.textContent = approval.deviceNpub ? Drop.shortNpub(approval.deviceNpub) : "";
+    ui.copy.hidden = !approval.deviceNpub;
+    const soon = approval.state === "active" && approval.until && approval.until - Date.now() / 1000 < 30 * 86400;
+    ui.approval.textContent = approval.state === "active" ? `Approved by ${Drop.shortNpub(approval.byNpub)} until ${Drop.fullDate(approval.until)}`
+      : approval.state === "expired" ? `Approval ended on ${Drop.fullDate(approval.until)}`
+      : configured ? "Not approved yet" : "Add your online node first.";
+    ui.approval.classList.toggle("warn", approval.state === "expired" || Boolean(soon));
+    ui.renew.disabled = !snapshot || !configured;
+    ui.renew.classList.toggle("emphasis", approval.state === "expired" || Boolean(soon));
+
+    const folder = snapshot?.watchFolder || {};
+    ui.folder.checked = Boolean(folder.enabled);
+    ui.folder.disabled = !snapshot;
+    ui.folderHint.textContent = `${folder.path || "~/Wildbloom"}. Removing a file from the folder doesn't delete its copies.`;
+    ui.folderShow.disabled = !folder.enabled;
+
+    const recovery = snapshot?.recovery || {};
+    ui.recovery.textContent = recovery.savedAt ? `Saved ${Drop.fullDate(recovery.savedAt)}` : "Not saved yet";
+    ui.recoveryButton.disabled = !snapshot;
+  }
+
+  async function refreshDrop() {
+    try {
+      snapshot = await Drop.call("drop_status");
+    } catch {
+      snapshot = null;
+    }
+    render();
+  }
+
+  async function runFlow(options, opener) {
+    const finished = await Drop.openFlowSheet({ ...options, refresh: async () => { await refreshDrop(); return snapshot; } }, opener);
+    await refreshDrop();
+    return finished;
+  }
+
+  ui.nodeChange.addEventListener("click", async (event) => {
+    const opener = event.currentTarget;
+    if (snapshot?.online?.configured) {
+      const yes = await Drop.confirmDialog({
+        title: "Use a different online node?",
+        paragraphs: [`Your files will be copied to the new node. Copies on ${Drop.hostOf(snapshot.online.url)} aren't deleted.`],
+        confirmLabel: "Continue", destructive: false, opener,
+      });
+      if (!yes) return;
+    }
+    runFlow({ sequence: ["node", "approve"], browserApproval: Boolean(snapshot?.browserApproval), label: "Online node" }, opener);
+  });
+  ui.renew.addEventListener("click", (event) => {
+    runFlow({ sequence: ["approve"], renew: true, browserApproval: Boolean(snapshot?.browserApproval), label: "Renew approval" }, event.currentTarget);
+  });
+  ui.recoveryButton.addEventListener("click", (event) => {
+    runFlow({ sequence: ["recovery"], resave: snapshot?.recovery?.confirmed !== false, label: "Recovery key" }, event.currentTarget);
+  });
+  ui.copy.addEventListener("click", async () => {
+    const npub = snapshot?.approval?.deviceNpub;
+    if (!npub) return;
+    ui.copyStatus.textContent = (await Drop.writeClipboard(npub)) ? "Copied." : "Couldn't copy.";
+    clearTimeout(copyTimer);
+    copyTimer = setTimeout(() => { ui.copyStatus.textContent = ""; }, 2000);
+  });
+  ui.folder.addEventListener("change", async () => {
+    showError("");
+    try {
+      await Drop.call("set_watch_folder", { enabled: ui.folder.checked });
+    } catch (error) {
+      showError(error.message || "Couldn't change the Wildbloom folder.");
+    }
+    await refreshDrop();
+  });
+  ui.folderShow.addEventListener("click", async () => {
+    try {
+      await Drop.call("open_watch_folder");
+    } catch (error) {
+      showError(error.message || "Couldn't open the Wildbloom folder.");
+    }
+  });
+
+  Drop.listen("drop://status", (payload) => {
+    if (!payload) return;
+    snapshot = { ...(snapshot || {}), ...payload };
+    render();
+  });
+  render();
+  refreshDrop();
+})();
+
 refresh();
 setInterval(refresh, 2000);
