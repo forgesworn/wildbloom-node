@@ -289,6 +289,7 @@ fn engine_for(
         computer_name: "Test computer".into(),
         watch_interval: Duration::from_millis(500),
         online_blob_limit: super::engine::ONLINE_BLOB_LIMIT,
+        pull_interval: Duration::from_secs(1),
     };
     let store = store.clone();
     let engine = Engine::new(

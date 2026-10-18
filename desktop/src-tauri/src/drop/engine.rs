@@ -100,6 +100,9 @@ pub struct EngineConfig {
     /// would be larger are refused before encryption rather than failing
     /// online with 413.
     pub online_blob_limit: u64,
+    /// How often the online node's key list copies are checked for changes
+    /// made on the owner's other computers.
+    pub pull_interval: Duration,
 }
 
 /// A [`SecretStore`] behind an `Arc<dyn …>`, so the OS keychain and the test
@@ -158,6 +161,11 @@ pub struct Engine {
     /// for reading by every add, so no file is keyed under a secret that is
     /// about to change.
     pub(crate) setup_lock: tokio::sync::RwLock<()>,
+    /// Online key list copies (by SHA-256) already merged, or found unusable,
+    /// in this process.  Cleared when the key list is reset.
+    pub(crate) pulled: Mutex<std::collections::HashSet<String>>,
+    /// Runs a key list pull now.
+    pub(crate) pull_wake: Notify,
 }
 
 impl std::fmt::Debug for Engine {
@@ -264,6 +272,8 @@ impl Engine {
             deletes_wake: Notify::new(),
             removed_ids: Mutex::new(std::collections::HashSet::new()),
             setup_lock: tokio::sync::RwLock::new(()),
+            pulled: Mutex::new(std::collections::HashSet::new()),
+            pull_wake: Notify::new(),
         });
         let _ = engine.keychain();
         Ok(engine)
@@ -414,12 +424,14 @@ impl Engine {
         node.endpoint
     }
 
-    /// The local node is listening: run pending uploads and the key list now.
+    /// The local node is listening: run pending uploads and the key list now,
+    /// and pick up other computers' changes that waited for it.
     pub fn local_node_ready(&self) {
         self.wake.notify_one();
         if self.index.get_bool(kv::KEY_LIST_PENDING).unwrap_or(false) {
             self.keysync_wake.notify_one();
         }
+        self.pull_wake.notify_one();
     }
 
     pub(crate) fn approval_active(&self) -> bool {

@@ -69,18 +69,29 @@ impl Engine {
         }
     }
 
+    /// Publishes this computer's changes when woken, and pulls the other
+    /// computers' changes on a timer and when woken.  A pull never seals or
+    /// uploads unless this computer holds something the online copies lack.
     async fn keysync_loop(self: Arc<Self>) {
+        let mut pull_timer =
+            tokio::time::interval(self.cfg.pull_interval.max(Duration::from_millis(100)));
+        pull_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
-            self.keysync_wake.notified().await;
-            // Let a burst of drops settle into one seal.
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            if self.index.get_bool(kv::FIRST_RUN_DONE).unwrap_or(false)
-                || self.index.get_bool(kv::RESTORE_PENDING).unwrap_or(false)
-            {
-                self.sync_key_list_reporting().await;
-            } else if self.identity().is_ok() {
-                // Not yet set up: seal what there is, locally at least.
-                self.sync_key_list_reporting().await;
+            tokio::select! {
+                _ = self.keysync_wake.notified() => {
+                    // Let a burst of drops settle into one seal.
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    if self.index.get_bool(kv::FIRST_RUN_DONE).unwrap_or(false)
+                        || self.index.get_bool(kv::RESTORE_PENDING).unwrap_or(false)
+                    {
+                        self.sync_key_list_reporting().await;
+                    } else if self.identity().is_ok() {
+                        // Not yet set up: seal what there is, locally at least.
+                        self.sync_key_list_reporting().await;
+                    }
+                }
+                _ = self.pull_wake.notified() => self.pull_key_list_reporting().await,
+                _ = pull_timer.tick() => self.pull_key_list_reporting().await,
             }
         }
     }
@@ -114,6 +125,7 @@ impl Engine {
             if self.index.get_bool(kv::KEY_LIST_PENDING).unwrap_or(false) {
                 self.keysync_wake.notify_one();
             }
+            self.pull_wake.notify_one();
             // "then on network change": a node that comes back is retried now.
             if let Ok(files) = self.index.files() {
                 for file in files {
