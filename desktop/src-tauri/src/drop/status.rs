@@ -85,6 +85,14 @@ pub fn resolve(status: &DropStatus, rows: &[FileRow], now: u64) -> StatusLine {
     if status.keychain == "unavailable" {
         return attention("Wildbloom can't reach your keychain.");
     }
+    if status.watch_folder.state == "unavailable" {
+        return attention("Your Wildbloom folder can't be found. Changes there are paused.");
+    }
+    if status.watch_folder.state == "too_many" {
+        return attention(
+            "Your Wildbloom folder has more than 20,000 items. Changes there are paused.",
+        );
+    }
     if status.approval.state == "expired" {
         return attention("Approval for this computer has ended. New files stay on this computer.");
     }
@@ -106,6 +114,13 @@ pub fn resolve(status: &DropStatus, rows: &[FileRow], now: u64) -> StatusLine {
         return attention(
             "Wildbloom couldn't update the list it needs to restore your files. Your files are safe on this computer.",
         );
+    }
+    let not_kept = rows.iter().filter(|r| r.state == "not_kept").count();
+    if not_kept > 0 {
+        return attention(&format!(
+            "{} in your Wildbloom folder can't be kept.",
+            plural(not_kept, "file", "files")
+        ));
     }
     if copying > 0 {
         return StatusLine {
@@ -134,7 +149,7 @@ pub fn resolve(status: &DropStatus, rows: &[FileRow], now: u64) -> StatusLine {
     if !status.recovery.confirmed {
         return attention("Your recovery key isn't saved yet.");
     }
-    let count = rows.len();
+    let count = rows.len() - not_kept;
     if count >= 1 {
         return StatusLine {
             text: if count == 1 {
@@ -249,6 +264,64 @@ mod tests {
         );
         s.node = "stopped";
         assert_eq!(resolve(&s, &[], now).text, "Wildbloom Node has stopped.");
+    }
+
+    #[test]
+    fn folder_lines_sit_where_the_ui_puts_them() {
+        let now = 1_900_000_000;
+        let mut s = status();
+        let rows = [row("two_copies"), row("not_kept"), row("not_kept")];
+        assert_eq!(
+            resolve(&s, &rows, now).text,
+            "2 files in your Wildbloom folder can't be kept."
+        );
+        assert_eq!(
+            resolve(&s, &[row("not_kept")], now).text,
+            "1 file in your Wildbloom folder can't be kept."
+        );
+        // After the key list line, before copying.
+        assert_eq!(
+            resolve(&s, &[row("not_kept"), row("copying")], now).text,
+            "1 file in your Wildbloom folder can't be kept."
+        );
+        assert_eq!(
+            resolve(&s, &[row("not_kept"), row("failed")], now).text,
+            "1 file has only 1 copy."
+        );
+        s.recovery.key_list = "failed";
+        assert!(
+            resolve(&s, &[row("not_kept")], now)
+                .text
+                .starts_with("Wildbloom couldn't update the list")
+        );
+        s.recovery.key_list = "ok";
+        // Not-kept rows are not counted as having 2 copies.
+        let mut kept = row("two_copies");
+        kept.id = "b".into();
+        s.watch_folder.enabled = true;
+        s.watch_folder.state = "on";
+        assert_eq!(
+            resolve(&s, &[row("two_copies"), kept, row("not_kept")], now).text,
+            "1 file in your Wildbloom folder can't be kept."
+        );
+        // Straight after the keychain line, unavailable then too many.
+        s.watch_folder.state = "too_many";
+        s.approval.state = "expired";
+        assert!(
+            resolve(&s, &[], now)
+                .text
+                .starts_with("Your Wildbloom folder has more than 20,000 items")
+        );
+        s.watch_folder.state = "unavailable";
+        assert_eq!(
+            resolve(&s, &[], now).text,
+            "Your Wildbloom folder can't be found. Changes there are paused."
+        );
+        s.keychain = "unavailable";
+        assert_eq!(
+            resolve(&s, &[], now).text,
+            "Wildbloom can't reach your keychain."
+        );
     }
 
     #[test]

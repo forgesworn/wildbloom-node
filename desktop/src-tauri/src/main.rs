@@ -1362,6 +1362,8 @@ fn main() {
             drop::commands::restore,
             drop::commands::set_watch_folder,
             drop::commands::open_watch_folder,
+            drop::commands::open_file,
+            drop::commands::reveal_file,
             drop::commands::share_start,
             drop::commands::share_again,
             drop::commands::share_verify,

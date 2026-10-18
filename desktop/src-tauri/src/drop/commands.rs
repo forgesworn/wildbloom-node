@@ -438,6 +438,16 @@ pub async fn set_watch_folder(slot: State<'_, DropSlot>, enabled: bool) -> Comma
 }
 
 #[tauri::command]
+pub async fn open_file(slot: State<'_, DropSlot>, id: String) -> CommandResult<()> {
+    engine(&slot)?.open_file(&id)
+}
+
+#[tauri::command]
+pub async fn reveal_file(slot: State<'_, DropSlot>, id: String) -> CommandResult<()> {
+    engine(&slot)?.reveal_file(&id)
+}
+
+#[tauri::command]
 pub async fn open_watch_folder(slot: State<'_, DropSlot>) -> CommandResult<()> {
     engine(&slot)?.open_watch_folder()
 }
