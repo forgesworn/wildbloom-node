@@ -26,8 +26,11 @@ use tokio::sync::Notify;
 use zeroize::Zeroizing;
 
 /// The default per-blob limit of a Wildbloom Node; its health endpoint does
-/// not publish the configured one.
+/// not publish the configured one.  Envelopes up to this size are still
+/// opened, whatever [`EngineConfig::online_blob_limit`] says.
 pub const DEFAULT_NODE_BLOB_LIMIT: u64 = 1024 * 1024 * 1024;
+/// The online node's per-blob limit the app assumes: the shelter limit.
+pub const ONLINE_BLOB_LIMIT: u64 = 256 * 1024 * 1024;
 /// How long an approval lasts.
 pub const APPROVAL_SECONDS: u64 = 365 * 86_400;
 /// The grant ceiling when the node's quota is unknown.
@@ -93,6 +96,13 @@ pub struct EngineConfig {
     pub computer_name: String,
     /// How often the watched folder is scanned.
     pub watch_interval: Duration,
+    /// The largest envelope the online node takes.  Drops whose envelope
+    /// would be larger are refused before encryption rather than failing
+    /// online with 413.
+    pub online_blob_limit: u64,
+    /// How often the online node's key list copies are checked for changes
+    /// made on the owner's other computers.
+    pub pull_interval: Duration,
 }
 
 /// A [`SecretStore`] behind an `Arc<dyn …>`, so the OS keychain and the test
@@ -151,6 +161,11 @@ pub struct Engine {
     /// for reading by every add, so no file is keyed under a secret that is
     /// about to change.
     pub(crate) setup_lock: tokio::sync::RwLock<()>,
+    /// Online key list copies (by SHA-256) already merged, or found unusable,
+    /// in this process.  Cleared when the key list is reset.
+    pub(crate) pulled: Mutex<std::collections::HashSet<String>>,
+    /// Runs a key list pull now.
+    pub(crate) pull_wake: Notify,
 }
 
 impl std::fmt::Debug for Engine {
@@ -257,6 +272,8 @@ impl Engine {
             deletes_wake: Notify::new(),
             removed_ids: Mutex::new(std::collections::HashSet::new()),
             setup_lock: tokio::sync::RwLock::new(()),
+            pulled: Mutex::new(std::collections::HashSet::new()),
+            pull_wake: Notify::new(),
         });
         let _ = engine.keychain();
         Ok(engine)
@@ -407,12 +424,14 @@ impl Engine {
         node.endpoint
     }
 
-    /// The local node is listening: run pending uploads and the key list now.
+    /// The local node is listening: run pending uploads and the key list now,
+    /// and pick up other computers' changes that waited for it.
     pub fn local_node_ready(&self) {
         self.wake.notify_one();
         if self.index.get_bool(kv::KEY_LIST_PENDING).unwrap_or(false) {
             self.keysync_wake.notify_one();
         }
+        self.pull_wake.notify_one();
     }
 
     pub(crate) fn approval_active(&self) -> bool {
@@ -436,7 +455,7 @@ impl Engine {
     }
 
     pub(crate) fn drop_max_bytes(&self) -> u64 {
-        envelope::drop_limits(DEFAULT_NODE_BLOB_LIMIT).max_source_bytes()
+        envelope::drop_limits(self.cfg.online_blob_limit).max_source_bytes()
     }
 
     // -------------------------------------------------------------- status
@@ -1032,6 +1051,14 @@ impl Engine {
                 watch_path: watched.map(|_| path.to_string_lossy().into_owned()),
                 watch_size: watched.map(|(size, _)| size),
                 watch_mtime: watched.map(|(_, mtime)| mtime),
+                // A version 1 entry: its path is its name.  Folder paths,
+                // `plain` and `from` are only written while the Wildbloom
+                // folder mirror is on.
+                path: name.clone(),
+                prev: None,
+                origin: String::new(),
+                entry_plain: String::new(),
+                note: None,
             };
             self.index.insert_file(&record).or_internal()?;
             self.set_progress(&id, 0);
@@ -1142,6 +1169,15 @@ impl Engine {
                     media_type: encrypted.sealed.metadata.media_type.clone(),
                     bytes: encrypted.sealed.metadata.size,
                     added: record.added,
+                    // The frozen row fields, exactly as reconcile rebuilds them.
+                    path: if record.path == record.name {
+                        encrypted.sealed.metadata.name.clone()
+                    } else {
+                        record.path.clone()
+                    },
+                    prev: record.prev.as_deref().and_then(FileId::parse),
+                    plain: super::parse_sha256(&record.entry_plain),
+                    from: record.origin.clone(),
                 });
             }
         }
@@ -1381,10 +1417,32 @@ impl Engine {
         .map_err(|_| CommandError::code("unreadable"))
     }
 
-    /// Deletes both copies, any shared copy and the key.  The original file is
-    /// never touched.  Deletions a node cannot take now are queued against
-    /// the node that holds the copy.
+    /// Remove in the window: deletes both copies, any shared copy and the
+    /// key, and tells the other computers through the key list.  The original
+    /// file is never touched.
     pub async fn remove(self: &Arc<Self>, id: &str) -> CommandResult<()> {
+        self.remove_row(id, RemoveHow::Window).await?;
+        self.run_pending_deletes().await;
+        Ok(())
+    }
+
+    /// Removes one row: its own copies (deletions a node cannot take now are
+    /// queued against the node that holds the copy), any shared copy, the key
+    /// and the row, with a tombstone written before the key goes.  Nothing on
+    /// disk outside app data is touched.
+    ///
+    /// Online deletions go only to nodes where this computer's device key
+    /// claims the copy (`online_copies`).  BUD-12 deletion is self-only: a
+    /// node answers 403 to a delete of another computer's copy, which would
+    /// be retried for ever while the approval is active.  The computer that
+    /// put it there deletes its own claim when the tombstone reaches it.
+    ///
+    /// The caller runs the queued deletions.
+    pub(crate) async fn remove_row(
+        self: &Arc<Self>,
+        id: &str,
+        how: RemoveHow,
+    ) -> CommandResult<()> {
         let file = self
             .index
             .file(id)
@@ -1396,21 +1454,19 @@ impl Engine {
             removed.insert(id.to_owned());
         }
         self.cancel_share_session(id).await;
-        let at = now();
+        // A remote removal keeps the tombstone's own time, so the key list's
+        // content does not change here.
+        let at = match how {
+            RemoveHow::Remote { at } => at,
+            RemoveHow::Window | RemoveHow::Superseded => now(),
+        };
         if let Some(sha) = &file.sha256 {
             self.index
                 .queue_delete("local", sha, "device", 0)
                 .or_internal()?;
             // Every node this computer put a copy on, including one used
             // before the online node was changed.
-            let mut origins = self.index.online_copies(id).or_internal()?;
-            if file.online == online::OK
-                && let Some(online) = self.online_endpoint()
-                && !origins.iter().any(|o| o == online.origin())
-            {
-                origins.push(online.origin().to_owned());
-            }
-            for origin in origins {
+            for origin in self.index.online_copies(id).or_internal()? {
                 self.index
                     .queue_delete(&origin, sha, "device", 0)
                     .or_internal()?;
@@ -1446,8 +1502,11 @@ impl Engine {
         self.clear_progress(id);
         self.host.emit_removed(id);
         self.emit_status();
-        self.keysync_wake.notify_one();
-        self.run_pending_deletes().await;
+        // A remote removal came from the key list; publishing it again would
+        // only re-seal the same content.
+        if !matches!(how, RemoveHow::Remote { .. }) {
+            self.keysync_wake.notify_one();
+        }
         Ok(())
     }
 
@@ -1562,6 +1621,18 @@ pub fn local_node_trust_args(
             ]
         })
         .collect()
+}
+
+/// Why a row is removed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RemoveHow {
+    /// The owner chose Remove in the window.
+    Window,
+    /// A newer version or an identical entry replaces it.  Its tombstone is
+    /// new, so it is published.
+    Superseded,
+    /// Another computer removed it; `at` is the tombstone's own time.
+    Remote { at: u64 },
 }
 
 pub(crate) fn device_error(error: &DeviceError) -> CommandError {

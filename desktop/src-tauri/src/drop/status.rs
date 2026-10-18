@@ -40,6 +40,12 @@ pub fn full_date(unix: u64) -> String {
         "November",
         "December",
     ];
+    let (year, month, day) = ymd(unix);
+    format!("{day} {} {year}", MONTHS[(month - 1) as usize])
+}
+
+/// The UTC calendar date of a Unix time: (year, month 1-12, day 1-31).
+pub fn ymd(unix: u64) -> (i64, u32, u32) {
     // Civil-from-days (Howard Hinnant), UTC.
     let days = (unix / DAY) as i64;
     let z = days + 719_468;
@@ -51,7 +57,7 @@ pub fn full_date(unix: u64) -> String {
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + i64::from(month <= 2);
-    format!("{day} {} {year}", MONTHS[(month - 1) as usize])
+    (year, month as u32, day as u32)
 }
 
 pub fn resolve(status: &DropStatus, rows: &[FileRow], now: u64) -> StatusLine {

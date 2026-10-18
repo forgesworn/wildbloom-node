@@ -7,10 +7,10 @@
 //! sealed (ciphertext) copy is also kept locally, so a restart does not need
 //! the network to know the current list.
 
-use super::client::{self, NodeEndpoint};
+use super::client::{self, NodeEndpoint, NodeError};
 use super::device::{self, KeyList, KeyListEntry, KeyListError, RecoverySecret};
 use super::engine::{
-    Engine, OrInternal as _, device_error, host_of, internal, kv, write_private_file,
+    Engine, OrInternal as _, RemoveHow, device_error, host_of, internal, kv, write_private_file,
 };
 use super::index::{FileRecord, local, online};
 use super::types::{CommandError, CommandResult, RestoreResult};
@@ -21,6 +21,8 @@ use std::sync::Arc;
 
 /// A sealed key list is far below this; it bounds what a node can make us read.
 const MAX_KEY_LIST_ENVELOPE: usize = 80 * 1024 * 1024;
+/// Key list copies opened per pull, so a node offering many cannot stall one.
+const PULL_BATCH: usize = 16;
 
 impl Engine {
     fn sealed_key_list_path(&self) -> PathBuf {
@@ -59,6 +61,9 @@ impl Engine {
     /// Adds every kept file the index has an envelope and a keychain key for,
     /// and applies every recorded removal.  The index and the keychain are the
     /// durable record; the in-memory list is never the only copy of an entry.
+    /// Entry fields come from the row's frozen columns, never recomputed, so a
+    /// rebuilt entry is identical to the one first sealed (a differing copy at
+    /// one `seq` would make every merge fail).
     pub(crate) fn reconcile_key_list(&self, list: &mut KeyList) -> CommandResult<()> {
         for (id, at) in self.index.tombstones().or_internal()? {
             if let Some(file_id) = FileId::parse(&id) {
@@ -67,7 +72,10 @@ impl Engine {
         }
         let keychain = self.keychain()?;
         for file in self.index.files().or_internal()? {
-            if matches!(file.local.as_str(), local::UNREADABLE | local::ENCRYPTING) {
+            if matches!(
+                file.local.as_str(),
+                local::UNREADABLE | local::ENCRYPTING | local::NOT_KEPT
+            ) {
                 continue;
             }
             let (Some(sha), Some(size), Some(file_id)) = (
@@ -97,6 +105,10 @@ impl Engine {
                 media_type,
                 bytes: file.bytes,
                 added: file.added,
+                path: entry_path(&file),
+                prev: file.prev.as_deref().and_then(FileId::parse),
+                plain: super::parse_sha256(&file.entry_plain),
+                from: file.origin.clone(),
             });
         }
         Ok(())
@@ -217,6 +229,7 @@ impl Engine {
             Some(sealed) => sealed,
             None => self.seal_locally(&mut list, &recovery)?,
         };
+        let applied = list.clone();
         *slot = Some(list);
         drop(slot);
         let sha = hex_lower(&Sha256::digest(&sealed));
@@ -283,7 +296,245 @@ impl Engine {
             }
         }
         self.run_pending_deletes().await;
+        // Other computers' additions and removals merged in above reach the
+        // rows here too.
+        self.apply_key_list(&applied).await;
         Ok(())
+    }
+
+    // -------------------------------------------------------------- pull
+
+    /// Runs one pull and updates the status.
+    pub(crate) async fn pull_key_list_reporting(self: &Arc<Self>) {
+        let _ = self.pull_key_list().await;
+        self.emit_status();
+    }
+
+    /// Reads the online node's key list copies that this computer has not
+    /// merged yet, merges them into the current list and applies the result
+    /// to the rows.  It needs no active approval (listing and reading are not
+    /// writes), and it seals and uploads nothing itself:
+    ///
+    /// - when the merge adds nothing, nothing changes;
+    /// - when the merge equals the newest copy read, that copy is adopted as
+    ///   this computer's sealed list and `seq`;
+    /// - otherwise this computer holds something the newest copy lacks, and
+    ///   the key list sync is woken once to publish the merge.
+    ///
+    /// Contents are compared without `seq`, so two computers never re-seal
+    /// each other's lists in turn.  Merging always includes the current list,
+    /// so an old or withheld copy can neither bring a removed file back nor
+    /// lower `seq`.
+    pub(crate) async fn pull_key_list(self: &Arc<Self>) -> CommandResult<()> {
+        if !self.index.get_bool(kv::FIRST_RUN_DONE).or_internal()?
+            || self.index.get_bool(kv::RESTORE_PENDING).or_internal()?
+        {
+            return Ok(());
+        }
+        let Ok(identity) = self.identity() else {
+            return Ok(());
+        };
+        let Some(node) = self.online_endpoint() else {
+            return Ok(());
+        };
+        let recovery = identity.recovery.clone();
+        let recovery_keys = recovery.identity().keys().clone();
+        let _turn = self.keysync.lock().await;
+        // Reachability is reported by the health checks.
+        let Ok(listed) = client::list(&self.http, &node, &recovery_keys).await else {
+            return Ok(());
+        };
+        let own = self
+            .index
+            .get(kv::KEY_LIST_ONLINE_SHA)
+            .or_internal()?
+            .and_then(|value| {
+                let (origin, sha) = value.split_once('|')?;
+                (origin == node.origin()).then(|| sha.to_owned())
+            });
+        let candidates: Vec<String> = {
+            let pulled = self.pulled.lock().map_err(|_| internal("lock"))?;
+            listed
+                .into_iter()
+                .map(|l| l.sha256)
+                .filter(|sha| Some(sha) != own.as_ref() && !pulled.contains(sha))
+                .take(PULL_BATCH)
+                .collect()
+        };
+        let mut opened: Vec<(String, KeyList, Vec<u8>)> = Vec::new();
+        for sha in candidates {
+            match client::download_bytes(&self.http, &node, &sha, MAX_KEY_LIST_ENVELOPE).await {
+                Ok(sealed) => match KeyList::open(&recovery, &sealed) {
+                    Ok(list) => opened.push((sha, list, sealed)),
+                    // Not ours, damaged or not a key list: never retried.
+                    Err(_) => self.mark_pulled(&sha),
+                },
+                // Retried on the next pull.
+                Err(error) if error.transient() || error == NodeError::Tls => {}
+                Err(_) => self.mark_pulled(&sha),
+            }
+        }
+        let mut slot = self.keylist.lock().await;
+        if self.load_key_list(&mut slot).is_err() {
+            // The next sync rebuilds the list from the index and the nodes.
+            self.index
+                .set_bool(kv::KEY_LIST_FAILED, true)
+                .or_internal()?;
+            self.keysync_wake.notify_one();
+            return Ok(());
+        }
+        let current = slot.clone().expect("loaded above");
+        let mut snapshot = current.clone();
+        if let Some(newest) = opened.iter().max_by_key(|(_, list, _)| list.seq()) {
+            let mut lists = vec![current.clone()];
+            lists.extend(opened.iter().map(|(_, list, _)| list.clone()));
+            let Ok(merged) = KeyList::merge(lists) else {
+                // Copies from the owner's computers cannot really conflict
+                // (ids are random and entries never change).  The copies are
+                // not marked, so "Try again" re-reads them.
+                self.index
+                    .set_bool(kv::KEY_LIST_FAILED, true)
+                    .or_internal()?;
+                return Ok(());
+            };
+            if !merged.same_content(&current) {
+                let (_, newest_list, newest_sealed) = newest;
+                let last_seen = self
+                    .index
+                    .get_u64(kv::LAST_SEEN_SEQ)
+                    .or_internal()?
+                    .unwrap_or(0);
+                let adopt = merged.same_content(newest_list);
+                if adopt && newest_list.seq() > last_seen {
+                    // Adopt: the newest copy already says everything.
+                    if write_private_file(&self.sealed_key_list_path(), newest_sealed).is_ok() {
+                        self.index
+                            .set_u64(kv::LAST_SEEN_SEQ, newest_list.seq())
+                            .or_internal()?;
+                    } else {
+                        self.index
+                            .set_bool(kv::KEY_LIST_PENDING, true)
+                            .or_internal()?;
+                        self.keysync_wake.notify_one();
+                    }
+                } else if !adopt {
+                    // Publish once: this computer adds something.
+                    self.index
+                        .set_bool(kv::KEY_LIST_PENDING, true)
+                        .or_internal()?;
+                    self.keysync_wake.notify_one();
+                }
+                *slot = Some(merged.clone());
+                snapshot = merged;
+            }
+            for (sha, _, _) in &opened {
+                self.mark_pulled(sha);
+            }
+        }
+        drop(slot);
+        // Always, so additions deferred by an earlier pull are retried.
+        self.apply_key_list(&snapshot).await;
+        Ok(())
+    }
+
+    fn mark_pulled(&self, sha: &str) {
+        if let Ok(mut pulled) = self.pulled.lock() {
+            pulled.insert(sha.to_owned());
+        }
+    }
+
+    /// Brings the rows in line with `list`.  Runs under the key list sync
+    /// lock, once set-up is done and no restore is waiting.
+    ///
+    /// - A tombstone whose row exists removes the row: this computer's own
+    ///   copies and claims, the key and the row.
+    /// - An entry with no row, no tombstone here and an online copy that is
+    ///   really there gets a row and is copied to the local node.  The
+    ///   online copy is never claimed or uploaded by this computer: no
+    ///   `queued` state, so the other computer's approval is not charged
+    ///   twice.  An entry whose online copy is not there yet waits for the
+    ///   next pull.
+    pub(crate) async fn apply_key_list(self: &Arc<Self>, list: &KeyList) {
+        if !self.index.get_bool(kv::FIRST_RUN_DONE).unwrap_or(false)
+            || self.index.get_bool(kv::RESTORE_PENDING).unwrap_or(true)
+        {
+            return;
+        }
+        let mut removed = false;
+        for stone in list.tombstones() {
+            let id = stone.id.to_string();
+            if matches!(self.index.file(&id), Ok(Some(_)))
+                && self
+                    .remove_row(&id, RemoveHow::Remote { at: stone.at })
+                    .await
+                    .is_ok()
+            {
+                removed = true;
+            }
+        }
+        if removed {
+            self.run_pending_deletes().await;
+        }
+        let (Some(node), Some(_)) = (self.online_endpoint(), self.local_endpoint()) else {
+            return;
+        };
+        let Ok(keychain) = self.keychain() else {
+            return;
+        };
+        let mut adopted = Vec::new();
+        for entry in list.entries() {
+            let id = entry.id.to_string();
+            let removed_here = self
+                .removed_ids
+                .lock()
+                .map(|r| r.contains(&id))
+                .unwrap_or(true);
+            if removed_here
+                || !matches!(self.index.file(&id), Ok(None))
+                || self.index.has_tombstone(&id).unwrap_or(true)
+            {
+                continue;
+            }
+            let sha = hex_lower(&entry.sha256);
+            if !matches!(
+                client::head(&self.http, &node, &sha).await,
+                Ok(Some(size)) if size == entry.size
+            ) {
+                continue;
+            }
+            if keychain.set_file_key(&entry.id, &entry.key).is_err() {
+                continue;
+            }
+            if self.index.insert_file(&row_for_entry(entry)).is_ok() {
+                self.set_progress(&id, 0);
+                adopted.push((id, sha));
+            }
+        }
+        if adopted.is_empty() {
+            return;
+        }
+        self.emit_status();
+        let engine = self.clone();
+        self.rt.spawn(async move {
+            for (id, sha) in adopted {
+                let ok = engine.copy_online_to_local(&id).await;
+                if matches!(engine.index.file(&id), Ok(Some(_))) {
+                    // Never `queued`: the online copy is the other computer's.
+                    let _ = engine
+                        .index
+                        .set_local(&id, if ok { local::OK } else { local::MISSING });
+                } else if ok {
+                    // Removed while it was being copied: the copy that just
+                    // landed goes too.
+                    let _ = engine.index.queue_delete("local", &sha, "device", 0);
+                    engine.deletes_wake.notify_one();
+                }
+                engine.clear_progress(&id);
+                engine.emit_row(&id);
+            }
+            engine.emit_status();
+            engine.watch_wake.notify_one();
+        });
     }
 
     // ----------------------------------------------------------- restore
@@ -358,6 +609,9 @@ impl Engine {
         drop(lock);
         self.identity_after_restore(identity);
         *self.keylist.lock().await = None;
+        if let Ok(mut pulled) = self.pulled.lock() {
+            pulled.clear();
+        }
         let node = NodeEndpoint::parse(&url, self.cfg.allow_loopback_http)
             .map_err(|_| CommandError::with_host("not_a_node", host_of(&url)))?;
         if self.index.get(kv::ONLINE_URL).or_internal()?.as_deref() != Some(node.origin()) {
@@ -428,24 +682,7 @@ impl Engine {
             if keychain.set_file_key(&entry.id, &entry.key).is_err() {
                 continue;
             }
-            let record = FileRecord {
-                id: id.clone(),
-                name: entry.name.clone(),
-                media_type: entry.media_type.clone(),
-                bytes: entry.bytes,
-                added: entry.added,
-                // Restored rows are not matched as duplicates of new drops.
-                plain_sha256: format!("restored:{id}"),
-                sha256: Some(hex_lower(&entry.sha256)),
-                size: Some(entry.size),
-                local: local::RESTORING.into(),
-                online: online::OK.into(),
-                attempts: 0,
-                next_attempt: 0,
-                watch_path: None,
-                watch_size: None,
-                watch_mtime: None,
-            };
+            let record = row_for_entry(entry);
             if self.index.insert_file(&record).is_ok() {
                 self.set_progress(&id, 0);
                 restored.push(id);
@@ -480,6 +717,52 @@ impl Engine {
             engine.keysync_wake.notify_one();
         });
         Ok(())
+    }
+}
+
+/// The path a row's entry carries: its frozen `path`, or its name for a row
+/// from before the column existed.
+fn entry_path(file: &FileRecord) -> String {
+    if file.path.is_empty() {
+        file.name.clone()
+    } else {
+        file.path.clone()
+    }
+}
+
+/// A row for an entry this computer did not add (restore or another
+/// computer's addition): being copied back here, with the online copy
+/// already there, and the entry's own fields frozen.
+fn row_for_entry(entry: &KeyListEntry) -> FileRecord {
+    let id = entry.id.to_string();
+    FileRecord {
+        id: id.clone(),
+        name: entry.name.clone(),
+        media_type: entry.media_type.clone(),
+        bytes: entry.bytes,
+        added: entry.added,
+        // Without a known plaintext hash, never matched as a duplicate.
+        plain_sha256: entry
+            .plain
+            .map(|plain| hex_lower(&plain))
+            .unwrap_or_else(|| format!("restored:{id}")),
+        sha256: Some(hex_lower(&entry.sha256)),
+        size: Some(entry.size),
+        local: local::RESTORING.into(),
+        online: online::OK.into(),
+        attempts: 0,
+        next_attempt: 0,
+        watch_path: None,
+        watch_size: None,
+        watch_mtime: None,
+        path: entry.path.clone(),
+        prev: entry.prev.map(|prev| prev.to_string()),
+        origin: entry.from.clone(),
+        entry_plain: entry
+            .plain
+            .map(|plain| hex_lower(&plain))
+            .unwrap_or_default(),
+        note: None,
     }
 }
 

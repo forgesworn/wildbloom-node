@@ -17,6 +17,9 @@
 //!   secret.
 //! - [`descriptor`]: the `wildbloom-share/1` share descriptor builder and strict
 //!   validator.
+//! - [`path`] and [`layout`]: the key list's relative-path grammar, clash
+//!   folding and conflict names, and the pure function that lays every live
+//!   entry out in the Wildbloom folder.
 //! - [`engine`]: everything behind the IPC commands, independent of Tauri;
 //!   [`index`] (the private SQLite file index), [`client`] (node HTTP),
 //!   [`mirror`] (online copies and checks), [`approve`] (NIP-46 approval),
@@ -42,7 +45,9 @@ pub mod envelope;
 pub mod index;
 pub mod keychain;
 pub mod keysync;
+pub mod layout;
 pub mod mirror;
+pub mod path;
 pub mod relay;
 pub mod share;
 pub mod status;

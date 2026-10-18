@@ -7,6 +7,7 @@
 //!
 //! ```text
 //! WILDBLOOM_E2E_BIN_DIR=/path/to/bin cargo test drop_end_to_end -- --ignored --nocapture
+//! WILDBLOOM_E2E_BIN_DIR=/path/to/bin cargo test drop_two_computers_in_step -- --ignored --nocapture
 //! ```
 //!
 //! `bin` holds `wildbloomd-local` (this repository's daemon),
@@ -15,7 +16,10 @@
 
 use super::client::{self, NodeEndpoint};
 use super::descriptor::ShareDescriptor;
-use super::engine::{Engine, EngineConfig, Host, LocalNode, PAIRING_NAMESPACE, PAIRING_PURPOSE};
+use super::engine::{
+    Engine, EngineConfig, Host, LocalNode, ONLINE_BLOB_LIMIT, PAIRING_NAMESPACE, PAIRING_PURPOSE,
+    kv,
+};
 use super::keychain::{MemoryStore, SecretStore};
 use super::status::StatusLine;
 use super::types::*;
@@ -36,7 +40,7 @@ use std::net::TcpListener as StdListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 fn free_port() -> u16 {
@@ -188,7 +192,8 @@ struct TestHost {
     bin: PathBuf,
     work: PathBuf,
     name: &'static str,
-    engine: OnceLock<Weak<Engine>>,
+    /// The engine running now; replaced when a computer restarts.
+    engine: Mutex<Weak<Engine>>,
     local: Mutex<Option<(Proc, u16)>>,
     shares: Mutex<Vec<ShareState>>,
     settings: Mutex<bool>,
@@ -198,8 +203,9 @@ impl TestHost {
     fn restart_local(&self) {
         let keys = self
             .engine
-            .get()
-            .and_then(Weak::upgrade)
+            .lock()
+            .unwrap()
+            .upgrade()
             .map(|e| e.local_trusted_keys())
             .unwrap_or_default();
         let mut slot = self.local.lock().unwrap();
@@ -270,11 +276,14 @@ impl Host for TestHost {
     fn open_folder(&self, _: &Path) {}
 }
 
+/// The engine for one computer, running its workers on `rt`.
 fn engine_for(
     host: &Arc<TestHost>,
     store: &Arc<MemoryStore>,
     relay_api: &str,
     watch_dir: &Path,
+    rt: tokio::runtime::Handle,
+    online_blob_limit: u64,
 ) -> Arc<Engine> {
     let base = host.work.join(host.name);
     let config = EngineConfig {
@@ -288,16 +297,18 @@ fn engine_for(
         signer_timeout: Duration::from_secs(30),
         computer_name: "Test computer".into(),
         watch_interval: Duration::from_millis(500),
+        online_blob_limit,
+        pull_interval: Duration::from_secs(1),
     };
     let store = store.clone();
     let engine = Engine::new(
         config,
         host.clone(),
         Box::new(move || Ok(store.clone() as Arc<dyn SecretStore>)),
-        tokio::runtime::Handle::current(),
+        rt,
     )
     .unwrap();
-    let _ = host.engine.set(Arc::downgrade(&engine));
+    *host.engine.lock().unwrap() = Arc::downgrade(&engine);
     engine.start();
     engine
 }
@@ -522,24 +533,36 @@ async fn services() -> Option<Services> {
     })
 }
 
+fn test_host(bin: &Path, work: &Path, name: &'static str) -> Arc<TestHost> {
+    Arc::new(TestHost {
+        bin: bin.to_path_buf(),
+        work: work.to_path_buf(),
+        name,
+        engine: Mutex::new(Weak::new()),
+        local: Mutex::new(None),
+        shares: Mutex::new(Vec::new()),
+        settings: Mutex::new(false),
+    })
+}
+
 /// A first-run engine, approved through the synthetic signer, with its
 /// recovery key confirmed.  Returns the engine, host, store and recovery key.
 async fn approved_engine(
     svc: &Services,
     name: &'static str,
     watch_dir: &Path,
+    online_blob_limit: u64,
 ) -> (Arc<Engine>, Arc<TestHost>, Arc<MemoryStore>, String) {
     let store = Arc::new(MemoryStore::default());
-    let host = Arc::new(TestHost {
-        bin: svc.bin.clone(),
-        work: svc.work_path.clone(),
-        name,
-        engine: OnceLock::new(),
-        local: Mutex::new(None),
-        shares: Mutex::new(Vec::new()),
-        settings: Mutex::new(false),
-    });
-    let engine = engine_for(&host, &store, &svc.relay_api, watch_dir);
+    let host = test_host(&svc.bin, &svc.work_path, name);
+    let engine = engine_for(
+        &host,
+        &store,
+        &svc.relay_api,
+        watch_dir,
+        tokio::runtime::Handle::current(),
+        online_blob_limit,
+    );
     assert_eq!(engine.first_run().unwrap().step, "node");
     let check = engine.check_online_node(&svc.online_url).await.unwrap();
     assert!(check.ok && check.limit_bytes > 0);
@@ -587,7 +610,8 @@ async fn drop_end_to_end() {
 
     // ---------------------------------------------------- first run (D1-D3)
     let watch_dir = work_path.join("home/Wildbloom");
-    let (engine, host, store, recovery_key) = approved_engine(&svc, "first", &watch_dir).await;
+    let (engine, host, store, recovery_key) =
+        approved_engine(&svc, "first", &watch_dir, ONLINE_BLOB_LIMIT).await;
     let signer_requests_after_approval = counts.total.load(Ordering::SeqCst);
     assert_eq!(counts.sign.load(Ordering::SeqCst), 1, "one signature");
     report(&format!(
@@ -974,20 +998,14 @@ async fn drop_end_to_end() {
 
     // ---------------------------------------- restore on a fresh computer
     let store2 = Arc::new(MemoryStore::default());
-    let host2 = Arc::new(TestHost {
-        bin: bin.clone(),
-        work: work_path.clone(),
-        name: "second",
-        engine: OnceLock::new(),
-        local: Mutex::new(None),
-        shares: Mutex::new(Vec::new()),
-        settings: Mutex::new(false),
-    });
+    let host2 = test_host(&bin, &work_path, "second");
     let engine2 = engine_for(
         &host2,
         &store2,
         &relay_api,
         &work_path.join("home2/Wildbloom"),
+        tokio::runtime::Handle::current(),
+        ONLINE_BLOB_LIMIT,
     );
     assert_eq!(engine2.first_run().unwrap().step, "node");
     let restored = engine2
@@ -1063,6 +1081,354 @@ async fn drop_end_to_end() {
     report("remove after a node change deleted the copy on the old node");
 }
 
+/// A computer's own runtime, so dropping it takes that computer offline.
+/// Shut down in the background, which is allowed inside the test's runtime.
+struct Computer(Option<tokio::runtime::Runtime>);
+
+impl Computer {
+    fn start() -> Self {
+        Self(Some(
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap(),
+        ))
+    }
+
+    fn handle(&self) -> tokio::runtime::Handle {
+        self.0.as_ref().unwrap().handle().clone()
+    }
+}
+
+impl Drop for Computer {
+    fn drop(&mut self) {
+        if let Some(rt) = self.0.take() {
+            rt.shutdown_background();
+        }
+    }
+}
+
+/// Adds `path` through the window and waits for two copies.
+async fn add_and_wait(engine: &Arc<Engine>, path: PathBuf) -> String {
+    let added = engine.add_paths(vec![path], None).await.unwrap();
+    assert_eq!(added.added.len(), 1, "{added:?}");
+    let id = added.added[0].clone();
+    let check = engine.clone();
+    until("2 copies", 60, || {
+        row(&check, &id).filter(|r| r.state == "two_copies")
+    })
+    .await;
+    id
+}
+
+/// Waits until `sha256` is gone (404) from every node.
+async fn wait_gone(http: &reqwest::Client, nodes: &[NodeEndpoint], sha256: &str, what: &str) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let mut gone = true;
+        for node in nodes {
+            gone &= client::head(http, node, sha256).await.unwrap().is_none();
+        }
+        if gone {
+            return;
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+fn ids(engine: &Engine) -> Vec<String> {
+    let mut ids: Vec<String> = engine.rows().into_iter().map(|r| r.id).collect();
+    ids.sort();
+    ids
+}
+
+/// Two computers with one recovery key stay in step through the key list
+/// alone (no folder): what one adds or removes reaches the other as rows, a
+/// pulled file is never claimed online by the computer that pulled it, a
+/// removal never queues a delete a node will refuse, an old key list copy
+/// changes nothing, and a computer that was offline catches up.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs WILDBLOOM_E2E_BIN_DIR with wildbloomd-local, wildbloomd-grants and foregather-server"]
+async fn drop_two_computers_in_step() {
+    const LIMIT: u64 = 1024 * 1024;
+    let Some(svc) = services().await else {
+        return;
+    };
+    let (http, online) = (svc.http.clone(), svc.online.clone());
+    let report = |step: &str| eprintln!("e2e-two: {step}");
+    let originals = svc.work_path.join("originals");
+    std::fs::create_dir_all(&originals).unwrap();
+    let write = |name: &str, seed: u32, len: u32| {
+        let bytes: Vec<u8> = (0..len)
+            .map(|i| (i.wrapping_mul(seed).wrapping_add(seed >> 1)) as u8)
+            .collect();
+        let path = originals.join(name);
+        std::fs::write(&path, &bytes).unwrap();
+        (path, bytes)
+    };
+
+    // Computer A, and a file kept before B exists.
+    let (a, a_host, _a_store, recovery_key) =
+        approved_engine(&svc, "a", &svc.work_path.join("a-home/Wildbloom"), LIMIT).await;
+    let (too_big, _) = write("too big.bin", 5, 2 * 1024 * 1024);
+    let refused = a.add_paths(vec![too_big], None).await.unwrap();
+    assert_eq!(refused.refused.len(), 1);
+    assert_eq!(refused.refused[0].reason, "too_big");
+    assert!(refused.refused[0].limit_bytes.unwrap() < LIMIT);
+    let (kept_path, _) = write("kept.txt", 3, 200_000);
+    let kept = add_and_wait(&a, kept_path).await;
+    let kept_sha = a.index.file(&kept).unwrap().unwrap().sha256.unwrap();
+    report("A kept a file; a file over the online cap was refused before encryption");
+
+    // Computer B restores with A's recovery key, in its own runtime.
+    let b_store = Arc::new(MemoryStore::default());
+    let b_host = test_host(&svc.bin, &svc.work_path, "b");
+    let b_watch = svc.work_path.join("b-home/Wildbloom");
+    let b_rt = Computer::start();
+    let b = engine_for(
+        &b_host,
+        &b_store,
+        &svc.relay_api,
+        &b_watch,
+        b_rt.handle(),
+        LIMIT,
+    );
+    b.restore(Some(&recovery_key), None, Some(&svc.online_url))
+        .await
+        .unwrap();
+    approve(&b, &svc.bunker).await;
+    until("B restored", 90, || {
+        row(&b, &kept).filter(|r| r.state == "two_copies")
+    })
+    .await;
+    let a_local = a_host.local_node().endpoint.unwrap();
+    let b_local = b_host.local_node().endpoint.unwrap();
+    let every_node = [a_local.clone(), b_local.clone(), online.clone()];
+    report("B restored from the key list");
+
+    // a. A adds; B gets a row with both copies, without claiming A's online copy.
+    let b_used = b.status().online.used_bytes;
+    let (doc_path, doc_bytes) = write("report.pdf", 7, 300_000);
+    let doc = add_and_wait(&a, doc_path).await;
+    until("B pulls A's file", 60, || {
+        row(&b, &doc).filter(|r| r.state == "two_copies")
+    })
+    .await;
+    let out = svc.work_path.join("b copy of report.pdf");
+    b.save_copy(&doc, Some(out.clone())).await.unwrap();
+    assert_eq!(
+        std::fs::read(&out).unwrap(),
+        doc_bytes,
+        "identical plaintext on B"
+    );
+    let doc_record = b.index.file(&doc).unwrap().unwrap();
+    let doc_sha = doc_record.sha256.clone().unwrap();
+    assert_eq!(doc_record.online, "ok");
+    assert!(b.index.online_copies(&doc).unwrap().is_empty());
+    assert_eq!(
+        client::head(&http, &b_local, &doc_sha).await.unwrap(),
+        doc_record.size,
+        "B's own local copy"
+    );
+    let b_device = b.identity().unwrap().device.keys().clone();
+    let b_claims = client::list(&http, &online, &b_device).await.unwrap();
+    assert!(
+        b_claims.iter().all(|c| c.sha256 != doc_sha),
+        "B never claims A's online copy: {b_claims:?}"
+    );
+    assert_eq!(
+        b.status().online.used_bytes,
+        b_used,
+        "A's file is not charged to B"
+    );
+    report("a: A's new file reached B as a row with two copies; B claims nothing online");
+
+    // c. A removes through the window; B's row goes and the copies go everywhere.
+    a.remove(&doc).await.unwrap();
+    until("B applies A's removal", 60, || {
+        row(&b, &doc).is_none().then_some(())
+    })
+    .await;
+    wait_gone(
+        &http,
+        &every_node,
+        &doc_sha,
+        "the removed file on every node",
+    )
+    .await;
+    for node in &every_node {
+        assert!(
+            client::head(&http, node, &kept_sha)
+                .await
+                .unwrap()
+                .is_some(),
+            "other files survive"
+        );
+    }
+    let recovery_keys = a.identity().unwrap().recovery.identity().keys().clone();
+    let lists = client::list(&http, &online, &recovery_keys).await.unwrap();
+    assert!(!lists.is_empty(), "key lists survive");
+    for listed in &lists {
+        assert!(
+            client::head(&http, &online, &listed.sha256)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+    report("c: A's removal reached B; its copies are gone, others and the key lists remain");
+
+    // d. B removes a file A added: B deletes only what it holds, A the rest.
+    let (note_path, _) = write("notes.txt", 11, 150_000);
+    let note = add_and_wait(&a, note_path).await;
+    until("B pulls the note", 60, || {
+        row(&b, &note).filter(|r| r.state == "two_copies")
+    })
+    .await;
+    let note_sha = b.index.file(&note).unwrap().unwrap().sha256.unwrap();
+    b.remove(&note).await.unwrap();
+    let owed: Vec<_> = b
+        .index
+        .pending_deletes()
+        .unwrap()
+        .into_iter()
+        .filter(|d| d.sha256 == note_sha)
+        .collect();
+    assert!(owed.is_empty(), "no endless retry: {owed:?}");
+    until("A applies B's removal", 60, || {
+        row(&a, &note).is_none().then_some(())
+    })
+    .await;
+    wait_gone(&http, &every_node, &note_sha, "A's claim on the note").await;
+    assert!(
+        a.index
+            .pending_deletes()
+            .unwrap()
+            .iter()
+            .all(|d| d.sha256 != note_sha)
+    );
+    report("d: B's removal of A's file queued nothing it cannot delete; A deleted its claim");
+
+    // e. Rollback: an old key list copy put back online changes nothing.
+    let (temp_path, _) = write("temp.txt", 13, 120_000);
+    let temp = add_and_wait(&a, temp_path).await;
+    until("B pulls temp", 60, || {
+        row(&b, &temp).filter(|r| r.state == "two_copies")
+    })
+    .await;
+    until("A's key list is settled", 30, || {
+        (!a.index.get_bool(kv::KEY_LIST_PENDING).unwrap()).then_some(())
+    })
+    .await;
+    let mut old_copies = Vec::new();
+    for listed in client::list(&http, &online, &recovery_keys).await.unwrap() {
+        let bytes = client::download_bytes(&http, &online, &listed.sha256, 80 << 20)
+            .await
+            .unwrap();
+        old_copies.push((listed.sha256, bytes));
+    }
+    assert!(!old_copies.is_empty());
+    a.remove(&temp).await.unwrap();
+    let (later_path, _) = write("later.txt", 17, 130_000);
+    let later = add_and_wait(&a, later_path).await;
+    until("B in step after the changes", 60, || {
+        (row(&b, &temp).is_none() && row(&b, &later).is_some_and(|r| r.state == "two_copies"))
+            .then_some(())
+    })
+    .await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let b_rows = ids(&b);
+    let a_rows = ids(&a);
+    assert_eq!(a_rows, b_rows);
+    let b_seen = b.index.get_u64(kv::LAST_SEEN_SEQ).unwrap().unwrap();
+    let a_seen = a.index.get_u64(kv::LAST_SEEN_SEQ).unwrap().unwrap();
+    // The node serves only the old copies.
+    let newer = client::list(&http, &online, &recovery_keys).await.unwrap();
+    for (sha, bytes) in &old_copies {
+        client::upload(
+            &http,
+            &online,
+            &recovery_keys,
+            sha,
+            bytes.len() as u64,
+            bytes.clone().into(),
+        )
+        .await
+        .unwrap();
+    }
+    for listed in newer {
+        if old_copies.iter().all(|(sha, _)| *sha != listed.sha256) {
+            client::delete(&http, &online, &recovery_keys, &listed.sha256)
+                .await
+                .unwrap();
+        }
+    }
+    for engine in [&a, &b] {
+        engine.pulled.lock().unwrap().clear();
+        engine.pull_key_list().await.unwrap();
+    }
+    assert_eq!(ids(&b), b_rows, "B's rows are unchanged");
+    assert_eq!(ids(&a), a_rows, "A's rows are unchanged");
+    assert!(
+        row(&b, &temp).is_none() && row(&a, &temp).is_none(),
+        "nothing removed came back"
+    );
+    assert!(b.index.get_u64(kv::LAST_SEEN_SEQ).unwrap().unwrap() >= b_seen);
+    assert_eq!(a.index.get_u64(kv::LAST_SEEN_SEQ).unwrap().unwrap(), a_seen);
+    assert!(
+        !a.index.get_bool(kv::KEY_LIST_PENDING).unwrap(),
+        "A did not re-seal"
+    );
+    assert!(!a.key_list_failed() && !b.key_list_failed());
+    report("e: an old key list copy brought nothing back and lowered no seq");
+
+    // f. B is offline while A removes a file, then catches up.
+    let later_sha = a.index.file(&later).unwrap().unwrap().sha256.unwrap();
+    let b_gone = Arc::downgrade(&b);
+    drop(b);
+    drop(b_rt);
+    until("B stopped", 30, || b_gone.upgrade().is_none().then_some(())).await;
+    let published = a.index.get(kv::KEY_LIST_ONLINE_SHA).unwrap();
+    a.remove(&later).await.unwrap();
+    until("A published the removal", 30, || {
+        (a.index.get(kv::KEY_LIST_ONLINE_SHA).unwrap() != published).then_some(())
+    })
+    .await;
+    assert!(
+        client::head(&http, &b_local, &later_sha)
+            .await
+            .unwrap()
+            .is_some(),
+        "B's copy waits for B"
+    );
+    let b_rt = Computer::start();
+    let b = engine_for(
+        &b_host,
+        &b_store,
+        &svc.relay_api,
+        &b_watch,
+        b_rt.handle(),
+        LIMIT,
+    );
+    until("B catches up", 60, || {
+        row(&b, &later).is_none().then_some(())
+    })
+    .await;
+    wait_gone(
+        &http,
+        &every_node,
+        &later_sha,
+        "the file removed while B was off",
+    )
+    .await;
+    assert_eq!(ids(&b), ids(&a));
+    assert!(row(&b, &kept).is_some_and(|r| r.state == "two_copies"));
+    report("f: B was offline during A's removal and converged after restarting");
+    drop(b_rt);
+}
+
 /// Waits for a JSON file the browser driver writes into the hand-off folder.
 async fn handoff_file(dir: &Path, name: &str, seconds: u64) -> Value {
     let path = dir.join(name);
@@ -1089,7 +1455,8 @@ async fn drop_share_to_the_get_page() {
         return;
     };
     let watch_dir = svc.work_path.join("home/Wildbloom");
-    let (engine, host, _store, _key) = approved_engine(&svc, "get", &watch_dir).await;
+    let (engine, host, _store, _key) =
+        approved_engine(&svc, "get", &watch_dir, ONLINE_BLOB_LIMIT).await;
     let source = svc.work_path.join("Quarterly report.pdf");
     let plain: Vec<u8> = (0..1_500_000u32).map(|i| (i * 13 + 5) as u8).collect();
     std::fs::write(&source, &plain).unwrap();

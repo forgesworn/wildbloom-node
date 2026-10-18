@@ -20,6 +20,10 @@ pub mod local {
     pub const RESTORING: &str = "restoring";
     /// The original could not be read or encrypted.
     pub const UNREADABLE: &str = "unreadable";
+    /// A folder file that cannot be kept (too big, or an unusable name or
+    /// path).  It has no key and no envelope and is never in the key list;
+    /// `note` says why.
+    pub const NOT_KEPT: &str = "not_kept";
 }
 
 /// Where a file's online copy is.
@@ -65,9 +69,24 @@ pub struct FileRecord {
     pub online: String,
     pub attempts: u32,
     pub next_attempt: u64,
+    /// The link to a file on disk: the absolute path as it really is, and the
+    /// size and nanosecond mtime last seen or written.
     pub watch_path: Option<String>,
     pub watch_size: Option<u64>,
     pub watch_mtime: Option<i64>,
+    /// The key list entry's relative path, frozen when the row is inserted;
+    /// equal to `name` for a version 1 entry.
+    pub path: String,
+    /// The entry's `prev` (32 hex), frozen.
+    pub prev: Option<String>,
+    /// The entry's `from` (the computer name), frozen; empty if unknown.
+    pub origin: String,
+    /// The entry's `plain` (64 hex), frozen; empty if unknown.  Unlike
+    /// `plain_sha256`, which is learned for duplicate detection, it never
+    /// changes.
+    pub entry_plain: String,
+    /// Why a `not_kept` row is not kept.
+    pub note: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -115,8 +134,9 @@ pub enum IndexError {
 }
 
 /// The schema this build reads and writes.  Version 1 (test builds only)
-/// lacked node origins on deletions and shares, so it is refused.
-pub const SCHEMA_VERSION: i64 = 2;
+/// lacked node origins on deletions and shares, so it is refused.  Version 2
+/// is migrated in place (see `MIGRATE_2_TO_3`).
+pub const SCHEMA_VERSION: i64 = 3;
 
 impl From<rusqlite::Error> for IndexError {
     fn from(error: rusqlite::Error) -> Self {
@@ -151,7 +171,12 @@ CREATE TABLE IF NOT EXISTS files (
   next_attempt INTEGER NOT NULL DEFAULT 0,
   watch_path TEXT,
   watch_size INTEGER,
-  watch_mtime INTEGER
+  watch_mtime INTEGER,
+  path TEXT NOT NULL DEFAULT '',
+  prev TEXT,
+  origin TEXT NOT NULL DEFAULT '',
+  entry_plain TEXT NOT NULL DEFAULT '',
+  note TEXT
 );
 CREATE INDEX IF NOT EXISTS files_plain ON files(plain_sha256);
 CREATE TABLE IF NOT EXISTS shares (
@@ -201,7 +226,27 @@ CREATE TABLE IF NOT EXISTS kv (
 );
 ";
 
-const FILE_COLUMNS: &str = "id, name, media_type, bytes, added, plain_sha256, sha256, size, local, online, attempts, next_attempt, watch_path, watch_size, watch_mtime";
+/// Schema 2 to 3, in one transaction: the frozen key list entry fields
+/// (`path` is the name for every existing row, which is how a version 1
+/// entry reads), a `note` for rows that are not kept, and the online copies
+/// that Remove used to infer for rows this computer uploaded before it
+/// recorded them.  Rows restored from the key list (`restored:` plain hash)
+/// claim nothing until they upload, so they are not backfilled.
+const MIGRATE_2_TO_3: &str = "
+ALTER TABLE files ADD COLUMN path TEXT NOT NULL DEFAULT '';
+ALTER TABLE files ADD COLUMN prev TEXT;
+ALTER TABLE files ADD COLUMN origin TEXT NOT NULL DEFAULT '';
+ALTER TABLE files ADD COLUMN entry_plain TEXT NOT NULL DEFAULT '';
+ALTER TABLE files ADD COLUMN note TEXT;
+UPDATE files SET path = name;
+INSERT OR IGNORE INTO online_copies (file_id, origin)
+  SELECT id, (SELECT value FROM kv WHERE key = 'online_url') FROM files
+  WHERE online = 'ok' AND plain_sha256 NOT LIKE 'restored:%'
+    AND (SELECT value FROM kv WHERE key = 'online_url') IS NOT NULL;
+PRAGMA user_version = 3;
+";
+
+const FILE_COLUMNS: &str = "id, name, media_type, bytes, added, plain_sha256, sha256, size, local, online, attempts, next_attempt, watch_path, watch_size, watch_mtime, path, prev, origin, entry_plain, note";
 
 fn file_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<FileRecord> {
     Ok(FileRecord {
@@ -220,6 +265,11 @@ fn file_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<FileRecord> {
         watch_path: row.get(12)?,
         watch_size: row.get::<_, Option<i64>>(13)?.map(|v| v as u64),
         watch_mtime: row.get(14)?,
+        path: row.get(15)?,
+        prev: row.get(16)?,
+        origin: row.get(17)?,
+        entry_plain: row.get(18)?,
+        note: row.get(19)?,
     })
 }
 
@@ -246,7 +296,7 @@ impl Index {
     pub fn open(dir: &Path) -> Result<Self, IndexError> {
         wildbloom_private_state::private_directory(dir).map_err(|_| IndexError::Private)?;
         let path = dir.join("drop-index.sqlite");
-        let db = Connection::open(&path)?;
+        let mut db = Connection::open(&path)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -267,6 +317,12 @@ impl Index {
                 }
                 db.execute_batch(SCHEMA)?;
                 db.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
+            }
+            2 => {
+                let migration = db.transaction()?;
+                migration.execute_batch(MIGRATE_2_TO_3)?;
+                migration.commit()?;
+                db.execute_batch(SCHEMA)?;
             }
             SCHEMA_VERSION => db.execute_batch(SCHEMA)?,
             other => return Err(IndexError::Version(other)),
@@ -332,7 +388,7 @@ impl Index {
     pub fn insert_file(&self, file: &FileRecord) -> Result<(), IndexError> {
         self.with(|db| {
             db.execute(
-                &format!("INSERT INTO files ({FILE_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)"),
+                &format!("INSERT INTO files ({FILE_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)"),
                 params![
                     file.id,
                     file.name,
@@ -349,6 +405,11 @@ impl Index {
                     file.watch_path,
                     file.watch_size.map(int),
                     file.watch_mtime,
+                    file.path,
+                    file.prev,
+                    file.origin,
+                    file.entry_plain,
+                    file.note,
                 ],
             )
             .map(|_| ())
@@ -445,6 +506,45 @@ impl Index {
         })
     }
 
+    /// Sets or clears the link to a file on disk: (absolute path, size,
+    /// nanosecond mtime).
+    pub fn set_link(&self, id: &str, link: Option<(String, u64, i64)>) -> Result<(), IndexError> {
+        let (path, size, mtime) = match link {
+            Some((path, size, mtime)) => (Some(path), Some(int(size)), Some(mtime)),
+            None => (None, None, None),
+        };
+        self.with(|db| {
+            db.execute(
+                "UPDATE files SET watch_path = ?2, watch_size = ?3, watch_mtime = ?4 WHERE id = ?1",
+                params![id, path, size, mtime],
+            )
+            .map(|_| ())
+        })
+    }
+
+    /// The learned plaintext hash used to spot duplicates.
+    pub fn set_plain_sha256(&self, id: &str, sha256: &str) -> Result<(), IndexError> {
+        self.with(|db| {
+            db.execute(
+                "UPDATE files SET plain_sha256 = ?2 WHERE id = ?1",
+                params![id, sha256],
+            )
+            .map(|_| ())
+        })
+    }
+
+    /// Every row linked to a file on disk.
+    pub fn linked_files(&self) -> Result<Vec<FileRecord>, IndexError> {
+        self.with(|db| {
+            let mut statement = db.prepare(&format!(
+                "SELECT {FILE_COLUMNS} FROM files WHERE watch_path IS NOT NULL ORDER BY added DESC, id"
+            ))?;
+            statement
+                .query_map([], file_from_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+        })
+    }
+
     pub fn delete_file(&self, id: &str) -> Result<(), IndexError> {
         self.with(|db| {
             db.execute("DELETE FROM shares WHERE file_id = ?1", [id])?;
@@ -456,11 +556,14 @@ impl Index {
     }
 
     /// Bytes this computer has stored on the online node (its own copies and
-    /// shared copies), for the footer and settings.
+    /// shared copies), for the footer and settings.  A file counts only when
+    /// this computer's device key claims it (an `online_copies` row): a file
+    /// another computer put online is not charged to this one.
     pub fn online_used_bytes(&self) -> Result<u64, IndexError> {
         self.with(|db| {
             let files: i64 = db.query_row(
-                "SELECT COALESCE(SUM(size), 0) FROM files WHERE online = 'ok'",
+                "SELECT COALESCE(SUM(size), 0) FROM files WHERE online = 'ok'
+                 AND EXISTS (SELECT 1 FROM online_copies WHERE online_copies.file_id = files.id)",
                 [],
                 |r| r.get(0),
             )?;
@@ -656,6 +759,14 @@ impl Index {
         })
     }
 
+    pub fn has_tombstone(&self, id: &str) -> Result<bool, IndexError> {
+        self.with(|db| {
+            db.query_row("SELECT 1 FROM removed WHERE id = ?1", [id], |_| Ok(()))
+                .optional()
+                .map(|v| v.is_some())
+        })
+    }
+
     pub fn tombstones(&self) -> Result<Vec<(String, u64)>, IndexError> {
         self.with(|db| {
             let mut statement = db.prepare("SELECT id, at FROM removed")?;
@@ -725,6 +836,119 @@ mod tests {
         assert!(matches!(Index::open(&bare), Err(IndexError::Version(0))));
     }
 
+    /// The version 2 schema as the installed build created it.
+    const SCHEMA_2: &str = "
+CREATE TABLE files (id TEXT PRIMARY KEY, name TEXT NOT NULL, media_type TEXT NOT NULL,
+  bytes INTEGER NOT NULL, added INTEGER NOT NULL, plain_sha256 TEXT NOT NULL, sha256 TEXT,
+  size INTEGER, local TEXT NOT NULL, online TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt INTEGER NOT NULL DEFAULT 0, watch_path TEXT, watch_size INTEGER, watch_mtime INTEGER);
+CREATE INDEX files_plain ON files(plain_sha256);
+CREATE TABLE shares (file_id TEXT PRIMARY KEY, share_id TEXT NOT NULL, origin TEXT NOT NULL,
+  sha256 TEXT NOT NULL, size INTEGER NOT NULL, state TEXT NOT NULL, sent_at INTEGER,
+  delete_at INTEGER, ended_at INTEGER);
+CREATE TABLE deletes (node TEXT NOT NULL, sha256 TEXT NOT NULL, signer TEXT NOT NULL,
+  not_before INTEGER NOT NULL DEFAULT 0, file_id TEXT, PRIMARY KEY (node, sha256, signer));
+CREATE TABLE online_copies (file_id TEXT NOT NULL, origin TEXT NOT NULL, PRIMARY KEY (file_id, origin));
+CREATE TABLE stranded (file_id TEXT NOT NULL, sha256 TEXT NOT NULL, origin TEXT NOT NULL,
+  at INTEGER NOT NULL, PRIMARY KEY (file_id, sha256));
+CREATE TABLE removed (id TEXT PRIMARY KEY, at INTEGER NOT NULL);
+CREATE TABLE watch_seen (path TEXT NOT NULL, size INTEGER NOT NULL, mtime INTEGER NOT NULL,
+  PRIMARY KEY (path, size, mtime));
+CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+PRAGMA user_version = 2;
+";
+
+    fn version_2_index(dir: &Path, online_url: Option<&str>) {
+        wildbloom_private_state::private_directory(dir).unwrap();
+        let db = Connection::open(dir.join("drop-index.sqlite")).unwrap();
+        db.execute_batch(SCHEMA_2).unwrap();
+        for (id, plain, online) in [
+            ("a", "aa".repeat(32), "ok"),
+            ("r", "restored:r".to_string(), "ok"),
+            ("q", "cc".repeat(32), "queued"),
+        ] {
+            db.execute(
+                "INSERT INTO files (id, name, media_type, bytes, added, plain_sha256, sha256, size, local, online, watch_path, watch_size, watch_mtime)
+                 VALUES (?1, ?2, 'text/plain', 12, 1900000000, ?3, ?4, 65608, 'ok', ?5, ?6, 12, 7)",
+                params![id, format!("{id}.txt"), plain, "bb".repeat(32), online, (id == "a").then_some("/w/a.txt")],
+            )
+            .unwrap();
+        }
+        if let Some(url) = online_url {
+            db.execute(
+                "INSERT INTO kv (key, value) VALUES ('online_url', ?1)",
+                [url],
+            )
+            .unwrap();
+        }
+        db.execute(
+            "INSERT INTO kv (key, value) VALUES ('watch_enabled', '1')",
+            [],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn version_2_migrates_to_3() {
+        let dir = tempfile::tempdir().unwrap();
+        let drop = dir.path().join("drop");
+        let node = "https://storage.example/";
+        version_2_index(&drop, Some(node));
+        let index = Index::open(&drop).unwrap();
+        drop_connection_of(index);
+        let db = Connection::open(drop.join("drop-index.sqlite")).unwrap();
+        let version: i64 = db
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 3);
+        drop_connection(db);
+        let index = Index::open(&drop).unwrap();
+        for id in ["a", "r", "q"] {
+            let file = index.file(id).unwrap().unwrap();
+            assert_eq!(file.path, format!("{id}.txt"), "path = name");
+            assert_eq!(file.prev, None);
+            assert_eq!(file.origin, "");
+            assert_eq!(file.entry_plain, "");
+            assert_eq!(file.note, None);
+        }
+        assert_eq!(
+            index.file("a").unwrap().unwrap().watch_path.as_deref(),
+            Some("/w/a.txt")
+        );
+        // Only the uploaded row is backfilled: not the restored or queued one.
+        assert_eq!(index.online_copies("a").unwrap(), vec![node.to_string()]);
+        assert!(index.online_copies("r").unwrap().is_empty());
+        assert!(index.online_copies("q").unwrap().is_empty());
+        assert_eq!(index.online_used_bytes().unwrap(), 65_608);
+        // The inbox setting is kept: this build still means the same by it.
+        assert!(index.get_bool("watch_enabled").unwrap());
+        // Reopening a migrated index changes nothing.
+        drop_connection_of(index);
+        let index = Index::open(&drop).unwrap();
+        assert_eq!(index.files().unwrap().len(), 3);
+
+        // With no online node there is nothing to backfill.
+        let bare = dir.path().join("bare");
+        version_2_index(&bare, None);
+        let index = Index::open(&bare).unwrap();
+        assert!(index.online_copies("a").unwrap().is_empty());
+
+        // Version 1 and anything newer than 3 are refused.
+        for (name, version) in [("one", 1), ("four", 4)] {
+            let other = dir.path().join(name);
+            version_2_index(&other, None);
+            Connection::open(other.join("drop-index.sqlite"))
+                .unwrap()
+                .execute_batch(&format!("PRAGMA user_version = {version};"))
+                .unwrap();
+            assert!(matches!(Index::open(&other), Err(IndexError::Version(v)) if v == version));
+        }
+    }
+
+    fn drop_connection_of(index: Index) {
+        drop(index);
+    }
+
     fn drop_index_at(dir: &Path) {
         Index::open(dir).unwrap();
         // Reopening a current index is fine.
@@ -752,6 +976,11 @@ mod tests {
             watch_path: None,
             watch_size: None,
             watch_mtime: None,
+            path: "notes.txt".into(),
+            prev: None,
+            origin: String::new(),
+            entry_plain: String::new(),
+            note: None,
         }
     }
 
@@ -763,9 +992,22 @@ mod tests {
         index.set_envelope("a", &"bb".repeat(32), 65_608).unwrap();
         index.set_local("a", local::OK).unwrap();
         index.set_online("a", online::OK).unwrap();
+        // Online but not claimed by this computer: not charged to it.
+        assert_eq!(index.online_used_bytes().unwrap(), 0);
+        index
+            .add_online_copy("a", "https://storage.example/")
+            .unwrap();
         let file = index.file("a").unwrap().unwrap();
         assert_eq!(file.size, Some(65_608));
         assert_eq!(file.local, "ok");
+        assert_eq!(file, {
+            let mut expected = record("a");
+            expected.sha256 = Some("bb".repeat(32));
+            expected.size = Some(65_608);
+            expected.local = local::OK.into();
+            expected.online = online::OK.into();
+            expected
+        });
         assert_eq!(
             index
                 .file_by_plain_sha256(&"aa".repeat(32))
@@ -813,6 +1055,23 @@ mod tests {
         assert_eq!(index.get_u64("last_seen_seq").unwrap(), Some(7));
         index.set_bool("watch", true).unwrap();
         assert!(index.get_bool("watch").unwrap());
+
+        assert!(index.has_tombstone("b").unwrap());
+        assert!(!index.has_tombstone("a").unwrap());
+
+        assert!(index.linked_files().unwrap().is_empty());
+        index
+            .set_link("a", Some(("/w/Docs/a.txt".into(), 12, 1_900_000_000_123)))
+            .unwrap();
+        index.set_plain_sha256("a", &"cd".repeat(32)).unwrap();
+        let linked = index.linked_files().unwrap();
+        assert_eq!(linked.len(), 1);
+        assert_eq!(linked[0].watch_path.as_deref(), Some("/w/Docs/a.txt"));
+        assert_eq!(linked[0].watch_size, Some(12));
+        assert_eq!(linked[0].watch_mtime, Some(1_900_000_000_123));
+        assert_eq!(linked[0].plain_sha256, "cd".repeat(32));
+        index.set_link("a", None).unwrap();
+        assert!(index.linked_files().unwrap().is_empty());
 
         assert!(!index.watch_seen("/w/a.txt", 3, 9).unwrap());
         index.mark_watch_seen("/w/a.txt", 3, 9).unwrap();
