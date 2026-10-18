@@ -117,7 +117,7 @@ the shared copy now", warning icon, menu as "2 copies". Shown for a day. `name` 
 | `retry` | `{ id: string \| null }` | nothing. `null` means every failed row ("Retry all"). Also used for "Copy again". |
 | `copy_back` | `{ id }` | nothing |
 | `save_copy` | `{ id }` | `{ folder: string }` (display name of the folder, for "Saved {name} to {folder}."), or `null` if the owner cancelled. **Changed:** Rust always opens the native save dialog; the page never names a path. |
-| `remove` | `{ id }` | nothing |
+| `remove` | `{ id }` | nothing. **Added:** while the folder is on, rejects `{ code: "folder_unavailable", message }` when the row has a file in a Wildbloom folder that can't be found (removing it then would bring the file back when the folder returns), and `{ code: "trash_failed", message }` when that file could not be moved to the Trash or Recycle Bin. Nothing is removed in either case; the UI shows `message`. |
 
 `AddResult`
 
@@ -142,7 +142,7 @@ the shared copy now", warning icon, menu as "2 copies". Shown for a day. `name` 
 | `open_drop_flow` | `{ flow: "recovery" }` | nothing. **Added**, for the node window: shows the Drop window and sends it `drop://open-flow`, so the recovery key is only ever read by the Drop window. |
 | `confirm_recovery_saved` | none | nothing. Marks the key as saved and ends first run (`firstRun` becomes null). |
 | `restore` | `{ recoveryKey: string \| null, recoveryFile: string \| null, url: string \| null }` | `{ next: "approve" \| "done", host?: string }`. Exactly one of `recoveryKey` and `recoveryFile` is set. `recoveryFile` is a path from `dialog.open`; Rust reads it, and uses its online node address when `url` is null. Rejects `{ code, host }` with `bad_key`, `no_answer`, `not_a_node`, `tls`, `offline`. `approve` means the new computer must be approved next; the restore itself continues in Rust after approval. |
-| `set_watch_folder` | `{ enabled: boolean }` | nothing. **Changed:** the UI asks "Keep a readable copy of every file in ~/Wildbloom?" (Turn on / Cancel) before sending `enabled: true` from the Drop window or node settings. It sends `enabled: true` without asking from "Use folder again" (the folder is already on). |
+| `set_watch_folder` | `{ enabled: boolean }` | nothing. **Changed:** the UI asks "Keep a readable copy of every file in ~/Wildbloom?" (Turn on / Cancel) before sending `enabled: true` from the Drop window or node settings. It sends `enabled: true` without asking from "Use folder again" (the folder is already on). **Added:** "Use folder again" changes nothing when the folder and its marker are back; when the marker is still missing (or another folder's), Rust clears every link and writes a new marker, so files already there are linked again by content at their place and anything else is taken in as new. No deletion is ever inferred against a recreated folder. |
 | `open_watch_folder` | none | nothing |
 
 `ApprovalStatus`
