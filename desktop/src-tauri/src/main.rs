@@ -1253,7 +1253,9 @@ fn drop_config(app: &AppHandle) -> Result<drop::engine::EngineConfig, String> {
         computer_name: drop::commands::computer_name(),
         watch_interval: Duration::from_secs(1),
         online_blob_limit: drop::engine::ONLINE_BLOB_LIMIT,
-        pull_interval: Duration::from_secs(120),
+        // One signed listing request when nothing has changed, so a change
+        // on another computer shows up here within seconds.
+        pull_interval: Duration::from_secs(10),
     })
 }
 
