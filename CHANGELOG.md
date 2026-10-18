@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.7 preview - Unreleased
+## 0.3.7 preview - 2026-10-19
 
 - Check the key list for changes from the owner's other computers every 10
   seconds instead of every 2 minutes, so an add, edit or removal on one
