@@ -1,7 +1,26 @@
 # Changelog
 
-## 0.3.4 preview - Unreleased
+## 0.3.6 preview - 2026-10-18
 
+- Add Wildbloom Drop to the desktop app. A dropped file is encrypted on this
+  computer under its own key, kept on the local node and copied to the owner's
+  online node, and shows **2 copies** once both are verified. First run approves
+  the computer once through a NIP-46 signer with a device grant; one recovery
+  key restores every file on another computer. Share sends a fresh encrypted
+  copy through a Foregather live pairing (a link and four spoken words), which
+  is deleted on Stop sharing or after 24 hours.
+- Keep computers that share a recovery key in step. Each reads the key list
+  from its nodes every 2 minutes and when its local node starts, takes in
+  files added elsewhere and applies removals. A computer now deletes online
+  copies only where it holds the claim, so removing a restored file no longer
+  leaves a deletion the node refuses for ever.
+- Add the Wildbloom folder, off until the owner turns it on. `~/Wildbloom`
+  holds a readable copy of every kept file, in the same subfolders, on every
+  computer where it is on. Adds, edits and deletions there reach the other
+  computers. Replaced and removed files go to the Trash or Recycle Bin, never
+  deleted outright, and concurrent changes keep both versions. Nothing changes
+  while the folder is missing or a scan is incomplete. The folder holds
+  plaintext, so full-disk encryption is recommended.
 - Add opt-in owner-authorised device grants (`--device-grants`): an owner-signed
   kind 27540 event grants a device key and a recovery identity a per-key byte
   ceiling until an expiry, and a later event revokes it. Expiry and revocation
@@ -10,6 +29,13 @@
 - Add an opt-in pairing issuer (`--pairing-issuer`) that exchanges a granted
   device's NIP-98 request for a one-use Foregather live creation grant. The
   operator token stays on the node and is never logged or returned.
+- Remove the updater's `zip` feature and clear new dependency audit findings.
+- Drop on Windows and Linux is compiled and unit tested in CI but not yet
+  exercised on devices. Native tray clicks, Dock drops on a bundled app and
+  screen readers remain unverified.
+
+## 0.3.4 preview - Unreleased
+
 - Automate both Mac preview signatures and Apple notarisation from an exact,
   successful CI build using the owner's existing Keychain. Retain build,
   signature, checksum and native upgrade evidence without exporting credentials.
