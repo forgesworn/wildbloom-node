@@ -176,6 +176,8 @@
     return h('div', { class: 'dialog-actions' }, ordered);
   }
   const casing = (mac, other) => (platform.os === 'mac' ? mac : other);
+  const trashName = () => (platform.os === 'windows' ? 'Recycle Bin' : 'Trash');
+  const revealText = () => (platform.os === 'mac' ? 'Show in Finder' : platform.os === 'windows' ? 'Show in Explorer' : 'Show in Folder');
 
   /* ---------- clipboard, dialogs, menus, windows ---------- */
 
@@ -256,6 +258,16 @@
       dialog.append(h('h2', { id: titleId }, title), ...paragraphs.map((text) => h('p', {}, text)), buttonRow(destructive ? accept : accept, cancel));
       showDialog(dialog, opener, () => resolve(answer));
       (destructive ? cancel : accept).focus();
+    });
+  }
+
+  /** Asked before the Wildbloom folder is turned on, in the Drop window and in node settings. */
+  async function confirmFolderOn(opener) {
+    await loadPlatform();
+    return confirmDialog({
+      title: 'Keep a readable copy of every file in ~/Wildbloom?',
+      paragraphs: [`Each computer with the folder on holds the same files in the same folders. Changes and deletions there reach your other computers. Anything Wildbloom replaces or removes goes to the ${trashName()}. Update Wildbloom on all your computers first.`],
+      confirmLabel: 'Turn on', destructive: false, opener,
     });
   }
 
@@ -791,7 +803,7 @@
 
   window.WildbloomDrop = {
     h, call, listen, delay, uid, plural, icon, iconSlot, formatBytes, until, stamp, fullDate, shortNpub, hostOf,
-    buttonRow, confirmDialog, openFlowSheet, writeClipboard, readClipboard, openNodeSettings, popupMenu,
+    buttonRow, confirmDialog, confirmFolderOn, openFlowSheet, writeClipboard, readClipboard, openNodeSettings, popupMenu,
     platform, loadPlatform, middleTruncate, casing,
   };
 
@@ -857,6 +869,16 @@
   const FAILED = new Set(['failed', 'missing_online']);
   const BUSY = new Set(['encrypting', 'queued', 'copying']);
 
+  function notKeptReason(row) {
+    switch (row.notKept) {
+      case 'too_big': return `over ${formatBytes(state.limits.dropMaxBytes)}`;
+      case 'name': return 'rename it to keep it';
+      case 'too_long': return 'its folder path is too long';
+      case 'too_deep': return "it's too many folders deep";
+      default: return '';
+    }
+  }
+
   function describe(row) {
     const size = formatBytes(row.bytes);
     const added = row.added ? stamp(row.added) : '';
@@ -878,6 +900,7 @@
       case 'stop_pending': return { icon: 'pending', tone: 'muted', lead: '2 copies', rest: [meta('removing shared copy when online')] };
       case 'sharing_ended': return { icon: 'check', tone: 'success', lead: '2 copies', rest: [meta(`sharing ended ${until(row.sharingEnded)}`)] };
       case 'share_owner_only': return { icon: 'alert', tone: 'warning', lead: '2 copies', rest: [meta('only your online node’s owner can remove the shared copy now')] };
+      case 'not_kept': return { icon: 'alert', tone: 'warning', lead: 'Not kept', rest: [meta(notKeptReason(row))] };
       case 'unreadable': return { icon: 'alert', tone: 'error', lead: "Couldn't read this file. Check you can open it, then add it again.", rest: [] };
       default: return { icon: 'ring', tone: 'muted', lead: String(row.state || ''), rest: [] };
     }
@@ -892,8 +915,16 @@
     stop: () => ({ id: 'stop', text: casing('Stop Sharing…', 'Stop sharing…') }),
     save: () => ({ id: 'save', text: casing('Save a Copy…', 'Save a copy…') }),
     remove: () => ({ id: 'remove', text: 'Remove…' }),
+    open: () => ({ id: 'open', text: 'Open' }),
+    reveal: () => ({ id: 'reveal', text: revealText() }),
   };
   function menuFor(row) {
+    const items = baseMenuFor(row);
+    // Linked rows have a file in the Wildbloom folder to open or show.
+    if (row.inWatchFolder && row.state !== 'not_kept' && row.state !== 'unreadable') return [ITEM.open(), ITEM.reveal(), ...items];
+    return items;
+  }
+  function baseMenuFor(row) {
     const online = state.online.configured;
     switch (row.state) {
       case 'encrypting': return [ITEM.remove()];
@@ -911,6 +942,7 @@
       case 'shared': return [ITEM.shareAgain(), ITEM.stop(), ITEM.save(), ITEM.remove()];
       case 'stop_pending': return [ITEM.save()];
       case 'unreadable': return [ITEM.remove()];
+      case 'not_kept': return [ITEM.reveal()];
       default: return [];
     }
   }
@@ -944,9 +976,18 @@
           confirmLabel: 'Stop sharing', opener,
         });
         if (yes) await call('stop_sharing', { id });
+      } else if (action === 'open' || action === 'reveal') {
+        try {
+          await call(action === 'open' ? 'open_file' : 'reveal_file', { id });
+        } catch (e) {
+          if (e.code !== 'not_in_folder') throw e;
+          notice("That file isn't in your Wildbloom folder.");
+        }
       } else if (action === 'remove') {
-        const paragraphs = ["Both copies and the key that unlocks them are deleted. This can't be undone. The original file on your computer isn't touched."];
-        if (row.inWatchFolder) paragraphs.push("It stays in your Wildbloom folder, but Wildbloom won't keep copies of it.");
+        const paragraphs = state.watchFolder?.enabled
+          ? [`${row.name} is removed from Wildbloom on all your computers. Copies in your Wildbloom folders go to the ${trashName()}. Its encrypted copies and key are deleted, which can't be undone.`]
+          : ["Both copies and the key that unlocks them are deleted. This can't be undone. The original file on your computer isn't touched."];
+        if (row.inWatchFolder && !state.watchFolder?.enabled) paragraphs.push("It stays in your Wildbloom folder, but Wildbloom won't keep copies of it.");
         const yes = await confirmDialog({ title: `Remove ${row.name} from Wildbloom?`, paragraphs, confirmLabel: 'Remove', opener });
         if (yes) await call('remove', { id });
       }
@@ -998,7 +1039,9 @@
       if (!part.text) continue;
       status.append(h('span', { class: 'sep', 'aria-hidden': 'true' }, ' · '), h('span', { class: `plain ${part.cls || ''}` }, part.text));
     }
-    const li = h('li', { class: 'row', 'data-id': row.id, 'data-state': row.state }, name, actions, status);
+    const title = h('div', { class: 'row-title' }, name);
+    if (row.folder) title.append(h('p', { class: 'row-folder' }, row.folder));
+    const li = h('li', { class: 'row', 'data-id': row.id, 'data-state': row.state }, title, actions, status);
     if (d.bar) {
       li.append(h('progress', { max: '100', value: Number.isFinite(row.progress) ? String(Math.round(row.progress)) : null, 'aria-label': d.bar_label }));
     }
@@ -1134,19 +1177,23 @@
   /* ---------- status line (section 6.1) ---------- */
 
   function resolveStatus() {
-    const count = rows.size;
     const failed = [...rows.values()].filter((row) => FAILED.has(row.state)).length;
+    const notKept = [...rows.values()].filter((row) => row.state === 'not_kept').length;
+    const count = rows.size - notKept;
     const copying = [...rows.values()].filter((row) => BUSY.has(row.state)).length;
     const nowSeconds = Date.now() / 1000;
     const approval = state.approval || {};
     if (loadError) return { id: 'load', icon: 'alert', tone: 'error', text: "Can't reach Wildbloom Node.", action: { label: 'Try again', run: () => refreshStatus() } };
     if (state.node !== 'ok') return { id: 'node', icon: 'alert', tone: 'error', text: 'Wildbloom Node has stopped.', action: { label: 'Open node settings', run: openNodeSettings } };
     if (state.keychain === 'unavailable') return { id: 'keychain', icon: 'alert', tone: 'error', text: "Wildbloom can't reach your keychain.", action: { label: 'Try again', run: () => refreshStatus({ recheck: 'keychain' }) } };
+    if (state.watchFolder?.state === 'unavailable') return { id: 'folder-unavailable', icon: 'alert', tone: 'warning', text: "Your Wildbloom folder can't be found. Changes there are paused.", action: { label: 'Use folder again', run: async () => { await call('set_watch_folder', { enabled: true }); await refreshStatus(); } } };
+    if (state.watchFolder?.state === 'too_many') return { id: 'folder-too-many', icon: 'alert', tone: 'warning', text: 'Your Wildbloom folder has more than 20,000 items. Changes there are paused.', action: null };
     if (approval.state === 'expired') return { id: 'expired', icon: 'alert', tone: 'warning', text: 'Approval for this computer has ended. New files stay on this computer.', action: { label: 'Approve again', run: (opener) => openFlowSheet({ sequence: ['approve'], renew: true, refresh: refreshStatus, browserApproval: state.browserApproval }, opener).then(refreshAfter) } };
     if (state.online.configured && (state.online.failedChecks || 0) > 2) return { id: 'unreachable', icon: 'alert', tone: 'warning', text: "Can't reach your online node. Files stay on this computer and copy when it's back.", action: { label: 'Try now', run: () => refreshStatus({ recheck: 'online' }) } };
     if (state.online.full) return { id: 'full', icon: 'alert', tone: 'warning', text: 'Your online space is full. New files stay on this computer.', action: { label: 'Settings', run: openNodeSettings } };
     if (failed > 0) return { id: 'failed', icon: 'alert', tone: 'warning', text: `${failed} ${plural(failed, 'file has', 'files have')} only 1 copy.`, action: { label: 'Retry all', run: () => call('retry', { id: null }) } };
     if (state.recovery && state.recovery.keyList === 'failed') return { id: 'keylist', icon: 'alert', tone: 'warning', text: "Wildbloom couldn't update the list it needs to restore your files. Your files are safe on this computer.", action: { label: 'Try again', run: () => refreshStatus({ recheck: 'keylist' }) } };
+    if (notKept > 0) return { id: 'not-kept', icon: 'alert', tone: 'warning', text: `${notKept} ${plural(notKept, 'file', 'files')} in your Wildbloom folder can't be kept.`, action: null };
     if (copying > 0) return { id: 'copying', icon: 'up', tone: 'accent', text: `Copying ${copying} ${plural(copying, 'file', 'files')} to your online node`, action: null };
     if (!state.online.configured) return { id: 'no-online', icon: 'ring', tone: 'muted', text: 'Files have 1 copy, on this computer.', action: { label: 'Add online node', run: (opener) => openFlowSheet({ sequence: ['node', 'approve'], refresh: refreshStatus, browserApproval: state.browserApproval }, opener).then(refreshAfter) } };
     if (approval.state === 'active' && approval.until && approval.until - nowSeconds < 30 * 86400) return { id: 'ends', icon: 'ring', tone: 'warning', text: `Approval for this computer ends on ${fullDate(approval.until)}.`, action: { label: 'Renew', run: (opener) => openFlowSheet({ sequence: ['approve'], renew: true, refresh: refreshStatus, browserApproval: state.browserApproval }, opener).then(refreshAfter) } };
@@ -1383,6 +1430,7 @@
       try {
         if (state.watchFolder?.enabled) await call('open_watch_folder');
         else {
+          if (!(await confirmFolderOn(el.folderToggle))) return;
           await call('set_watch_folder', { enabled: true });
           await refreshStatus();
         }

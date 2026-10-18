@@ -41,7 +41,8 @@ Conventions
   approval: { state: "none" | "active" | "expired", byNpub?: string, deviceNpub?: string,
               until?: number, limitBytes?: number },
   recovery: { keyList: "ok" | "failed", savedAt?: number, confirmed: boolean },
-  watchFolder: { enabled: boolean, path: string },       // path is for display, for example "~/Wildbloom"
+  watchFolder: { enabled: boolean, path: string,          // path is for display, for example "~/Wildbloom"
+                 state: "off" | "on" | "unavailable" | "too_many" },   // Added.
   limits: { dropMaxBytes: number, shareMaxBytes: number },
   browserApproval: boolean                                  // true once the browser route exists; hides or shows its link
 }
@@ -59,6 +60,15 @@ Conventions
   is). **Added.** The status line shows, after "{n} files have only 1 copy": "Wildbloom
   couldn't update the list it needs to restore your files. Your files are safe on this
   computer." with "Try again" (`drop_status` with `recheck: "keylist"`).
+- **Added.** `watchFolder.state` is `off` when the folder is off and `on` when it is working.
+  `unavailable` means the folder (or its marker) can't be found; the status line shows, after
+  the keychain line, "Your Wildbloom folder can't be found. Changes there are paused." with
+  "Use folder again" (`set_watch_folder` with `enabled: true`). `too_many` means a scan hit the
+  item limit; the line, straight after that one, is "Your Wildbloom folder has more than 20,000
+  items. Changes there are paused." with no action. `enabled` stays true in both.
+- **Added.** Rows in state `not_kept` add, after "{n} files have only 1 copy" and the key list
+  line: "{n} files in your Wildbloom folder can't be kept." (1: "1 file in your Wildbloom folder
+  can't be kept."). They are left out of the "All {n} files have 2 copies" count.
 - The status line (spec 6.1) is resolved in `drop.js` from these fields and the rows, in the
   priority order of the spec. The tray tooltip and menu status item (Rust) must resolve the
   same order from the same data; the copy is in section 6.1 of the design spec.
@@ -69,12 +79,26 @@ Conventions
 { id: string, name: string, bytes: number, added: number,
   state: "encrypting" | "queued" | "copying" | "two_copies" | "no_online" | "waiting" | "failed"
        | "missing_online" | "online_full" | "missing_local" | "restoring" | "shared"
-       | "stop_pending" | "sharing_ended" | "share_owner_only" | "unreadable",
+       | "stop_pending" | "sharing_ended" | "share_owner_only" | "unreadable"
+       | "not_kept",                     // Added.
   progress: number | null,         // 0 to 100, for encrypting, copying, restoring
   sharedUntil?: number,            // state "shared"
   sharingEnded?: number,           // state "sharing_ended" (shown for 24 h)
-  inWatchFolder?: boolean }        // adds a line to the Remove confirmation
+  notKept?: "too_big" | "name" | "too_long" | "too_deep",   // Added. State "not_kept" only
+  folder?: string,                 // Added. Parent path relative to the Wildbloom folder, shown muted under the name
+  inWatchFolder?: boolean }        // Changed: the row is linked to a file in the Wildbloom folder
 ```
+
+**Added.** `not_kept`: a file in the Wildbloom folder that Wildbloom does not keep. Copy "Not kept"
+then `too_big` "over {limit}" (the limit is `limits.dropMaxBytes`), `name` "rename it to keep it",
+`too_long` "its folder path is too long", `too_deep` "it's too many folders deep". Warning icon,
+no Share, menu: "Show in Finder" only (`reveal_file`). `inWatchFolder` rows gain "Open"
+(`open_file`) and "Show in Finder" (macOS), "Show in Explorer" (Windows) or "Show in Folder"
+(Linux) at the top of their menu. The Remove confirmation, while `watchFolder.enabled`, reads
+"{name} is removed from Wildbloom on all your computers. Copies in your Wildbloom folders go to
+the Trash. Its encrypted copies and key are deleted, which can't be undone." ("Recycle Bin" on
+Windows). With the folder off it keeps the earlier copy (plus the "It stays in your Wildbloom
+folder" line for linked rows).
 
 States map one to one onto the rows table in section 6.2, plus `share_owner_only` (**added**):
 the approval ended before the shared copy could be deleted, so the node moved it to its owner
@@ -88,6 +112,8 @@ the shared copy now", warning icon, menu as "2 copies". Shown for a day. `name` 
 |---|---|---|
 | `add_paths` | `{ paths: string[] }` | `AddResult`. Only paths from a native drop on the Drop window in the last minute are accepted (Rust records them from the window's drop event); any other path is refused as `unreadable`, so the page cannot name a file for Drop to read. |
 | `pick_files` | none (Rust opens the native picker) | `AddResult` (empty lists if cancelled) |
+| `open_file` | `{ id }` | nothing. **Added.** Opens the row's file in the Wildbloom folder with the system's default app. Rejects `{ code: "not_in_folder" }` when the row has no file there; the UI then shows "That file isn't in your Wildbloom folder." |
+| `reveal_file` | `{ id }` | nothing. **Added.** Shows the row's file in Finder, Explorer or the file manager. Rejects `{ code: "not_in_folder" }` as `open_file` does. `not_kept` rows count as having a file in the folder. |
 | `retry` | `{ id: string \| null }` | nothing. `null` means every failed row ("Retry all"). Also used for "Copy again". |
 | `copy_back` | `{ id }` | nothing |
 | `save_copy` | `{ id }` | `{ folder: string }` (display name of the folder, for "Saved {name} to {folder}."), or `null` if the owner cancelled. **Changed:** Rust always opens the native save dialog; the page never names a path. |
@@ -116,7 +142,7 @@ the shared copy now", warning icon, menu as "2 copies". Shown for a day. `name` 
 | `open_drop_flow` | `{ flow: "recovery" }` | nothing. **Added**, for the node window: shows the Drop window and sends it `drop://open-flow`, so the recovery key is only ever read by the Drop window. |
 | `confirm_recovery_saved` | none | nothing. Marks the key as saved and ends first run (`firstRun` becomes null). |
 | `restore` | `{ recoveryKey: string \| null, recoveryFile: string \| null, url: string \| null }` | `{ next: "approve" \| "done", host?: string }`. Exactly one of `recoveryKey` and `recoveryFile` is set. `recoveryFile` is a path from `dialog.open`; Rust reads it, and uses its online node address when `url` is null. Rejects `{ code, host }` with `bad_key`, `no_answer`, `not_a_node`, `tls`, `offline`. `approve` means the new computer must be approved next; the restore itself continues in Rust after approval. |
-| `set_watch_folder` | `{ enabled: boolean }` | nothing |
+| `set_watch_folder` | `{ enabled: boolean }` | nothing. **Changed:** the UI asks "Keep a readable copy of every file in ~/Wildbloom?" (Turn on / Cancel) before sending `enabled: true` from the Drop window or node settings. It sends `enabled: true` without asking from "Use folder again" (the folder is already on). |
 | `open_watch_folder` | none | nothing |
 
 `ApprovalStatus`
@@ -209,7 +235,7 @@ capability allows:
 - **Node window** (`capabilities/default.json`): its own node, pool and update commands, plus
   `platform_info`, `drop_status`, `check_online_node`, `set_online_node`, `approve_device`,
   `renew_approval`, `approval_status`, `cancel_approval`, `set_watch_folder`,
-  `open_watch_folder` and `open_drop_flow`. It cannot share, remove or save files, restore, or
+  `open_watch_folder` and `open_drop_flow`. (`open_file` and `reveal_file` are Drop window only.) It cannot share, remove or save files, restore, or
   read or save the recovery key.
 
 ## Behaviour Rust can rely on

@@ -236,6 +236,13 @@ const STATUS_CASES = [
   ['good', 'recovery', "Your recovery key isn't saved yet.", 'Save it'],
   ['list', 'keylist', '1 file has only 1 copy.', 'Retry all'],
   ['good', 'keylist', "Wildbloom couldn't update the list it needs to restore your files. Your files are safe on this computer.", 'Try again'],
+  ['folder', 'folder-unavailable', "Your Wildbloom folder can't be found. Changes there are paused.", 'Use folder again'],
+  ['folder', 'folder-too-many', 'Your Wildbloom folder has more than 20,000 items. Changes there are paused.', null],
+  ['list', 'keychain,folder-unavailable', "Wildbloom can't reach your keychain.", 'Try again'],
+  ['list', 'folder-unavailable,expired,unreachable,full', "Your Wildbloom folder can't be found. Changes there are paused.", 'Use folder again'],
+  ['list', 'folder-too-many,expired', 'Your Wildbloom folder has more than 20,000 items. Changes there are paused.', null],
+  ['folder', '', "4 files in your Wildbloom folder can't be kept.", null],
+  ['folder', 'keylist', "Wildbloom couldn't update the list it needs to restore your files. Your files are safe on this computer.", 'Try again'],
   ['good', '', 'All 5 files have 2 copies.', null],
   ['empty', '', 'No files yet', null],
   ['empty', 'no-online', 'Files have 1 copy, on this computer.', 'Add online node'],
@@ -267,6 +274,114 @@ scenario('status line: priority order, copy and actions (section 6.1)', async ()
   await page.waitForFunction(() => document.querySelector('#status-text').textContent.startsWith('Your file'));
   assert.equal(await text(page.locator('#status-text')), 'Your file has 2 copies.');
   await done(page);
+});
+
+scenario('folder: not_kept and linked rows, copy, menus, status counts', async () => {
+  let page = await drop('folder');
+  await ready(page);
+  const expected = {
+    f30: { status: `2 copies · 2.4 MB · Today ${clockTime(nowSeconds - 3000 - 30 * 600)}`, folder: 'Taxes/2026', menu: ['Open', 'Show in Finder', 'Share…', 'Save a Copy…', 'Remove…'] },
+    f31: { status: `2 copies · 2.4 MB · Today ${clockTime(nowSeconds - 3000 - 31 * 600)}`, folder: null, menu: ['Open', 'Show in Finder', 'Share…', 'Save a Copy…', 'Remove…'] },
+    f32: { status: 'Not kept · over 1 GB', folder: 'Videos', menu: ['Show in Finder'] },
+    f33: { status: 'Not kept · rename it to keep it', folder: null, menu: ['Show in Finder'] },
+    f34: { status: 'Not kept · its folder path is too long', folder: 'Projects/Research/Archive/Interviews/Transcripts', menu: ['Show in Finder'] },
+    f35: { status: "Not kept · it's too many folders deep", folder: 'a/b/c/d/e/f/g/h/i/j', menu: ['Show in Finder'] },
+    f36: { status: `2 copies · 2.4 MB · Today ${clockTime(nowSeconds - 3000 - 36 * 600)}`, folder: null, menu: ['Share…', 'Save a Copy…', 'Remove…'] },
+  };
+  for (const [id, want] of Object.entries(expected)) {
+    const li = page.locator(`li.row[data-id="${id}"]`);
+    assert.equal(await text(li.locator('.row-status')), want.status, `${id} status`);
+    if (want.folder) assert.equal(await text(li.locator('.row-folder')), want.folder, `${id} folder`);
+    else assert.equal(await li.locator('.row-folder').count(), 0);
+    assert.equal(await li.locator('[data-ctl="share"]').count(), id === 'f32' || id === 'f33' || id === 'f34' || id === 'f35' ? 0 : 1, `${id} share`);
+    await page.evaluate(() => { window.__stub.lastMenu = null; });
+    await li.locator('[data-ctl="more"]').click();
+    assert.deepEqual(await page.evaluate(() => window.__stub.lastMenu.items.map((item) => item.text)), want.menu, `${id} menu`);
+  }
+  assert.equal(await text(page.locator('#status-text')), "4 files in your Wildbloom folder can't be kept.");
+  // Open and Show in Finder call the commands; a refusal says so.
+  await page.locator('li.row[data-id="f30"] [data-ctl="more"]').click();
+  await menuAction(page, 'Open');
+  await page.locator('li.row[data-id="f30"] [data-ctl="more"]').click();
+  await menuAction(page, 'Show in');
+  await page.locator('li.row[data-id="f32"] [data-ctl="more"]').click();
+  await menuAction(page, 'Show in');
+  await page.waitForFunction(() => window.__stub.calls.filter((c) => c.command === 'reveal_file').length === 2);
+  assert.deepEqual((await calls(page, 'open_file')).map((c) => c.args), [{ id: 'f30' }]);
+  assert.deepEqual((await calls(page, 'reveal_file')).map((c) => c.args), [{ id: 'f30' }, { id: 'f32' }]);
+  await page.evaluate(() => { window.__stub.handlers.open_file = () => { throw { code: 'not_in_folder' }; }; });
+  await page.locator('li.row[data-id="f30"] [data-ctl="more"]').click();
+  await menuAction(page, 'Open');
+  await page.locator('#notices p', { hasText: "That file isn't in your Wildbloom folder." }).waitFor();
+  // One unkept file reads in the singular; the 2 copies count leaves them out.
+  for (const id of ['f33', 'f34', 'f35']) await page.evaluate((rowId) => window.__stub.emit('drop://file', { id: rowId, removed: true }), id);
+  await page.waitForFunction(() => document.querySelector('#status-text').textContent.startsWith('1 file'));
+  assert.equal(await text(page.locator('#status-text')), "1 file in your Wildbloom folder can't be kept.");
+  await page.evaluate(() => window.__stub.emit('drop://file', { id: 'f32', removed: true }));
+  await page.waitForFunction(() => document.querySelector('#status-text').textContent.startsWith('All'));
+  assert.equal(await text(page.locator('#status-text')), 'All 3 files have 2 copies.');
+  await done(page);
+  for (const [os, desktop, label] of [['windows', '', 'Show in Explorer'], ['linux', 'gnome', 'Show in Folder']]) {
+    page = await drop('folder', { os, desktop });
+    await ready(page);
+    await page.locator('li.row[data-id="f32"] [data-ctl="more"]').click();
+    assert.deepEqual(await page.evaluate(() => window.__stub.lastMenu.items.map((item) => item.text)), [label], os);
+    await page.locator('li.row[data-id="f31"] [data-ctl="more"]').click();
+    assert.deepEqual(await page.evaluate(() => window.__stub.lastMenu.items.map((item) => item.text)), ['Open', label, 'Share…', 'Save a copy…', 'Remove…'], os);
+    await done(page);
+  }
+});
+
+scenario('folder: Use folder again calls set_watch_folder with no confirmation', async () => {
+  const page = await drop('list', {}, '&status=folder-unavailable');
+  await ready(page);
+  await page.locator('#status-action').click();
+  await page.waitForFunction(() => document.querySelector('#status-text').textContent.startsWith('1 file has'));
+  assert.deepEqual((await calls(page, 'set_watch_folder')).map((c) => c.args), [{ enabled: true }]);
+  assert.equal(await page.locator('dialog').count(), 0);
+  await done(page);
+});
+
+scenario('folder: turning it on asks first (Trash or Recycle Bin), Cancel changes nothing', async () => {
+  const body = (bin) => `Each computer with the folder on holds the same files in the same folders. Changes and deletions there reach your other computers. Anything Wildbloom replaces or removes goes to the ${bin}. Update Wildbloom on all your computers first.`;
+  for (const [os, desktop, bin, turnOnFirst] of [['mac', '', 'Trash', false], ['windows', '', 'Recycle Bin', true], ['linux', 'gnome', 'Trash', false]]) {
+    const page = await drop('empty', { os, desktop });
+    await ready(page);
+    await page.locator('#folder-toggle').click();
+    const dialog = page.locator('dialog[open]');
+    await dialog.waitFor();
+    assert.equal(await text(dialog.locator('h2')), 'Keep a readable copy of every file in ~/Wildbloom?');
+    assert.deepEqual(await dialog.locator('p').allTextContents(), [body(bin)]);
+    assert.deepEqual(await dialog.locator('button').allTextContents(), turnOnFirst ? ['Turn on', 'Cancel'] : ['Cancel', 'Turn on'], os);
+    assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Turn on', 'the default is Turn on');
+    await page.keyboard.press('Escape');
+    await dialog.waitFor({ state: 'detached' });
+    assert.equal((await calls(page, 'set_watch_folder')).length, 0, `${os} cancel`);
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'folder-toggle');
+    await page.locator('#folder-toggle').click();
+    await page.locator('dialog[open] button', { hasText: 'Cancel' }).click();
+    assert.equal((await calls(page, 'set_watch_folder')).length, 0);
+    await page.locator('#folder-toggle').click();
+    await page.locator('dialog[open] button', { hasText: 'Turn on' }).click();
+    await page.waitForFunction(() => document.querySelector('#folder-toggle').textContent === 'Open your Wildbloom folder');
+    assert.deepEqual((await calls(page, 'set_watch_folder')).map((c) => c.args), [{ enabled: true }], os);
+    await done(page);
+  }
+});
+
+scenario('folder: Remove copy while the folder is on', async () => {
+  for (const [os, bin] of [['mac', 'Trash'], ['windows', 'Recycle Bin']]) {
+    const page = await drop('folder', { os });
+    await ready(page);
+    await page.locator('li.row[data-id="f31"] [data-ctl="more"]').click();
+    await menuAction(page, 'Remove');
+    const dialog = page.locator('dialog[open]');
+    await dialog.waitFor();
+    assert.equal(await text(dialog.locator('h2')), 'Remove cv.pdf from Wildbloom?');
+    assert.deepEqual(await dialog.locator('p').allTextContents(), [`cv.pdf is removed from Wildbloom on all your computers. Copies in your Wildbloom folders go to the ${bin}. Its encrypted copies and key are deleted, which can't be undone.`], os);
+    await page.keyboard.press('Escape');
+    await done(page);
+  }
 });
 
 scenario('status line: actions call the right commands', async () => {
@@ -311,6 +426,7 @@ scenario('zone and footer: empty, with files, no online node, folder toggle', as
   assert.equal(await text(page.locator('#footer-online')), 'Online: 0 B of 5 GB used');
   assert.equal(await page.locator('#zone').evaluate((n) => n.classList.contains('empty')), true);
   await page.locator('#folder-toggle').click();
+  await page.locator('dialog[open] button', { hasText: 'Turn on' }).click();
   await page.waitForFunction(() => document.querySelector('#folder-toggle').textContent === 'Open your Wildbloom folder');
   assert.deepEqual((await calls(page, 'set_watch_folder')).map((c) => c.args), [{ enabled: true }]);
   await page.locator('#folder-toggle').click();
@@ -1080,6 +1196,14 @@ scenario('settings: section order, values, actions and sheets', async () => {
   await section.locator('#drop-device-copy').click();
   assert.equal(await page.evaluate(() => window.__stub.clipboard), await page.evaluate(() => window.__stub.npub));
   await section.locator('#drop-folder').check();
+  const folderConfirm = page.locator('dialog.confirm[open]');
+  assert.equal(await text(folderConfirm.locator('h2')), 'Keep a readable copy of every file in ~/Wildbloom?');
+  await folderConfirm.locator('button', { hasText: 'Cancel' }).click();
+  assert.equal(await section.locator('#drop-folder').isChecked(), false, 'Cancel leaves it off');
+  assert.equal((await calls(page, 'set_watch_folder')).length, 0);
+  await section.locator('#drop-folder').check();
+  await folderConfirm.locator('button', { hasText: 'Turn on' }).click();
+  await page.waitForFunction(() => window.__stub.calls.some((c) => c.command === 'set_watch_folder'));
   assert.deepEqual((await calls(page, 'set_watch_folder')).at(-1).args, { enabled: true });
   await page.waitForFunction(() => !document.querySelector('#drop-folder-show').disabled);
   await section.locator('#drop-folder-show').click();
@@ -1216,6 +1340,7 @@ const STATES = [
   'first-run-1', 'first-run-1-error', 'first-run-2', 'first-run-2-waiting', 'first-run-2-error', 'first-run-3', 'first-run-3-used', 'first-run-restore',
   'first-run-keychain&os=mac', 'first-run-keychain&os=windows', 'first-run-keychain&os=linux',
   'good&status=node', 'good&status=keychain', 'good&status=expired', 'good&status=unreachable', 'good&status=full', 'good&status=ends', 'good&status=recovery', 'list&status=folder',
+  'folder', 'folder&status=folder-unavailable', 'folder&status=folder-too-many', 'folder&os=windows', 'confirm-folder-on',
   'share-s5&os=windows', 'share-s5&os=linux&desktop=kde',
 ];
 const SIZES = [[400, 600], [340, 420], [760, 600]];

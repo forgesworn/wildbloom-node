@@ -270,6 +270,10 @@ elements.checkUpdate.addEventListener("click", async () => {
   ui.folder.addEventListener("change", async () => {
     showError("");
     try {
+      if (ui.folder.checked && !(await Drop.confirmFolderOn(ui.folder))) {
+        ui.folder.checked = false;
+        return;
+      }
       await Drop.call("set_watch_folder", { enabled: ui.folder.checked });
     } catch (error) {
       showError(error.message || "Couldn't change the Wildbloom folder.");
