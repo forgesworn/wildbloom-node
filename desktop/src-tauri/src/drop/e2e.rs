@@ -197,6 +197,8 @@ struct TestHost {
     local: Mutex<Option<(Proc, u16)>>,
     shares: Mutex<Vec<ShareState>>,
     settings: Mutex<bool>,
+    /// Files moved to this computer's test trash: (where it was, where it went).
+    trashed: Mutex<Vec<(PathBuf, PathBuf)>>,
 }
 
 impl TestHost {
@@ -274,6 +276,21 @@ impl Host for TestHost {
         Vec::new()
     }
     fn open_folder(&self, _: &Path) {}
+    fn trash(&self, path: &Path) -> std::io::Result<()> {
+        let trash = self.work.join(format!("trash-{}", self.name));
+        std::fs::create_dir_all(&trash)?;
+        let mut trashed = self.trashed.lock().unwrap();
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let to = trash.join(format!("{} {name}", trashed.len()));
+        std::fs::rename(path, &to)?;
+        trashed.push((path.to_path_buf(), to));
+        Ok(())
+    }
+    fn open_path(&self, _: &Path) {}
+    fn reveal_path(&self, _: &Path) {}
 }
 
 /// The engine for one computer, running its workers on `rt`.
@@ -542,6 +559,7 @@ fn test_host(bin: &Path, work: &Path, name: &'static str) -> Arc<TestHost> {
         local: Mutex::new(None),
         shares: Mutex::new(Vec::new()),
         settings: Mutex::new(false),
+        trashed: Mutex::new(Vec::new()),
     })
 }
 

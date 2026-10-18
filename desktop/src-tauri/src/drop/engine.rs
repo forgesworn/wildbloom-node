@@ -73,6 +73,12 @@ pub trait Host: Send + Sync + 'static {
     fn pick_files(&self) -> Vec<PathBuf>;
     /// Reveal a folder in the file manager.
     fn open_folder(&self, path: &Path);
+    /// Moves a file to the system Trash or Recycle Bin.  Never deletes it.
+    fn trash(&self, path: &Path) -> std::io::Result<()>;
+    /// Opens a file with the system's default app.
+    fn open_path(&self, path: &Path);
+    /// Shows a file selected in Finder, Explorer or the file manager.
+    fn reveal_path(&self, path: &Path);
 }
 
 /// Configuration that differs between the app and the tests.
