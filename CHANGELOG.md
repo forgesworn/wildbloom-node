@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.7 preview - Unreleased
+
+- Check the key list for changes from the owner's other computers every 10
+  seconds instead of every 2 minutes, so an add, edit or removal on one
+  computer reaches the others in seconds rather than minutes. A check that
+  finds nothing new is one signed listing request to the online node.
+
 ## 0.3.6 preview - 2026-10-18
 
 - Add Wildbloom Drop to the desktop app. A dropped file is encrypted on this
