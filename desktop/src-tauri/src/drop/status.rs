@@ -206,6 +206,8 @@ mod tests {
             progress: None,
             shared_until: None,
             sharing_ended: None,
+            not_kept: None,
+            folder: None,
             in_watch_folder: false,
         }
     }

@@ -290,7 +290,7 @@ pub async fn add_paths(
         dropped.extend(late);
         refused = still;
     }
-    let mut result = engine(&slot)?.add_paths(dropped, None).await?;
+    let mut result = engine(&slot)?.add_paths(dropped).await?;
     for path in refused {
         result.refused.push(Refused {
             name: wildbloom_envelope::sanitise_name(
@@ -434,7 +434,7 @@ pub async fn restore(
 
 #[tauri::command]
 pub async fn set_watch_folder(slot: State<'_, DropSlot>, enabled: bool) -> CommandResult<()> {
-    engine(&slot)?.set_watch_folder(enabled)
+    engine(&slot)?.set_watch_folder(enabled).await
 }
 
 #[tauri::command]

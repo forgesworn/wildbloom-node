@@ -645,10 +645,10 @@ async fn drop_end_to_end() {
     let plain: Vec<u8> = (0..3_000_000u32).map(|i| (i * 7 + 3) as u8).collect();
     std::fs::write(&source, &plain).unwrap();
     let source_mtime = std::fs::metadata(&source).unwrap().modified().unwrap();
-    let added = engine.add_paths(vec![source.clone()], None).await.unwrap();
+    let added = engine.add_paths(vec![source.clone()]).await.unwrap();
     assert_eq!(added.added.len(), 1, "{added:?}");
     let id = added.added[0].clone();
-    let dup = engine.add_paths(vec![source.clone()], None).await.unwrap();
+    let dup = engine.add_paths(vec![source.clone()]).await.unwrap();
     assert_eq!(dup.duplicates.len(), 1, "same plaintext is a duplicate");
     let check_engine = engine.clone();
     until("2 copies", 60, || {
@@ -905,7 +905,7 @@ async fn drop_end_to_end() {
     report("wrong words ended the link; closing the sheet deleted the unsent copy");
 
     // ------------------------------------------------- watched folder (32)
-    engine.set_watch_folder(true).unwrap();
+    engine.set_watch_folder(true).await.unwrap();
     std::fs::write(watch_dir.join("ignored.part"), b"partial").unwrap();
     let watched = watch_dir.join("scan.bin");
     let rows_before = engine.rows().len();
@@ -963,19 +963,23 @@ async fn drop_end_to_end() {
         None
     );
     assert_eq!(file_key_entries(&store), 1, "its keychain entry is gone");
-    assert_eq!(super::engine::sha256_file(&watched).unwrap(), watched_sha);
-    report("remove deleted both copies and the key; the original is untouched");
+    // With the folder on, Remove moves its file there to the Trash: never
+    // deleted, and not taken in again.
+    assert!(!watched.exists(), "the folder copy left the folder");
+    let trashed = host.trashed.lock().unwrap().clone();
+    assert_eq!(trashed.len(), 1, "{trashed:?}");
+    assert_eq!(trashed[0].0, watched);
+    assert_eq!(
+        super::engine::sha256_file(&trashed[0].1).unwrap(),
+        watched_sha
+    );
+    report("remove deleted both copies and the key; the folder copy went to the Trash");
 
     // Remove while still encrypting (M3): no key and no outbox file survive.
     let big = originals.join("large scan.bin");
     std::fs::write(&big, vec![7u8; 60_000_000]).unwrap();
     let keys_before = file_key_entries(&store);
-    let early = engine
-        .add_paths(vec![big.clone()], None)
-        .await
-        .unwrap()
-        .added[0]
-        .clone();
+    let early = engine.add_paths(vec![big.clone()]).await.unwrap().added[0].clone();
     engine.remove(&early).await.unwrap();
     tokio::time::sleep(Duration::from_secs(4)).await;
     assert_eq!(
@@ -1001,7 +1005,7 @@ async fn drop_end_to_end() {
         (now != sealed_before).then_some(())
     })
     .await;
-    engine.set_watch_folder(false).unwrap();
+    engine.set_watch_folder(false).await.unwrap();
     // Only the current key list is kept on each node.
     let identity = engine.identity().unwrap();
     let recovery_keys = identity.recovery.identity().keys().clone();
@@ -1129,7 +1133,7 @@ impl Drop for Computer {
 
 /// Adds `path` through the window and waits for two copies.
 async fn add_and_wait(engine: &Arc<Engine>, path: PathBuf) -> String {
-    let added = engine.add_paths(vec![path], None).await.unwrap();
+    let added = engine.add_paths(vec![path]).await.unwrap();
     assert_eq!(added.added.len(), 1, "{added:?}");
     let id = added.added[0].clone();
     let check = engine.clone();
@@ -1191,7 +1195,7 @@ async fn drop_two_computers_in_step() {
     let (a, a_host, _a_store, recovery_key) =
         approved_engine(&svc, "a", &svc.work_path.join("a-home/Wildbloom"), LIMIT).await;
     let (too_big, _) = write("too big.bin", 5, 2 * 1024 * 1024);
-    let refused = a.add_paths(vec![too_big], None).await.unwrap();
+    let refused = a.add_paths(vec![too_big]).await.unwrap();
     assert_eq!(refused.refused.len(), 1);
     assert_eq!(refused.refused[0].reason, "too_big");
     assert!(refused.refused[0].limit_bytes.unwrap() < LIMIT);
@@ -1478,7 +1482,7 @@ async fn drop_share_to_the_get_page() {
     let source = svc.work_path.join("Quarterly report.pdf");
     let plain: Vec<u8> = (0..1_500_000u32).map(|i| (i * 13 + 5) as u8).collect();
     std::fs::write(&source, &plain).unwrap();
-    let id = engine.add_paths(vec![source], None).await.unwrap().added[0].clone();
+    let id = engine.add_paths(vec![source]).await.unwrap().added[0].clone();
     let check_engine = engine.clone();
     until("2 copies", 60, || {
         row(&check_engine, &id).filter(|r| r.state == "two_copies")

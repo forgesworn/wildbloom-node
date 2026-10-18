@@ -1477,7 +1477,7 @@ fn main() {
             if let Some(engine) = drop_engine(app) {
                 show_window(app, DROP_WINDOW);
                 tauri::async_runtime::spawn(async move {
-                    let _ = engine.add_paths(paths, None).await;
+                    let _ = engine.add_paths(paths).await;
                 });
             }
         }

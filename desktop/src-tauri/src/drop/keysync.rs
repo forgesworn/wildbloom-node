@@ -461,13 +461,22 @@ impl Engine {
             return;
         }
         let mut removed = false;
+        // A row linked to a file in a folder that is not there now waits:
+        // its file must go to the Trash, not be taken in again later.  The
+        // tombstone stays in the list, so reconcile never re-adds it.
+        let folder_paused = self.mirror_on() && self.folder_state() != "on";
         for stone in list.tombstones() {
             let id = stone.id.to_string();
-            if matches!(self.index.file(&id), Ok(Some(_)))
-                && self
-                    .remove_row(&id, RemoveHow::Remote { at: stone.at })
-                    .await
-                    .is_ok()
+            let Ok(Some(row)) = self.index.file(&id) else {
+                continue;
+            };
+            if folder_paused && row.watch_path.is_some() && row.local != local::NOT_KEPT {
+                continue;
+            }
+            if self
+                .remove_row(&id, RemoveHow::Remote { at: stone.at })
+                .await
+                .is_ok()
             {
                 removed = true;
             }
@@ -722,7 +731,7 @@ impl Engine {
 
 /// The path a row's entry carries: its frozen `path`, or its name for a row
 /// from before the column existed.
-fn entry_path(file: &FileRecord) -> String {
+pub(crate) fn entry_path(file: &FileRecord) -> String {
     if file.path.is_empty() {
         file.name.clone()
     } else {
