@@ -1252,6 +1252,7 @@ fn drop_config(app: &AppHandle) -> Result<drop::engine::EngineConfig, String> {
         signer_timeout: Duration::from_secs(120),
         computer_name: drop::commands::computer_name(),
         watch_interval: Duration::from_secs(1),
+        online_blob_limit: drop::engine::ONLINE_BLOB_LIMIT,
     })
 }
 

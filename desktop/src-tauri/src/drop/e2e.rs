@@ -288,6 +288,7 @@ fn engine_for(
         signer_timeout: Duration::from_secs(30),
         computer_name: "Test computer".into(),
         watch_interval: Duration::from_millis(500),
+        online_blob_limit: super::engine::ONLINE_BLOB_LIMIT,
     };
     let store = store.clone();
     let engine = Engine::new(
