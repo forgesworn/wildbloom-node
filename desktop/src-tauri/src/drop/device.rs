@@ -39,7 +39,7 @@
 //! below the curve order (probability about 2^-128);
 //! [`RecoverySecret::generate`] redraws in that case.
 //!
-//! # Key list format, version 1
+//! # Key list format, versions 1 and 2
 //!
 //! The plaintext is canonical JSON (no whitespace, keys in this order, minimal
 //! escaping, entries sorted by strictly ascending `id`):
@@ -52,6 +52,27 @@
 //!  "removed":[{"id":"<32 hex>","at":<unix seconds>}, …]}
 //! ```
 //!
+//! Version 2 (`"v":"wildbloom-drop-keys/2"`) adds four fields to each entry,
+//! after `added` and in this order:
+//!
+//! ```text
+//!   …,"added":<unix seconds>,"path":"<relative path>","prev":"<32 hex or empty>",
+//!   "plain":"<64 hex or empty>","from":"<computer name or empty>"}
+//! ```
+//!
+//! - `path`: the folder path relative to the Wildbloom folder, components
+//!   joined with `/` (see `path::valid_path`), or exactly `name`.
+//! - `prev`: the id of the version this entry replaces; never the entry's own.
+//! - `plain`: the plaintext SHA-256.
+//! - `from`: the computer that added it: at most 64 UTF-16 units, NFC, no
+//!   control characters, `"` or `\`.
+//!
+//! A version 1 entry reads as `path = name` with the other three empty.  The
+//! encoder writes version 1, byte for byte as before, while every entry has
+//! that shape, and version 2 otherwise; so a version 2 document whose entries
+//! all have the version 1 shape is not canonical and is refused.  Builds that
+//! only read version 1 keep working until an entry with a real path is added.
+//!
 //! `removed` is sorted by strictly ascending `id` too, and no id may appear in
 //! both arrays.  `seq` rises by one on every seal, so a node serving an older
 //! copy is caught.
@@ -59,8 +80,8 @@
 //! with private metadata `wildbloom-drop-keys.json` / `application/json`.  The
 //! decoder checks `v` first and refuses any other value with
 //! [`KeyListError::UnsupportedVersion`], then requires `seq` and re-encodes and
-//! compares so that only the canonical form is accepted.  Local paths are
-//! deliberately absent.
+//! compares so that only the canonical form is accepted.  Absolute local paths
+//! are deliberately absent.
 
 use super::FileId;
 use super::keychain::{DropKeychain, KeychainError, SecretStore};
@@ -80,8 +101,13 @@ pub const RECOVERY_IDENTITY_INFO: &[u8] = b"wildbloom-drop/recovery-identity/sec
 /// HKDF info for the key list vault key.
 pub const KEY_LIST_VAULT_INFO: &[u8] = b"wildbloom-drop/key-list-vault/v1";
 
-/// The key list's version tag.
+/// The key list's version tag while every entry has the version 1 shape.
 pub const KEY_LIST_VERSION: &str = "wildbloom-drop-keys/1";
+/// The key list's version tag once any entry carries a path, `prev`,
+/// `plain` or `from`.
+pub const KEY_LIST_VERSION_2: &str = "wildbloom-drop-keys/2";
+/// The longest computer name in an entry, in UTF-16 code units.
+pub const MAX_FROM_UTF16: usize = 64;
 /// The private name inside the key list envelope.
 pub const KEY_LIST_NAME: &str = "wildbloom-drop-keys.json";
 /// The private media type inside the key list envelope.
@@ -398,6 +424,24 @@ pub struct KeyListEntry {
     pub bytes: u64,
     /// When the file was added, in Unix seconds.
     pub added: u64,
+    /// The relative folder path; equal to `name` for a version 1 entry.
+    pub path: String,
+    /// The version this entry replaces, for an edit.
+    pub prev: Option<FileId>,
+    /// The plaintext SHA-256, when known.
+    pub plain: Option<[u8; 32]>,
+    /// The computer that added it; empty when unknown.
+    pub from: String,
+}
+
+impl KeyListEntry {
+    /// Whether the entry can be written in the version 1 format.
+    pub fn is_v1_shape(&self) -> bool {
+        self.path == self.name
+            && self.prev.is_none()
+            && self.plain.is_none()
+            && self.from.is_empty()
+    }
 }
 
 /// A removed file: its id and when it was removed, in Unix seconds.  Kept so
@@ -453,10 +497,10 @@ impl From<wildbloom_envelope::Error> for KeyListError {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct WireList {
+struct WireList<E> {
     v: String,
     seq: u64,
-    files: Vec<WireEntry>,
+    files: Vec<E>,
     removed: Vec<WireTombstone>,
 }
 
@@ -484,6 +528,104 @@ struct WireEntry {
 impl Drop for WireEntry {
     fn drop(&mut self) {
         self.key.zeroize();
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireEntryV2 {
+    id: String,
+    sha256: String,
+    size: u64,
+    key: String,
+    name: String,
+    #[serde(rename = "type")]
+    media_type: String,
+    bytes: u64,
+    added: u64,
+    path: String,
+    prev: String,
+    plain: String,
+    from: String,
+}
+
+impl Drop for WireEntryV2 {
+    fn drop(&mut self) {
+        self.key.zeroize();
+    }
+}
+
+impl WireEntry {
+    fn from_entry(e: &KeyListEntry) -> Self {
+        Self {
+            id: e.id.to_string(),
+            sha256: super::hex_lower(&e.sha256),
+            size: e.size,
+            key: e.key.to_wbk1().to_string(),
+            name: e.name.clone(),
+            media_type: e.media_type.clone(),
+            bytes: e.bytes,
+            added: e.added,
+        }
+    }
+
+    fn to_entry(&self) -> Result<KeyListEntry, KeyListError> {
+        Ok(KeyListEntry {
+            id: FileId::parse(&self.id).ok_or(KeyListError::Malformed("id"))?,
+            sha256: super::parse_sha256(&self.sha256).ok_or(KeyListError::Malformed("sha256"))?,
+            size: self.size,
+            key: InputKey::parse_wbk1(&self.key).map_err(|_| KeyListError::Malformed("key"))?,
+            name: self.name.clone(),
+            media_type: self.media_type.clone(),
+            bytes: self.bytes,
+            added: self.added,
+            path: self.name.clone(),
+            prev: None,
+            plain: None,
+            from: String::new(),
+        })
+    }
+}
+
+impl WireEntryV2 {
+    fn from_entry(e: &KeyListEntry) -> Self {
+        Self {
+            id: e.id.to_string(),
+            sha256: super::hex_lower(&e.sha256),
+            size: e.size,
+            key: e.key.to_wbk1().to_string(),
+            name: e.name.clone(),
+            media_type: e.media_type.clone(),
+            bytes: e.bytes,
+            added: e.added,
+            path: e.path.clone(),
+            prev: e.prev.map(|p| p.to_string()).unwrap_or_default(),
+            plain: e.plain.map(|p| super::hex_lower(&p)).unwrap_or_default(),
+            from: e.from.clone(),
+        }
+    }
+
+    fn to_entry(&self) -> Result<KeyListEntry, KeyListError> {
+        Ok(KeyListEntry {
+            id: FileId::parse(&self.id).ok_or(KeyListError::Malformed("id"))?,
+            sha256: super::parse_sha256(&self.sha256).ok_or(KeyListError::Malformed("sha256"))?,
+            size: self.size,
+            key: InputKey::parse_wbk1(&self.key).map_err(|_| KeyListError::Malformed("key"))?,
+            name: self.name.clone(),
+            media_type: self.media_type.clone(),
+            bytes: self.bytes,
+            added: self.added,
+            path: self.path.clone(),
+            prev: match self.prev.as_str() {
+                "" => None,
+                text => Some(FileId::parse(text).ok_or(KeyListError::Malformed("prev"))?),
+            },
+            plain: match self.plain.as_str() {
+                "" => None,
+                text => Some(super::parse_sha256(text).ok_or(KeyListError::Malformed("plain"))?),
+            },
+            from: self.from.clone(),
+        })
     }
 }
 
@@ -569,42 +711,60 @@ impl KeyList {
             .map(|at| self.entries.remove(at)))
     }
 
-    /// The canonical version-1 plaintext at `seq`.  Contains every key, so it
-    /// is zeroised on drop.
+    /// Whether both lists hold the same entries and tombstones, whatever
+    /// their `seq`.  The derived `PartialEq` compares `seq` too.
+    pub fn same_content(&self, other: &Self) -> bool {
+        self.entries == other.entries && self.removed == other.removed
+    }
+
+    /// The exact buffer size that holds the canonical plaintext without
+    /// reallocating: an entry is under 1,700 bytes with maximal name and type,
+    /// plus its path and computer name (neither is escaped: a path cannot hold
+    /// `"`, `\` or a control, and `from` is checked for them) and under 200
+    /// bytes for the format 2 field names, `prev` and `plain`; a tombstone is
+    /// under 64.
+    fn canonical_capacity(&self) -> usize {
+        128 + self
+            .entries
+            .iter()
+            .map(|e| 1_700 + e.path.len() + e.from.len() + 200)
+            .sum::<usize>()
+            + 64 * self.removed.len()
+    }
+
+    /// The canonical plaintext at `seq`: version 1 while every entry has that
+    /// shape, version 2 otherwise.  Contains every key, so it is zeroised on
+    /// drop.
     fn canonical_json_at(&self, seq: u64) -> Zeroizing<Vec<u8>> {
-        let wire = WireList {
-            v: KEY_LIST_VERSION.to_string(),
-            seq,
-            files: self
-                .entries
-                .iter()
-                .map(|e| WireEntry {
-                    id: e.id.to_string(),
-                    sha256: super::hex_lower(&e.sha256),
-                    size: e.size,
-                    key: e.key.to_wbk1().to_string(),
-                    name: e.name.clone(),
-                    media_type: e.media_type.clone(),
-                    bytes: e.bytes,
-                    added: e.added,
-                })
-                .collect(),
-            removed: self
-                .removed
+        let removed = || {
+            self.removed
                 .iter()
                 .map(|t| WireTombstone {
                     id: t.id.to_string(),
                     at: t.at,
                 })
-                .collect(),
+                .collect()
         };
-        // Reserve generously so the buffer never reallocates and leaves an
-        // unzeroised copy: an entry is under 1,700 bytes even with maximal
-        // name and type, and a tombstone under 64.
-        let mut out = Zeroizing::new(Vec::with_capacity(
-            128 + wire.files.len() * 1_700 + wire.removed.len() * 64,
-        ));
-        serde_json::to_writer(&mut *out, &wire).expect("serialising plain data cannot fail");
+        // Reserved up front so the buffer never reallocates and leaves an
+        // unzeroised copy behind.
+        let mut out = Zeroizing::new(Vec::with_capacity(self.canonical_capacity()));
+        if self.entries.iter().all(KeyListEntry::is_v1_shape) {
+            let wire = WireList {
+                v: KEY_LIST_VERSION.to_string(),
+                seq,
+                files: self.entries.iter().map(WireEntry::from_entry).collect(),
+                removed: removed(),
+            };
+            serde_json::to_writer(&mut *out, &wire).expect("serialising plain data cannot fail");
+        } else {
+            let wire = WireList {
+                v: KEY_LIST_VERSION_2.to_string(),
+                seq,
+                files: self.entries.iter().map(WireEntryV2::from_entry).collect(),
+                removed: removed(),
+            };
+            serde_json::to_writer(&mut *out, &wire).expect("serialising plain data cannot fail");
+        }
         out
     }
 
@@ -613,31 +773,30 @@ impl KeyList {
         self.canonical_json_at(self.seq)
     }
 
-    /// Strict decode of version-1 plaintext.
+    /// Strict decode of version 1 or version 2 plaintext.
     pub fn from_canonical_json(bytes: &[u8]) -> Result<Self, KeyListError> {
         let version: VersionOnly =
             serde_json::from_slice(bytes).map_err(|_| KeyListError::Malformed("shape"))?;
-        if version.v != KEY_LIST_VERSION {
-            return Err(KeyListError::UnsupportedVersion);
-        }
-        let wire: WireList =
-            serde_json::from_slice(bytes).map_err(|_| KeyListError::Malformed("shape"))?;
-        if wire.seq == 0 || wire.seq > MAX_SAFE_INTEGER {
+        let shape = |_| KeyListError::Malformed("shape");
+        let (seq, decoded, wire_removed) = match version.v.as_str() {
+            KEY_LIST_VERSION => {
+                let wire: WireList<WireEntry> = serde_json::from_slice(bytes).map_err(shape)?;
+                let files: Vec<_> = wire.files.iter().map(WireEntry::to_entry).collect();
+                (wire.seq, files, wire.removed)
+            }
+            KEY_LIST_VERSION_2 => {
+                let wire: WireList<WireEntryV2> = serde_json::from_slice(bytes).map_err(shape)?;
+                let files: Vec<_> = wire.files.iter().map(WireEntryV2::to_entry).collect();
+                (wire.seq, files, wire.removed)
+            }
+            _ => return Err(KeyListError::UnsupportedVersion),
+        };
+        if seq == 0 || seq > MAX_SAFE_INTEGER {
             return Err(KeyListError::Malformed("seq"));
         }
-        let mut entries = Vec::with_capacity(wire.files.len());
-        for file in &wire.files {
-            let entry = KeyListEntry {
-                id: FileId::parse(&file.id).ok_or(KeyListError::Malformed("id"))?,
-                sha256: super::parse_sha256(&file.sha256)
-                    .ok_or(KeyListError::Malformed("sha256"))?,
-                size: file.size,
-                key: InputKey::parse_wbk1(&file.key).map_err(|_| KeyListError::Malformed("key"))?,
-                name: file.name.clone(),
-                media_type: file.media_type.clone(),
-                bytes: file.bytes,
-                added: file.added,
-            };
+        let mut entries = Vec::with_capacity(decoded.len());
+        for entry in decoded {
+            let entry = entry?;
             check_entry(&entry)?;
             if let Some(previous) = entries.last().map(|e: &KeyListEntry| e.id) {
                 if previous == entry.id {
@@ -649,8 +808,8 @@ impl KeyList {
             }
             entries.push(entry);
         }
-        let mut removed: Vec<Tombstone> = Vec::with_capacity(wire.removed.len());
-        for stone in &wire.removed {
+        let mut removed: Vec<Tombstone> = Vec::with_capacity(wire_removed.len());
+        for stone in &wire_removed {
             let id = FileId::parse(&stone.id).ok_or(KeyListError::Malformed("removed"))?;
             if stone.at == 0
                 || stone.at > MAX_SAFE_INTEGER
@@ -662,7 +821,7 @@ impl KeyList {
             removed.push(Tombstone { id, at: stone.at });
         }
         let list = Self {
-            seq: wire.seq,
+            seq,
             entries,
             removed,
         };
@@ -815,7 +974,27 @@ fn check_entry(entry: &KeyListEntry) -> Result<(), KeyListError> {
     if entry.added == 0 || entry.added > MAX_SAFE_INTEGER {
         return Err(KeyListError::Malformed("added"));
     }
+    if entry.path != entry.name && !super::path::valid_path(&entry.path) {
+        return Err(KeyListError::Malformed("path"));
+    }
+    if entry.prev == Some(entry.id) {
+        return Err(KeyListError::Malformed("prev"));
+    }
+    if !valid_from(&entry.from) {
+        return Err(KeyListError::Malformed("from"));
+    }
     Ok(())
+}
+
+/// A computer name as an entry may carry it: empty, or at most 64 UTF-16
+/// units of NFC text with no control character, `"` or `\`.
+fn valid_from(from: &str) -> bool {
+    use unicode_normalization::UnicodeNormalization as _;
+    from.encode_utf16().count() <= MAX_FROM_UTF16
+        && !from
+            .chars()
+            .any(|c| c.is_control() || c == '"' || c == '\\')
+        && from.nfc().eq(from.chars())
 }
 
 #[cfg(test)]
@@ -838,6 +1017,10 @@ mod tests {
             media_type: "text/plain".into(),
             bytes: 43,
             added: 1_900_000_000,
+            path: format!("file-{id}.txt"),
+            prev: None,
+            plain: None,
+            from: String::new(),
         }
     }
 
@@ -1353,7 +1536,7 @@ mod tests {
 
     #[test]
     fn other_versions_are_refused_before_anything_else() {
-        for v in ["wildbloom-drop-keys/2", "wildbloom-drop-keys/0", ""] {
+        for v in ["wildbloom-drop-keys/3", "wildbloom-drop-keys/0", ""] {
             let json = format!(r#"{{"v":"{v}","files":[],"future":true}}"#);
             assert_eq!(
                 KeyList::from_canonical_json(json.as_bytes()),
@@ -1436,6 +1619,251 @@ mod tests {
                 "{json}"
             );
         }
+    }
+
+    /// A version 2 entry: a folder path, an earlier version, the plaintext
+    /// hash and the computer that added it.
+    fn entry_v2(id: u8, key: u8) -> KeyListEntry {
+        KeyListEntry {
+            path: format!("Docs/Reports/file-{id}.txt"),
+            prev: Some(FileId::from_bytes([0xee; 16])),
+            plain: Some([0xab; 32]),
+            from: "Desk Mac".into(),
+            ..entry(id, key)
+        }
+    }
+
+    #[test]
+    fn version_1_reads_as_version_2_entries_and_re_encodes_byte_for_byte() {
+        let json = list().to_canonical_json();
+        assert!(json.starts_with(br#"{"v":"wildbloom-drop-keys/1","#));
+        let first = KeyList::from_canonical_json(&json).unwrap();
+        let second = KeyList::from_canonical_json(&json).unwrap();
+        assert_eq!(first, second);
+        for e in first.entries() {
+            assert_eq!(e.path, e.name);
+            assert_eq!((e.prev, e.plain, e.from.as_str()), (None, None, ""));
+            assert!(e.is_v1_shape());
+        }
+        assert_eq!(first.to_canonical_json().as_slice(), json.as_slice());
+        // An old build's tombstones-only list stays version 1 too.
+        let mut gone = list();
+        gone.remove(&FileId::from_bytes([1; 16]), 1_900_000_001)
+            .unwrap();
+        let json = gone.to_canonical_json();
+        assert!(json.starts_with(br#"{"v":"wildbloom-drop-keys/1","#));
+        assert_eq!(KeyList::from_canonical_json(&json).unwrap(), gone);
+    }
+
+    #[test]
+    fn version_2_round_trips_in_its_exact_canonical_form() {
+        let mut v2 = list();
+        v2.insert(entry_v2(3, 0x30)).unwrap();
+        let json = v2.to_canonical_json();
+        let text = std::str::from_utf8(&json).unwrap();
+        let k1 = counting(0x10).to_wbk1();
+        let k3 = counting(0x30).to_wbk1();
+        let expected_start = format!(
+            concat!(
+                r#"{{"v":"wildbloom-drop-keys/2","seq":7,"files":["#,
+                r#"{{"id":"{id1}","sha256":"{h1}","size":65608,"key":"{k1}","name":"file-1.txt","type":"text/plain","bytes":43,"added":1900000000,"path":"file-1.txt","prev":"","plain":"","from":""}},"#,
+            ),
+            id1 = "01".repeat(16),
+            h1 = "01".repeat(32),
+            k1 = k1.as_str(),
+        );
+        let expected_end = format!(
+            concat!(
+                r#"{{"id":"{id3}","sha256":"{h3}","size":65608,"key":"{k3}","name":"file-3.txt","type":"text/plain","bytes":43,"added":1900000000,"path":"Docs/Reports/file-3.txt","prev":"{prev}","plain":"{plain}","from":"Desk Mac"}}"#,
+                r#"],"removed":[]}}"#
+            ),
+            id3 = "03".repeat(16),
+            h3 = "03".repeat(32),
+            k3 = k3.as_str(),
+            prev = "ee".repeat(16),
+            plain = "ab".repeat(32),
+        );
+        assert!(text.starts_with(&expected_start), "{text}");
+        assert!(text.ends_with(&expected_end), "{text}");
+        assert_eq!(KeyList::from_canonical_json(&json).unwrap(), v2);
+
+        // Sealed and opened: the same entries.
+        let recovery = RecoverySecret::generate().unwrap();
+        let sealed = v2.seal(&recovery).unwrap();
+        assert_eq!(KeyList::open(&recovery, &sealed).unwrap(), v2);
+
+        // A version 2 document whose entries all have the version 1 shape is
+        // not canonical: that list is written as version 1.
+        let v1 = String::from_utf8(list().to_canonical_json().to_vec()).unwrap();
+        let mut as_v2 = v1.replace("wildbloom-drop-keys/1", "wildbloom-drop-keys/2");
+        for id in [1, 2] {
+            as_v2 = as_v2.replacen(
+                r#""added":1900000000}"#,
+                &format!(
+                    r#""added":1900000000,"path":"file-{id}.txt","prev":"","plain":"","from":""}}"#
+                ),
+                1,
+            );
+        }
+        assert!(matches!(
+            KeyList::from_canonical_json(as_v2.as_bytes()),
+            Err(KeyListError::Malformed(_))
+        ));
+        // A version 1 document cannot carry version 2 fields.
+        let smuggled = v1.replacen(
+            r#""added":1900000000}"#,
+            r#""added":1900000000,"path":"x/y.txt","prev":"","plain":"","from":""}"#,
+            1,
+        );
+        assert_eq!(
+            KeyList::from_canonical_json(smuggled.as_bytes()),
+            Err(KeyListError::Malformed("shape"))
+        );
+    }
+
+    #[test]
+    fn entry_paths_computer_names_and_prev_are_checked() {
+        let with = |f: &dyn Fn(&mut KeyListEntry)| {
+            let mut e = entry_v2(3, 0x30);
+            f(&mut e);
+            KeyList::new().insert(e)
+        };
+        let seventeen = vec!["d"; 17].join("/") + "/x.txt";
+        let seventeen = &seventeen[2..];
+        for path in ["Docs/été.txt", "a/b/c.txt", seventeen] {
+            assert_eq!(with(&|e| e.path = path.into()), Ok(()), "{path}");
+        }
+        let eighteen = vec!["d"; 18].join("/");
+        let long = format!("{}/{}", "a".repeat(110), "b".repeat(111));
+        for path in [
+            "..",
+            "/a.txt",
+            "a//b.txt",
+            "C:\\x",
+            "CON.txt",
+            "lpt1",
+            "Docs/COM¹.md",
+            "a.",
+            "a ",
+            ".hidden",
+            "a\u{1}b",
+            "e\u{301}te.txt",
+            eighteen.as_str(),
+            long.as_str(),
+            "",
+        ] {
+            assert_eq!(
+                with(&|e| e.path = path.into()),
+                Err(KeyListError::Malformed("path")),
+                "{path:?}"
+            );
+        }
+        // A legacy entry's path is its name, even one Windows cannot write.
+        assert_eq!(
+            with(&|e| {
+                e.name = "CON.txt".into();
+                e.path = "CON.txt".into();
+            }),
+            Ok(())
+        );
+        for from in [
+            "x".repeat(65),
+            "a\u{7}b".into(),
+            "a\u{85}b".into(),
+            "a\"b".into(),
+            "a\\b".into(),
+            "e\u{301}".into(),
+        ] {
+            assert_eq!(
+                with(&|e| e.from = from.clone()),
+                Err(KeyListError::Malformed("from")),
+                "{from:?}"
+            );
+        }
+        assert_eq!(with(&|e| e.from = "é".repeat(64)), Ok(()));
+        assert_eq!(
+            with(&|e| e.prev = Some(e.id)),
+            Err(KeyListError::Malformed("prev"))
+        );
+        // Bad hex in prev or plain is refused on decode.
+        let mut list = KeyList::new();
+        list.insert(entry_v2(3, 0x30)).unwrap();
+        list.seq = 1;
+        let good = String::from_utf8(list.to_canonical_json().to_vec()).unwrap();
+        for (from, to, field) in [
+            ("ee".repeat(16), "EE".repeat(16), "prev"),
+            ("ab".repeat(32), "ab".repeat(31), "plain"),
+        ] {
+            let bad = good.replacen(&from, &to, 1);
+            assert_eq!(
+                KeyList::from_canonical_json(bad.as_bytes()),
+                Err(KeyListError::Malformed(field)),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn same_content_ignores_seq() {
+        let a = list();
+        let mut b = list();
+        b.seq = 99;
+        assert_ne!(a, b, "the derived comparison includes seq");
+        assert!(a.same_content(&b));
+        b.remove(&FileId::from_bytes([1; 16]), 1_900_000_001)
+            .unwrap();
+        assert!(!a.same_content(&b));
+        let mut c = list();
+        c.remove(&FileId::from_bytes([9; 16]), 1_900_000_001)
+            .unwrap();
+        assert!(!a.same_content(&c), "a tombstone alone is content");
+    }
+
+    #[test]
+    fn identical_copies_at_one_seq_merge_without_conflict() {
+        let mut a = list();
+        a.insert(entry_v2(3, 0x30)).unwrap();
+        a.remove(&FileId::from_bytes([9; 16]), 1_900_000_001)
+            .unwrap();
+        let b = a.clone();
+        let merged = KeyList::merge(vec![a.clone(), b]).unwrap();
+        assert_eq!(merged, a);
+        // A copy differing only in a version 2 field at that seq does conflict.
+        let mut c = a.clone();
+        c.entries[2].from = "Other".into();
+        assert_eq!(KeyList::merge(vec![a, c]), Err(KeyListError::Conflict(7)));
+    }
+
+    #[test]
+    fn the_reserve_holds_maximal_entries_without_reallocating() {
+        let mut list = KeyList::new();
+        for id in 1..=3u8 {
+            let mut e = entry_v2(id, id);
+            e.name = "€".repeat(180);
+            e.media_type = "€".repeat(255);
+            e.path = format!("{}/{}", "€".repeat(109), "€".repeat(110 - usize::from(id)));
+            e.from = "€".repeat(64);
+            e.size = MAX_SAFE_INTEGER;
+            e.bytes = MAX_SAFE_INTEGER - 1;
+            e.added = MAX_SAFE_INTEGER;
+            list.insert(e).unwrap();
+        }
+        // A media type may hold `"`, which serialises as two bytes.
+        let mut quoted = entry(4, 4);
+        quoted.media_type = "\"".repeat(255);
+        list.insert(quoted).unwrap();
+        list.remove(&FileId::from_bytes([9; 16]), MAX_SAFE_INTEGER)
+            .unwrap();
+        list.seq = MAX_SAFE_INTEGER - 1;
+        let json = list.canonical_json_at(MAX_SAFE_INTEGER);
+        assert_eq!(
+            json.capacity(),
+            list.canonical_capacity(),
+            "no reallocation"
+        );
+        assert!(json.len() <= json.capacity());
+        let decoded = KeyList::from_canonical_json(&json).unwrap();
+        assert_eq!(decoded.entries(), list.entries());
     }
 
     #[test]

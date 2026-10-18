@@ -97,6 +97,10 @@ impl Engine {
                 media_type,
                 bytes: file.bytes,
                 added: file.added,
+                path: file.name.clone(),
+                prev: None,
+                plain: None,
+                from: String::new(),
             });
         }
         Ok(())

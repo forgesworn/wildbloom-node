@@ -1142,6 +1142,10 @@ impl Engine {
                     media_type: encrypted.sealed.metadata.media_type.clone(),
                     bytes: encrypted.sealed.metadata.size,
                     added: record.added,
+                    path: encrypted.sealed.metadata.name.clone(),
+                    prev: None,
+                    plain: None,
+                    from: String::new(),
                 });
             }
         }
