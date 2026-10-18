@@ -1513,7 +1513,8 @@ fn trashed_bytes(host: &TestHost) -> Vec<Vec<u8>> {
 /// folders (spec 12, cases a to k): adds, edits and deletes reach the other
 /// computer, replaced and removed files go to the Trash, concurrent changes
 /// keep both versions, nothing happens while a folder is unavailable, and a
-/// restore with the folder on rebuilds the same tree.
+/// restore with the folder on rebuilds the same tree.  Case l, a rename that
+/// only changes case, runs where the file system ignores case.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "needs WILDBLOOM_E2E_BIN_DIR with wildbloomd-local, wildbloomd-grants and foregather-server"]
 async fn drop_two_computers_folder() {
@@ -1980,6 +1981,36 @@ async fn drop_two_computers_folder() {
     .await;
     assert_eq!(kept_ids(&c), kept_ids(&a));
     report("k: a restore with the folder on rebuilt A's tree");
+
+    // l. On a file system that ignores case, a rename that only changes
+    // case is the same file under a new spelling: nothing is taken in
+    // again and nothing is removed anywhere.
+    std::fs::write(svc.work_path.join("Case-Probe"), b"").unwrap();
+    if svc.work_path.join("case-probe").exists() {
+        let ids = [kept_ids(&a), kept_ids(&b), kept_ids(&c)];
+        let trash_counts =
+            || [&a_host, &b_host, &c_host].map(|host| host.trashed.lock().unwrap().len());
+        let trashed_before = trash_counts();
+        let b_before = tree(&b_root);
+        std::fs::rename(a_root.join("keep.txt"), a_root.join("Keep.txt")).unwrap();
+        std::fs::rename(a_root.join("Shared"), a_root.join("shared")).unwrap();
+        // Time for a file taken in again to reach B and come back removed.
+        tokio::time::sleep(Duration::from_secs(20)).await;
+        assert_eq!(
+            [kept_ids(&a), kept_ids(&b), kept_ids(&c)],
+            ids,
+            "no entry added or removed"
+        );
+        assert_eq!(trash_counts(), trashed_before, "nothing went to the Trash");
+        assert_eq!(tree(&b_root), b_before, "B's folder is unchanged");
+        let link = a.index.file(&keep_id).unwrap().unwrap().watch_path.unwrap();
+        assert_eq!(
+            Path::new(&link).file_name().and_then(|n| n.to_str()),
+            Some("Keep.txt"),
+            "A's link follows the new spelling"
+        );
+        report("l: a rename that only changed case changed nothing anywhere");
+    }
 
     // Turning the folder off leaves every file as the owner's own.
     let before = tree(&b_root);

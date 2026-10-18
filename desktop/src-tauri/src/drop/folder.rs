@@ -525,6 +525,31 @@ mod tests {
     }
 
     #[test]
+    fn actual_paths_follow_the_spelling_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("Docs")).unwrap();
+        std::fs::write(root.join("Docs/keep.txt"), b"k").unwrap();
+        assert_eq!(
+            actual_path(root, &rel("Docs/keep.txt")),
+            Some(root.join("Docs/keep.txt"))
+        );
+        std::fs::rename(root.join("Docs"), root.join("docs")).unwrap();
+        std::fs::rename(root.join("docs/keep.txt"), root.join("docs/Keep.txt")).unwrap();
+        if root.join("Docs/keep.txt").exists() {
+            // Ignores case: the old spelling still finds the file.
+            assert_eq!(
+                actual_path(root, &rel("Docs/keep.txt")),
+                Some(root.join("docs/Keep.txt"))
+            );
+        }
+        assert_eq!(
+            actual_path(root, &rel("docs/Keep.txt")),
+            Some(root.join("docs/Keep.txt"))
+        );
+    }
+
+    #[test]
     fn relative_paths_stay_under_the_root() {
         let root = Path::new("/w");
         assert_eq!(

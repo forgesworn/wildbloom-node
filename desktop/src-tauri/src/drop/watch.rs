@@ -309,17 +309,44 @@ impl Engine {
         let mut known = HashSet::new();
         let mut checks: Vec<(String, Stat)> = Vec::new();
         let mut edited = Vec::new();
+        let walked: HashSet<&Path> = report
+            .files
+            .iter()
+            .chain(&report.too_deep)
+            .map(|(path, _)| path.as_path())
+            .collect();
         for row in &rows {
             let Some(link) = row.watch_path.as_deref() else {
                 continue;
             };
-            let path = PathBuf::from(link);
+            let mut path = PathBuf::from(link);
             // Under a folder the walk could not read: never counted missing.
             let stat = if report.unreadable.iter().any(|dir| path.starts_with(dir)) {
                 Stat::Unknown
             } else {
                 folder::stat_path(&root, &path)
             };
+            // A file system that ignores case (or Unicode form) still finds
+            // a file renamed only in spelling at its old path, while the walk
+            // lists it under the new one.  The link follows the spelling on
+            // disk, or the file would be taken in again as a second entry,
+            // and that entry's removal elsewhere would trash this one.
+            if matches!(stat, Stat::Present(_))
+                && !walked.contains(path.as_path())
+                && let Some(actual) =
+                    folder::relative(&root, &path).and_then(|rel| folder::actual_path(&root, &rel))
+                && actual != path
+            {
+                let _ = self.index.set_link(
+                    &row.id,
+                    Some((
+                        actual.to_string_lossy().into_owned(),
+                        row.watch_size.unwrap_or(u64::MAX),
+                        row.watch_mtime.unwrap_or(0),
+                    )),
+                );
+                path = actual;
+            }
             if row.local == local::NOT_KEPT {
                 // Gone or changed: the row goes, and a changed file is looked
                 // at again as new.
