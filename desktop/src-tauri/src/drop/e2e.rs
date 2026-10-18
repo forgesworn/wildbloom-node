@@ -312,7 +312,9 @@ fn engine_for(
         relay_base: Some(relay_api.to_owned()),
         allow_loopback_http: true,
         signer_timeout: Duration::from_secs(30),
-        computer_name: "Test computer".into(),
+        // Quotes a key list entry may not carry: the engine cleans the name
+        // before freezing it, or no other computer could open the list.
+        computer_name: format!("Desk \"{}\"", host.name),
         watch_interval: Duration::from_millis(500),
         online_blob_limit,
         pull_interval: Duration::from_secs(1),
@@ -1448,6 +1450,543 @@ async fn drop_two_computers_in_step() {
     assert_eq!(ids(&b), ids(&a));
     assert!(row(&b, &kept).is_some_and(|r| r.state == "two_copies"));
     report("f: B was offline during A's removal and converged after restarting");
+    drop(b_rt);
+}
+
+/// Every kept file under a Wildbloom folder: relative path (NFC) to bytes.
+fn tree(root: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+    super::watch::walk(root)
+        .files
+        .into_iter()
+        .filter_map(|(path, _)| {
+            let rel = super::folder::relative_nfc(root, &path)?;
+            Some((rel, std::fs::read(&path).ok()?))
+        })
+        .collect()
+}
+
+/// Kept rows (not "Not kept" ones), sorted by id.
+fn kept_ids(engine: &Engine) -> Vec<String> {
+    let mut ids: Vec<String> = engine
+        .rows()
+        .into_iter()
+        .filter(|r| r.state != "not_kept")
+        .map(|r| r.id)
+        .collect();
+    ids.sort();
+    ids
+}
+
+fn bytes_of(seed: u32, len: u32) -> Vec<u8> {
+    (0..len)
+        .map(|i| (i.wrapping_mul(seed).wrapping_add(seed >> 1)) as u8)
+        .collect()
+}
+
+/// Writes a file into a folder as an app would, creating its folders.
+fn put(root: &Path, rel: &str, bytes: &[u8]) {
+    let path = root.join(rel);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, bytes).unwrap();
+}
+
+/// The id of the row whose file is at `rel` in the folder.
+fn row_at(engine: &Engine, root: &Path, rel: &str) -> Option<String> {
+    engine.index.files().ok()?.into_iter().find_map(|f| {
+        let link = f.watch_path.as_deref()?;
+        (super::folder::relative_nfc(root, Path::new(link)).as_deref() == Some(rel)
+            && f.local != "not_kept")
+            .then_some(f.id)
+    })
+}
+
+fn trashed_bytes(host: &TestHost) -> Vec<Vec<u8>> {
+    host.trashed
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|(_, to)| std::fs::read(to).ok())
+        .collect()
+}
+
+/// Two computers with the Wildbloom folder on stay in step through their
+/// folders (spec 12, cases a to k): adds, edits and deletes reach the other
+/// computer, replaced and removed files go to the Trash, concurrent changes
+/// keep both versions, nothing happens while a folder is unavailable, and a
+/// restore with the folder on rebuilds the same tree.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs WILDBLOOM_E2E_BIN_DIR with wildbloomd-local, wildbloomd-grants and foregather-server"]
+async fn drop_two_computers_folder() {
+    const LIMIT: u64 = 1024 * 1024;
+    let Some(svc) = services().await else {
+        return;
+    };
+    let (http, online) = (svc.http.clone(), svc.online.clone());
+    let report = |step: &str| eprintln!("e2e-folder: {step}");
+    let a_root = svc.work_path.join("a-home/Wildbloom");
+    let b_root = svc.work_path.join("b-home/Wildbloom");
+
+    let (a, a_host, _a_store, recovery_key) = approved_engine(&svc, "a", &a_root, LIMIT).await;
+    a.set_watch_folder(true).await.unwrap();
+    assert_eq!(a.status().watch_folder.state, "on");
+    assert!(a_root.join(super::folder::MARKER).is_file());
+
+    let b_store = Arc::new(MemoryStore::default());
+    let b_host = test_host(&svc.bin, &svc.work_path, "b");
+    let mut b_rt = Computer::start();
+    let mut b = engine_for(
+        &b_host,
+        &b_store,
+        &svc.relay_api,
+        &b_root,
+        b_rt.handle(),
+        LIMIT,
+    );
+    b.restore(Some(&recovery_key), None, Some(&svc.online_url))
+        .await
+        .unwrap();
+    approve(&b, &svc.bunker).await;
+    b.set_watch_folder(true).await.unwrap();
+    let a_local = a_host.local_node().endpoint.unwrap();
+    let b_local = b_host.local_node().endpoint.unwrap();
+    let every_node = [a_local.clone(), b_local.clone(), online.clone()];
+    report("A and B share one recovery key, both folders on");
+
+    // a. Add: A writes Docs/report.pdf; B's folder gets the same bytes.
+    let v1 = bytes_of(7, 300_000);
+    put(&a_root, "Docs/report.pdf", &v1);
+    let doc = until("B's row for A's file", 90, || {
+        let id = row_at(&b, &b_root, "Docs/report.pdf")?;
+        row(&b, &id).filter(|r| r.state == "two_copies").map(|_| id)
+    })
+    .await;
+    assert_eq!(std::fs::read(b_root.join("Docs/report.pdf")).unwrap(), v1);
+    let a_doc = row_at(&a, &a_root, "Docs/report.pdf").unwrap();
+    assert_eq!(a_doc, doc, "one entry on both computers");
+    let b_row = row(&b, &doc).unwrap();
+    assert_eq!(b_row.folder.as_deref(), Some("Docs"));
+    assert!(b_row.in_watch_folder);
+    let doc_record = b.index.file(&doc).unwrap().unwrap();
+    assert_eq!(doc_record.path, "Docs/report.pdf");
+    assert_eq!(doc_record.origin, "Desk a", "the name was cleaned");
+    let v1_sha = doc_record.sha256.clone().unwrap();
+    let b_device = b.identity().unwrap().device.keys().clone();
+    let b_claims = client::list(&http, &online, &b_device).await.unwrap();
+    assert!(b_claims.iter().all(|c| c.sha256 != v1_sha));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = std::fs::metadata(b_root.join("Docs/report.pdf"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    report("a: A's new folder file reached B's folder; B claims nothing online");
+
+    // b. Edit: B gets the new bytes, the old ones go to B's Trash, and the
+    // old version's copies are deleted everywhere once the new one is online.
+    let v2 = bytes_of(9, 310_000);
+    put(&a_root, "Docs/report.pdf", &v2);
+    until("B has the edit", 90, || {
+        (std::fs::read(b_root.join("Docs/report.pdf")).ok()? == v2).then_some(())
+    })
+    .await;
+    wait_gone(&http, &every_node, &v1_sha, "the replaced version").await;
+    until("B's old row goes", 30, || {
+        row(&b, &doc).is_none().then_some(())
+    })
+    .await;
+    assert!(
+        trashed_bytes(&b_host).contains(&v1),
+        "the old bytes are in B's Trash"
+    );
+    assert!(
+        a_host.trashed.lock().unwrap().is_empty(),
+        "A edited in place"
+    );
+    let edit = row_at(&a, &a_root, "Docs/report.pdf").unwrap();
+    assert_eq!(
+        a.index.file(&edit).unwrap().unwrap().prev.as_deref(),
+        Some(doc.as_str())
+    );
+    let edit_sha = a.index.file(&edit).unwrap().unwrap().sha256.unwrap();
+    report("b: the edit replaced B's copy; the old one is in B's Trash and gone from every node");
+
+    // A file that stays, to check removals never reach other files.
+    let keep = bytes_of(3, 200_000);
+    put(&a_root, "keep.txt", &keep);
+    until("B has keep.txt", 90, || {
+        (std::fs::read(b_root.join("keep.txt")).ok()? == keep).then_some(())
+    })
+    .await;
+    let keep_id = row_at(&a, &a_root, "keep.txt").unwrap();
+    until("keep.txt online", 60, || {
+        row(&a, &keep_id).filter(|r| r.state == "two_copies")
+    })
+    .await;
+    let keep_sha = a.index.file(&keep_id).unwrap().unwrap().sha256.unwrap();
+
+    // c. Delete: A deletes the file; B moves its copy to the Trash.
+    let b_trashed = b_host.trashed.lock().unwrap().len();
+    std::fs::remove_file(a_root.join("Docs/report.pdf")).unwrap();
+    until("B's row goes", 90, || {
+        row(&b, &edit).is_none().then_some(())
+    })
+    .await;
+    assert!(!b_root.join("Docs/report.pdf").exists());
+    assert_eq!(b_host.trashed.lock().unwrap().len(), b_trashed + 1);
+    assert!(trashed_bytes(&b_host).contains(&v2));
+    wait_gone(&http, &every_node, &edit_sha, "the deleted file").await;
+    for node in [&a_local, &b_local] {
+        assert!(
+            client::head(&http, node, &keep_sha)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+    let recovery_keys = a.identity().unwrap().recovery.identity().keys().clone();
+    assert!(
+        !client::list(&http, &online, &recovery_keys)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    report("c: a deletion in A's folder trashed B's copy; other files and the key lists remain");
+
+    // d. Window Remove on B of a file A added: A's copy goes to A's Trash.
+    let notes = bytes_of(11, 150_000);
+    put(&a_root, "notes.txt", &notes);
+    until("B has notes.txt", 90, || {
+        (std::fs::read(b_root.join("notes.txt")).ok()? == notes).then_some(())
+    })
+    .await;
+    let note = row_at(&b, &b_root, "notes.txt").unwrap();
+    let note_sha = b.index.file(&note).unwrap().unwrap().sha256.unwrap();
+    b.remove(&note).await.unwrap();
+    assert!(!b_root.join("notes.txt").exists());
+    assert!(trashed_bytes(&b_host).contains(&notes));
+    assert!(
+        b.index
+            .pending_deletes()
+            .unwrap()
+            .iter()
+            .all(|d| d.sha256 != note_sha),
+        "no endless retry"
+    );
+    until("A's copy goes to A's Trash", 90, || {
+        (!a_root.join("notes.txt").exists()).then_some(())
+    })
+    .await;
+    assert!(trashed_bytes(&a_host).contains(&notes));
+    wait_gone(&http, &every_node, &note_sha, "A's claim on the note").await;
+    report("d: B's Remove trashed A's folder copy; B queued nothing it cannot delete");
+
+    // e. Rollback: an old key list copy put back online changes nothing.
+    until("A's key list is settled", 30, || {
+        (!a.index.get_bool(kv::KEY_LIST_PENDING).unwrap()).then_some(())
+    })
+    .await;
+    let mut old_copies = Vec::new();
+    for listed in client::list(&http, &online, &recovery_keys).await.unwrap() {
+        let bytes = client::download_bytes(&http, &online, &listed.sha256, 80 << 20)
+            .await
+            .unwrap();
+        old_copies.push((listed.sha256, bytes));
+    }
+    put(&a_root, "temp.txt", &bytes_of(13, 120_000));
+    until("B has temp.txt", 90, || {
+        b_root.join("temp.txt").is_file().then_some(())
+    })
+    .await;
+    std::fs::remove_file(a_root.join("temp.txt")).unwrap();
+    until("B lets temp.txt go", 90, || {
+        (!b_root.join("temp.txt").exists()).then_some(())
+    })
+    .await;
+    until("A's key list is settled again", 30, || {
+        (!a.index.get_bool(kv::KEY_LIST_PENDING).unwrap()).then_some(())
+    })
+    .await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let (a_tree, b_tree) = (tree(&a_root), tree(&b_root));
+    assert_eq!(a_tree, b_tree);
+    let b_seen = b.index.get_u64(kv::LAST_SEEN_SEQ).unwrap().unwrap();
+    let trashed_before = (
+        a_host.trashed.lock().unwrap().len(),
+        b_host.trashed.lock().unwrap().len(),
+    );
+    let newer = client::list(&http, &online, &recovery_keys).await.unwrap();
+    for (sha, bytes) in &old_copies {
+        client::upload(
+            &http,
+            &online,
+            &recovery_keys,
+            sha,
+            bytes.len() as u64,
+            bytes.clone().into(),
+        )
+        .await
+        .unwrap();
+    }
+    for listed in newer {
+        if old_copies.iter().all(|(sha, _)| *sha != listed.sha256) {
+            client::delete(&http, &online, &recovery_keys, &listed.sha256)
+                .await
+                .unwrap();
+        }
+    }
+    for engine in [&a, &b] {
+        engine.pulled.lock().unwrap().clear();
+        engine.pull_key_list().await.unwrap();
+    }
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(tree(&a_root), a_tree, "A's folder is unchanged");
+    assert_eq!(tree(&b_root), b_tree, "B's folder is unchanged");
+    assert!(
+        !b_root.join("temp.txt").exists(),
+        "nothing removed came back"
+    );
+    assert!(b.index.get_u64(kv::LAST_SEEN_SEQ).unwrap().unwrap() >= b_seen);
+    assert_eq!(
+        (
+            a_host.trashed.lock().unwrap().len(),
+            b_host.trashed.lock().unwrap().len()
+        ),
+        trashed_before,
+        "nothing went to the Trash"
+    );
+    report("e: an old key list copy changed neither folder");
+
+    // f. B is offline while A deletes a file; B catches up after restarting.
+    let gone = bytes_of(17, 130_000);
+    put(&a_root, "later.txt", &gone);
+    until("B has later.txt", 90, || {
+        (std::fs::read(b_root.join("later.txt")).ok()? == gone).then_some(())
+    })
+    .await;
+    let restart = |b: Arc<Engine>, rt: Computer| async move {
+        let weak = Arc::downgrade(&b);
+        drop(b);
+        drop(rt);
+        until("B stopped", 30, || weak.upgrade().is_none().then_some(())).await;
+    };
+    restart(b, b_rt).await;
+    std::fs::remove_file(a_root.join("later.txt")).unwrap();
+    let a_check = a.clone();
+    until("A removed later.txt", 60, || {
+        a_check
+            .rows()
+            .iter()
+            .all(|r| r.name != "later.txt")
+            .then_some(())
+    })
+    .await;
+    b_rt = Computer::start();
+    b = engine_for(
+        &b_host,
+        &b_store,
+        &svc.relay_api,
+        &b_root,
+        b_rt.handle(),
+        LIMIT,
+    );
+    until("B trashes later.txt", 90, || {
+        (!b_root.join("later.txt").exists()).then_some(())
+    })
+    .await;
+    assert!(trashed_bytes(&b_host).contains(&gone));
+    report("f: B was off while A deleted a file, and trashed its copy on restart");
+
+    // g. The same plaintext written on both while B is off: one entry.
+    let same = bytes_of(19, 100_000);
+    restart(b, b_rt).await;
+    put(&a_root, "Shared/same.txt", &same);
+    put(&b_root, "Shared/same.txt", &same);
+    // Different bytes at one path: both versions are kept.
+    let (diff_a, diff_b) = (bytes_of(23, 90_000), bytes_of(29, 95_000));
+    put(&a_root, "diff.txt", &diff_a);
+    until("A keeps diff.txt", 60, || {
+        let id = row_at(&a, &a_root, "diff.txt")?;
+        row(&a, &id).filter(|r| r.state == "two_copies")
+    })
+    .await;
+    put(&b_root, "diff.txt", &diff_b);
+    b_rt = Computer::start();
+    b = engine_for(
+        &b_host,
+        &b_store,
+        &svc.relay_api,
+        &b_root,
+        b_rt.handle(),
+        LIMIT,
+    );
+    let (year, month, day) = super::status::ymd(super::engine::now());
+    let loser = format!("diff (conflict from Desk b {year:04}-{month:02}-{day:02}).txt");
+    until("both folders hold both versions", 120, || {
+        let (at, bt) = (tree(&a_root), tree(&b_root));
+        (at == bt
+            && at.get("diff.txt") == Some(&diff_a)
+            && at.get(&loser) == Some(&diff_b)
+            && at.get("Shared/same.txt") == Some(&same))
+        .then_some(())
+    })
+    .await;
+    let same_rows = |engine: &Engine| {
+        engine
+            .index
+            .files()
+            .unwrap()
+            .iter()
+            .filter(|f| f.path == "Shared/same.txt")
+            .count()
+    };
+    until("one entry for the same plaintext", 60, || {
+        (same_rows(&a) == 1 && same_rows(&b) == 1 && kept_ids(&a) == kept_ids(&b)).then_some(())
+    })
+    .await;
+    assert!(
+        tree(&b_root)
+            .keys()
+            .all(|k| !k.starts_with("Shared/same (")),
+        "no conflict copy of identical bytes"
+    );
+    // A window drop on B of a file already placed there is a duplicate.
+    let dropped = svc.work_path.join("dropped keep.txt");
+    std::fs::write(&dropped, &keep).unwrap();
+    let dup = b.add_paths(vec![dropped]).await.unwrap();
+    assert_eq!(dup.duplicates.len(), 1, "{dup:?}");
+    assert_eq!(dup.duplicates[0].id, keep_id);
+    report(
+        "g: identical bytes made one entry; different bytes kept both; a placed file is a duplicate",
+    );
+
+    // h. B's folder is unavailable: A's deletion waits, then applies.
+    let held = bytes_of(31, 80_000);
+    put(&a_root, "held.txt", &held);
+    until("B has held.txt", 90, || {
+        (std::fs::read(b_root.join("held.txt")).ok()? == held).then_some(())
+    })
+    .await;
+    let held_id = row_at(&b, &b_root, "held.txt").unwrap();
+    let away = svc.work_path.join("b-home/Wildbloom away");
+    std::fs::rename(&b_root, &away).unwrap();
+    until("B sees the folder gone", 30, || {
+        (b.status().watch_folder.state == "unavailable").then_some(())
+    })
+    .await;
+    assert!(
+        b.status_line()
+            .text
+            .starts_with("Your Wildbloom folder can't be found")
+    );
+    let b_stones = b.index.tombstones().unwrap().len();
+    std::fs::remove_file(a_root.join("held.txt")).unwrap();
+    until("A removed held.txt", 60, || {
+        row(&a, &held_id).is_none().then_some(())
+    })
+    .await;
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    assert!(row(&b, &held_id).is_some(), "B's row waits");
+    assert_eq!(
+        b.index.tombstones().unwrap().len(),
+        b_stones,
+        "B removed nothing"
+    );
+    assert!(!b_root.exists(), "B recreated nothing");
+    std::fs::rename(&away, &b_root).unwrap();
+    until("B trashes held.txt", 60, || {
+        (!b_root.join("held.txt").exists() && row(&b, &held_id).is_none()).then_some(())
+    })
+    .await;
+    assert!(trashed_bytes(&b_host).contains(&held));
+    assert_eq!(b.status().watch_folder.state, "on");
+    report("h: nothing happened while B's folder was away; A's deletion applied once it was back");
+
+    // i. Concurrent edits while B is off: both versions are kept.
+    let plan = bytes_of(37, 70_000);
+    put(&a_root, "Shared/plan.txt", &plan);
+    until("B has plan.txt", 90, || {
+        (std::fs::read(b_root.join("Shared/plan.txt")).ok()? == plan).then_some(())
+    })
+    .await;
+    restart(b, b_rt).await;
+    let (plan_a, plan_b) = (bytes_of(41, 71_000), bytes_of(43, 72_000));
+    put(&a_root, "Shared/plan.txt", &plan_a);
+    put(&b_root, "Shared/plan.txt", &plan_b);
+    b_rt = Computer::start();
+    b = engine_for(
+        &b_host,
+        &b_store,
+        &svc.relay_api,
+        &b_root,
+        b_rt.handle(),
+        LIMIT,
+    );
+    until("both edits are kept on both computers", 120, || {
+        let (at, bt) = (tree(&a_root), tree(&b_root));
+        let plans: Vec<&Vec<u8>> = at
+            .iter()
+            .filter(|(k, _)| k.starts_with("Shared/plan"))
+            .map(|(_, v)| v)
+            .collect();
+        (at == bt && plans.len() == 2 && plans.contains(&&plan_a) && plans.contains(&&plan_b))
+            .then_some(())
+    })
+    .await;
+    report("i: concurrent edits kept both versions everywhere");
+
+    // j. Too big: a "Not kept" row on A, nothing in the key list or on B.
+    put(&a_root, "big.bin", &bytes_of(47, 2 * 1024 * 1024));
+    let a_check = a.clone();
+    let big = until("A's not kept row", 60, || {
+        a_check.rows().into_iter().find(|r| r.state == "not_kept")
+    })
+    .await;
+    assert_eq!(big.not_kept, Some("too_big"));
+    assert!(!big.in_watch_folder);
+    a.reveal_file(&big.id).unwrap();
+    assert_eq!(a.open_file(&doc).unwrap_err().code, "not_found");
+    assert!(a.status_line().text.contains("can't be kept"));
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert!(!b_root.join("big.bin").exists());
+    assert!(b.rows().iter().all(|r| r.name != "big.bin"));
+    assert!(a.index.file(&big.id).unwrap().unwrap().sha256.is_none());
+    report("j: a file over the cap is a Not kept row on A and nowhere else");
+
+    // k. A third computer restores with the folder on and gets A's tree.
+    let c_root = svc.work_path.join("c-home/Wildbloom");
+    let c_store = Arc::new(MemoryStore::default());
+    let c_host = test_host(&svc.bin, &svc.work_path, "c");
+    let c = engine_for(
+        &c_host,
+        &c_store,
+        &svc.relay_api,
+        &c_root,
+        tokio::runtime::Handle::current(),
+        LIMIT,
+    );
+    c.restore(Some(&recovery_key), None, Some(&svc.online_url))
+        .await
+        .unwrap();
+    approve(&c, &svc.bunker).await;
+    c.set_watch_folder(true).await.unwrap();
+    until("C's folder matches A's", 120, || {
+        let mut want = tree(&a_root);
+        want.remove("big.bin");
+        (tree(&c_root) == want).then_some(())
+    })
+    .await;
+    assert_eq!(kept_ids(&c), kept_ids(&a));
+    report("k: a restore with the folder on rebuilt A's tree");
+
+    // Turning the folder off leaves every file as the owner's own.
+    let before = tree(&b_root);
+    b.set_watch_folder(false).await.unwrap();
+    assert_eq!(b.status().watch_folder.state, "off");
+    assert!(b.rows().iter().all(|r| !r.in_watch_folder));
+    assert_eq!(tree(&b_root), before);
     drop(b_rt);
 }
 
