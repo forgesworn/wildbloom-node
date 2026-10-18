@@ -64,6 +64,9 @@ pub struct RecoveryStatus {
 pub struct WatchFolderStatus {
     pub enabled: bool,
     pub path: String,
+    /// `off`, `on`, `unavailable` (the folder or its marker can't be found)
+    /// or `too_many` (a scan hit the item limit).
+    pub state: &'static str,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]

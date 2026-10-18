@@ -172,6 +172,13 @@ pub struct Engine {
     pub(crate) pulled: Mutex<std::collections::HashSet<String>>,
     /// Runs a key list pull now.
     pub(crate) pull_wake: Notify,
+    /// Held by the folder pass for its whole run, and by a removal that
+    /// touches the folder.  Lock order: `keysync`, then `folder_lock`, then
+    /// `keylist`.  The folder pass never takes `keysync`, so `apply_key_list`
+    /// (which holds `keysync` and removes rows) cannot deadlock against it.
+    pub(crate) folder_lock: tokio::sync::Mutex<()>,
+    /// `off`, `on`, `unavailable` or `too_many`, as the last pass found it.
+    pub(crate) folder_state: Mutex<&'static str>,
 }
 
 impl std::fmt::Debug for Engine {
@@ -217,7 +224,11 @@ pub(crate) mod kv {
     pub const LAST_SEEN_SEQ: &str = "key_list_last_seen_seq";
     pub const KEY_LIST_LOCAL_SHA: &str = "key_list_local_sha256";
     pub const KEY_LIST_ONLINE_SHA: &str = "key_list_online_sha256";
+    /// The Wildbloom folder mirror is on (with [`FOLDER_ID`]).
     pub const WATCH_ENABLED: &str = "watch_enabled";
+    /// The random id in the folder's marker file, set when the folder is
+    /// turned on.
+    pub const FOLDER_ID: &str = "folder_id";
     pub const LAST_CHECK: &str = "last_copy_check";
     /// A sealed key list has not reached every node it should be on.
     pub const KEY_LIST_PENDING: &str = "key_list_pending";
@@ -280,6 +291,8 @@ impl Engine {
             setup_lock: tokio::sync::RwLock::new(()),
             pulled: Mutex::new(std::collections::HashSet::new()),
             pull_wake: Notify::new(),
+            folder_lock: tokio::sync::Mutex::new(()),
+            folder_state: Mutex::new("off"),
         });
         let _ = engine.keychain();
         Ok(engine)
@@ -287,6 +300,16 @@ impl Engine {
 
     /// Starts the background workers.  Safe to call once.
     pub fn start(self: &Arc<Self>) {
+        // An install from before the mirror kept `watch_enabled` for the
+        // inbox folder.  The mirror moves and removes files, so the owner
+        // opts in again through its confirmation.  Links are kept for the
+        // enable-time rule that adopts inbox files in place.
+        if self.index.get_bool(kv::WATCH_ENABLED).unwrap_or(false)
+            && self.index.get(kv::FOLDER_ID).ok().flatten().is_none()
+        {
+            let _ = self.index.set_bool(kv::WATCH_ENABLED, false);
+        }
+        self.refresh_folder_state();
         // Rows left mid-step by a previous run.
         if let Ok(files) = self.index.files() {
             for file in files {
@@ -464,6 +487,63 @@ impl Engine {
         envelope::drop_limits(self.cfg.online_blob_limit).max_source_bytes()
     }
 
+    // ------------------------------------------------------------- folder
+
+    /// Whether the Wildbloom folder mirror is on: turned on, with a folder id.
+    pub(crate) fn mirror_on(&self) -> bool {
+        self.index.get_bool(kv::WATCH_ENABLED).unwrap_or(false)
+            && self.index.get(kv::FOLDER_ID).ok().flatten().is_some()
+    }
+
+    /// Whether the folder is there now: its root is a real folder whose
+    /// marker holds this install's folder id.
+    pub(crate) fn folder_available(&self) -> bool {
+        let id = self
+            .index
+            .get(kv::FOLDER_ID)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        super::folder::available(&self.cfg.watch_dir, &id)
+    }
+
+    /// `off`, `on`, `unavailable` or `too_many`.
+    pub(crate) fn folder_state(&self) -> &'static str {
+        if !self.mirror_on() {
+            "off"
+        } else if !self.folder_available() {
+            "unavailable"
+        } else if matches!(self.folder_state.lock().map(|s| *s), Ok("too_many")) {
+            "too_many"
+        } else {
+            "on"
+        }
+    }
+
+    /// Records the folder state; emits the status when it changed.
+    pub(crate) fn set_folder_state(&self, state: &'static str) {
+        let changed = match self.folder_state.lock() {
+            Ok(mut slot) => std::mem::replace(&mut *slot, state) != state,
+            Err(_) => false,
+        };
+        if changed {
+            self.emit_status();
+        }
+    }
+
+    fn refresh_folder_state(&self) {
+        let state = if !self.mirror_on() {
+            "off"
+        } else if self.folder_available() {
+            "on"
+        } else {
+            "unavailable"
+        };
+        if let Ok(mut slot) = self.folder_state.lock() {
+            *slot = state;
+        }
+    }
+
     // -------------------------------------------------------------- status
 
     pub fn first_run(&self) -> Option<FirstRun> {
@@ -571,8 +651,9 @@ impl Engine {
             approval,
             recovery,
             watch_folder: WatchFolderStatus {
-                enabled: self.index.get_bool(kv::WATCH_ENABLED).unwrap_or(false),
+                enabled: self.mirror_on(),
                 path: self.cfg.watch_display.clone(),
+                state: self.folder_state(),
             },
             limits: LimitsStatus {
                 drop_max_bytes: self.drop_max_bytes(),
@@ -949,15 +1030,28 @@ impl Engine {
 
     pub fn set_watch_folder(self: &Arc<Self>, enabled: bool) -> CommandResult<()> {
         if enabled {
-            std::fs::create_dir_all(&self.cfg.watch_dir).map_err(|_| {
-                CommandError::with_message("watch_folder", "Couldn't create the Wildbloom folder.")
-            })?;
+            if !(self.mirror_on() && self.folder_available()) {
+                let id = FileId::random()
+                    .map_err(|_| internal("random"))?
+                    .to_string();
+                super::folder::write_marker(&self.cfg.watch_dir, &id).map_err(|_| {
+                    CommandError::with_message(
+                        "watch_folder",
+                        "Couldn't create the Wildbloom folder.",
+                    )
+                })?;
+                self.index.set(kv::FOLDER_ID, &id).or_internal()?;
+            }
+        } else {
+            self.index.unset(kv::FOLDER_ID).or_internal()?;
         }
         self.index
             .set_bool(kv::WATCH_ENABLED, enabled)
             .or_internal()?;
+        self.refresh_folder_state();
         self.emit_status();
         self.watch_wake.notify_one();
+        self.pull_wake.notify_one();
         Ok(())
     }
 

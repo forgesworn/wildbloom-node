@@ -186,6 +186,7 @@ mod tests {
             watch_folder: WatchFolderStatus {
                 enabled: false,
                 path: "~/Wildbloom".into(),
+                state: "off",
             },
             limits: LimitsStatus {
                 drop_max_bytes: 1,
