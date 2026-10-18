@@ -59,6 +59,9 @@ impl Engine {
     /// Adds every kept file the index has an envelope and a keychain key for,
     /// and applies every recorded removal.  The index and the keychain are the
     /// durable record; the in-memory list is never the only copy of an entry.
+    /// Entry fields come from the row's frozen columns, never recomputed, so a
+    /// rebuilt entry is identical to the one first sealed (a differing copy at
+    /// one `seq` would make every merge fail).
     pub(crate) fn reconcile_key_list(&self, list: &mut KeyList) -> CommandResult<()> {
         for (id, at) in self.index.tombstones().or_internal()? {
             if let Some(file_id) = FileId::parse(&id) {
@@ -67,7 +70,10 @@ impl Engine {
         }
         let keychain = self.keychain()?;
         for file in self.index.files().or_internal()? {
-            if matches!(file.local.as_str(), local::UNREADABLE | local::ENCRYPTING) {
+            if matches!(
+                file.local.as_str(),
+                local::UNREADABLE | local::ENCRYPTING | local::NOT_KEPT
+            ) {
                 continue;
             }
             let (Some(sha), Some(size), Some(file_id)) = (
@@ -97,10 +103,10 @@ impl Engine {
                 media_type,
                 bytes: file.bytes,
                 added: file.added,
-                path: file.name.clone(),
-                prev: None,
-                plain: None,
-                from: String::new(),
+                path: entry_path(&file),
+                prev: file.prev.as_deref().and_then(FileId::parse),
+                plain: super::parse_sha256(&file.entry_plain),
+                from: file.origin.clone(),
             });
         }
         Ok(())
@@ -432,24 +438,7 @@ impl Engine {
             if keychain.set_file_key(&entry.id, &entry.key).is_err() {
                 continue;
             }
-            let record = FileRecord {
-                id: id.clone(),
-                name: entry.name.clone(),
-                media_type: entry.media_type.clone(),
-                bytes: entry.bytes,
-                added: entry.added,
-                // Restored rows are not matched as duplicates of new drops.
-                plain_sha256: format!("restored:{id}"),
-                sha256: Some(hex_lower(&entry.sha256)),
-                size: Some(entry.size),
-                local: local::RESTORING.into(),
-                online: online::OK.into(),
-                attempts: 0,
-                next_attempt: 0,
-                watch_path: None,
-                watch_size: None,
-                watch_mtime: None,
-            };
+            let record = row_for_entry(entry);
             if self.index.insert_file(&record).is_ok() {
                 self.set_progress(&id, 0);
                 restored.push(id);
@@ -484,6 +473,52 @@ impl Engine {
             engine.keysync_wake.notify_one();
         });
         Ok(())
+    }
+}
+
+/// The path a row's entry carries: its frozen `path`, or its name for a row
+/// from before the column existed.
+fn entry_path(file: &FileRecord) -> String {
+    if file.path.is_empty() {
+        file.name.clone()
+    } else {
+        file.path.clone()
+    }
+}
+
+/// A row for an entry this computer did not add (restore or another
+/// computer's addition): being copied back here, with the online copy
+/// already there, and the entry's own fields frozen.
+fn row_for_entry(entry: &KeyListEntry) -> FileRecord {
+    let id = entry.id.to_string();
+    FileRecord {
+        id: id.clone(),
+        name: entry.name.clone(),
+        media_type: entry.media_type.clone(),
+        bytes: entry.bytes,
+        added: entry.added,
+        // Without a known plaintext hash, never matched as a duplicate.
+        plain_sha256: entry
+            .plain
+            .map(|plain| hex_lower(&plain))
+            .unwrap_or_else(|| format!("restored:{id}")),
+        sha256: Some(hex_lower(&entry.sha256)),
+        size: Some(entry.size),
+        local: local::RESTORING.into(),
+        online: online::OK.into(),
+        attempts: 0,
+        next_attempt: 0,
+        watch_path: None,
+        watch_size: None,
+        watch_mtime: None,
+        path: entry.path.clone(),
+        prev: entry.prev.map(|prev| prev.to_string()),
+        origin: entry.from.clone(),
+        entry_plain: entry
+            .plain
+            .map(|plain| hex_lower(&plain))
+            .unwrap_or_default(),
+        note: None,
     }
 }
 

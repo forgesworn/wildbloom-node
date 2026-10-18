@@ -1032,6 +1032,14 @@ impl Engine {
                 watch_path: watched.map(|_| path.to_string_lossy().into_owned()),
                 watch_size: watched.map(|(size, _)| size),
                 watch_mtime: watched.map(|(_, mtime)| mtime),
+                // A version 1 entry: its path is its name.  Folder paths,
+                // `plain` and `from` are only written while the Wildbloom
+                // folder mirror is on.
+                path: name.clone(),
+                prev: None,
+                origin: String::new(),
+                entry_plain: String::new(),
+                note: None,
             };
             self.index.insert_file(&record).or_internal()?;
             self.set_progress(&id, 0);
@@ -1142,10 +1150,15 @@ impl Engine {
                     media_type: encrypted.sealed.metadata.media_type.clone(),
                     bytes: encrypted.sealed.metadata.size,
                     added: record.added,
-                    path: encrypted.sealed.metadata.name.clone(),
-                    prev: None,
-                    plain: None,
-                    from: String::new(),
+                    // The frozen row fields, exactly as reconcile rebuilds them.
+                    path: if record.path == record.name {
+                        encrypted.sealed.metadata.name.clone()
+                    } else {
+                        record.path.clone()
+                    },
+                    prev: record.prev.as_deref().and_then(FileId::parse),
+                    plain: super::parse_sha256(&record.entry_plain),
+                    from: record.origin.clone(),
                 });
             }
         }
