@@ -113,6 +113,33 @@ pub fn safe_component(component: &str) -> String {
     }
 }
 
+/// The computer name as a key list entry's `from` carries it: no control
+/// character, `"` or `\\`, trimmed, NFC and at most 64 UTF-16 units.  An
+/// entry whose `from` breaks those rules makes every list holding it
+/// unreadable on every other computer, so the name is cleaned before it is
+/// frozen into a row.
+pub fn computer_origin(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .filter(|c| !c.is_control() && *c != '"' && *c != '\\')
+        .collect::<String>()
+        .nfc()
+        .collect();
+    let mut out = cleaned.trim().to_owned();
+    // A cut can leave a sequence NFC recomposes, and NFC can lengthen a few
+    // characters, so cut and normalise until both rules hold.
+    loop {
+        let cut: String = truncate_utf16(&out, super::device::MAX_FROM_UTF16)
+            .trim_end()
+            .nfc()
+            .collect();
+        if cut == out {
+            return out;
+        }
+        out = cut;
+    }
+}
+
 /// `YYYY-MM-DD` in UTC.
 fn utc_date(unix: u64) -> String {
     let (year, month, day) = super::status::ymd(unix);
@@ -282,5 +309,38 @@ mod tests {
         assert_eq!(named.encode_utf16().count(), 180);
         assert!(named.ends_with(" (conflict from Laptop 2026-10-18 3).pdf"));
         assert!(valid_component(&named));
+    }
+
+    #[test]
+    fn computer_names_are_safe_to_freeze() {
+        assert_eq!(computer_origin("Laptop"), "Laptop");
+        assert_eq!(
+            computer_origin("  Office \"Mac\"\\Book\n "),
+            "Office MacBook"
+        );
+        assert_eq!(computer_origin("Cafe\u{301}"), "Caf\u{e9}");
+        let long = computer_origin(&"é".repeat(100));
+        assert_eq!(long.encode_utf16().count(), 64);
+        let emoji = computer_origin(&"\u{1f600}".repeat(40));
+        assert_eq!(emoji.encode_utf16().count(), 64);
+        // A combining mark cut from its letter is not left dangling.
+        let edge = format!("{}e\u{301}", "a".repeat(63));
+        assert!(crate::drop::device::valid_from(&computer_origin(&edge)));
+        for name in [
+            "Laptop",
+            "Office \"Mac\"",
+            "back\\slash",
+            "tab\tname",
+            "",
+            "   ",
+            &"\u{958}".repeat(70),
+            &"x".repeat(200),
+        ] {
+            let origin = computer_origin(name);
+            assert!(
+                crate::drop::device::valid_from(&origin),
+                "{name:?} -> {origin:?}"
+            );
+        }
     }
 }
