@@ -199,7 +199,11 @@ elements.checkUpdate.addEventListener("click", async () => {
     const folder = snapshot?.watchFolder || {};
     ui.folder.checked = Boolean(folder.enabled);
     ui.folder.disabled = !snapshot;
-    ui.folderHint.textContent = `${folder.path || "~/Wildbloom"}. Removing a file from the folder doesn't delete its copies.`;
+    const folderPath = folder.path || "~/Wildbloom";
+    const trash = Drop.platform.os === "windows" ? "Recycle Bin" : "Trash";
+    ui.folderHint.textContent = folder.enabled
+      ? `${folderPath}. Deleting a file here removes it on all your computers. Their copies go to the ${trash}.`
+      : `${folderPath}.`;
     ui.folderShow.disabled = !folder.enabled;
 
     const recovery = snapshot?.recovery || {};

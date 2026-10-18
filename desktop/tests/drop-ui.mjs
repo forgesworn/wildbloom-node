@@ -291,8 +291,11 @@ scenario('folder: not_kept and linked rows, copy, menus, status counts', async (
   for (const [id, want] of Object.entries(expected)) {
     const li = page.locator(`li.row[data-id="${id}"]`);
     assert.equal(await text(li.locator('.row-status')), want.status, `${id} status`);
-    if (want.folder) assert.equal(await text(li.locator('.row-folder')), want.folder, `${id} folder`);
-    else assert.equal(await li.locator('.row-folder').count(), 0);
+    if (want.folder) {
+      assert.equal(await text(li.locator('.row-folder')), want.folder, `${id} folder`);
+      // It wraps only after a slash, never inside a folder name.
+      assert.equal(await li.locator('.row-folder wbr').count(), want.folder.split('/').length - 1, `${id} folder breaks`);
+    } else assert.equal(await li.locator('.row-folder').count(), 0);
     assert.equal(await li.locator('[data-ctl="share"]').count(), id === 'f32' || id === 'f33' || id === 'f34' || id === 'f35' ? 0 : 1, `${id} share`);
     await page.evaluate(() => { window.__stub.lastMenu = null; });
     await li.locator('[data-ctl="more"]').click();
@@ -1188,7 +1191,7 @@ scenario('settings: section order, values, actions and sheets', async () => {
   assert.equal(await text(section.locator('#drop-approval-text')), `Approved by ${NPUB_SHORT} until ${new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/London' }).format(new Date((nowSeconds + 300 * 86400) * 1000))}`);
   assert.equal(await text(section.locator('#drop-renew')), 'Renew approval…');
   assert.equal(await text(section.locator('label.check')), 'Keep copies of everything in my Wildbloom folder');
-  assert.equal(await text(section.locator('#drop-folder-hint')), "~/Wildbloom. Removing a file from the folder doesn't delete its copies.");
+  assert.equal(await text(section.locator('#drop-folder-hint')), '~/Wildbloom.');
   assert.match(await text(section.locator('#drop-recovery-text')), /^Saved \d+ \w+ 2026$/);
   assert.match(await text(section.locator('.drop-note')), /^Files are encrypted on this computer before they're copied\. This is new software and hasn't been independently audited yet\.$/);
   assert.equal(await section.locator('#drop-folder-show').isDisabled(), true);
@@ -1199,6 +1202,8 @@ scenario('settings: section order, values, actions and sheets', async () => {
   const folderConfirm = page.locator('dialog.confirm[open]');
   assert.equal(await text(folderConfirm.locator('h2')), 'Keep a readable copy of every file in ~/Wildbloom?');
   await folderConfirm.locator('button', { hasText: 'Cancel' }).click();
+  // The change handler unticks the box once the dialog's promise settles.
+  await page.waitForFunction(() => !document.querySelector('#drop-folder').checked, null, { timeout: 5000 }).catch(() => {});
   assert.equal(await section.locator('#drop-folder').isChecked(), false, 'Cancel leaves it off');
   assert.equal((await calls(page, 'set_watch_folder')).length, 0);
   await section.locator('#drop-folder').check();
@@ -1206,6 +1211,7 @@ scenario('settings: section order, values, actions and sheets', async () => {
   await page.waitForFunction(() => window.__stub.calls.some((c) => c.command === 'set_watch_folder'));
   assert.deepEqual((await calls(page, 'set_watch_folder')).at(-1).args, { enabled: true });
   await page.waitForFunction(() => !document.querySelector('#drop-folder-show').disabled);
+  assert.equal(await text(section.locator('#drop-folder-hint')), '~/Wildbloom. Deleting a file here removes it on all your computers. Their copies go to the Trash.');
   await section.locator('#drop-folder-show').click();
   assert.equal((await calls(page, 'open_watch_folder')).length, 1);
 

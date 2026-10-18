@@ -866,6 +866,15 @@
   /* ---------- row model ---------- */
 
   const TWO_COPIES = new Set(['two_copies', 'shared', 'sharing_ended', 'stop_pending', 'share_owner_only']);
+  /** A folder path that wraps only after a `/`, never inside a folder name. */
+  function folderParts(path) {
+    const parts = [];
+    String(path).split('/').forEach((name, i, all) => {
+      parts.push(i < all.length - 1 ? `${name}/` : name);
+      if (i < all.length - 1) parts.push(h('wbr'));
+    });
+    return parts;
+  }
   const FAILED = new Set(['failed', 'missing_online']);
   const BUSY = new Set(['encrypting', 'queued', 'copying']);
 
@@ -1040,7 +1049,7 @@
       status.append(h('span', { class: 'sep', 'aria-hidden': 'true' }, ' · '), h('span', { class: `plain ${part.cls || ''}` }, part.text));
     }
     const title = h('div', { class: 'row-title' }, name);
-    if (row.folder) title.append(h('p', { class: 'row-folder' }, row.folder));
+    if (row.folder) title.append(h('p', { class: 'row-folder' }, ...folderParts(row.folder)));
     const li = h('li', { class: 'row', 'data-id': row.id, 'data-state': row.state }, title, actions, status);
     if (d.bar) {
       li.append(h('progress', { max: '100', value: Number.isFinite(row.progress) ? String(Math.round(row.progress)) : null, 'aria-label': d.bar_label }));
