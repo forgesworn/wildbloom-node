@@ -314,7 +314,12 @@ impl Engine {
                 continue;
             };
             let path = PathBuf::from(link);
-            let stat = folder::stat_path(&root, &path);
+            // Under a folder the walk could not read: never counted missing.
+            let stat = if report.unreadable.iter().any(|dir| path.starts_with(dir)) {
+                Stat::Unknown
+            } else {
+                folder::stat_path(&root, &path)
+            };
             if row.local == local::NOT_KEPT {
                 // Gone or changed: the row goes, and a changed file is looked
                 // at again as new.

@@ -1832,8 +1832,10 @@ impl Engine {
             .file(id)
             .or_internal()?
             .ok_or(CommandError::code("not_found"))?;
+        // Held whether or not the row is linked yet: a pass placing its file
+        // right now finishes first, so the file is never left behind to be
+        // taken in again.
         let _folder = if matches!(how, RemoveHow::Window | RemoveHow::Remote { .. })
-            && file.watch_path.is_some()
             && file.local != local::NOT_KEPT
             && self.mirror_on()
         {
