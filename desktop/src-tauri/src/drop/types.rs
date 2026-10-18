@@ -64,6 +64,9 @@ pub struct RecoveryStatus {
 pub struct WatchFolderStatus {
     pub enabled: bool,
     pub path: String,
+    /// `off`, `on`, `unavailable` (the folder or its marker can't be found)
+    /// or `too_many` (a scan hit the item limit).
+    pub state: &'static str,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -110,6 +113,14 @@ pub struct FileRow {
     pub shared_until: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sharing_ended: Option<u64>,
+    /// Why a `not_kept` row is not kept: `too_big`, `name`, `too_long` or
+    /// `too_deep`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub not_kept: Option<&'static str>,
+    /// The parent path relative to the Wildbloom folder, if not the root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    /// Linked to a file in the Wildbloom folder.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub in_watch_folder: bool,
 }

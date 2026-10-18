@@ -33,6 +33,17 @@
     row('f17', '<img src=x onerror=alert(1)>.pdf', 'two_copies'),
   ];
   const goodRows = () => allRows().filter((r) => ['f1', 'f16', 'f17'].includes(r.id)).concat([row('f20', 'budget.xlsx', 'two_copies'), row('f21', 'cv.pdf', 'two_copies', { inWatchFolder: true })]);
+  // Folder fixtures: linked rows (with and without a parent folder), a row that is not linked,
+  // and one not_kept row for each reason.
+  const folderRows = () => [
+    row('f30', 'budget.xlsx', 'two_copies', { inWatchFolder: true, folder: 'Taxes/2026' }),
+    row('f31', 'cv.pdf', 'two_copies', { inWatchFolder: true }),
+    row('f32', 'film.mov', 'not_kept', { notKept: 'too_big', bytes: 900_000_000, folder: 'Videos' }),
+    row('f33', 'draft: v2?.txt', 'not_kept', { notKept: 'name', bytes: 4_000 }),
+    row('f34', 'notes-with-a-very-long-name.txt', 'not_kept', { notKept: 'too_long', bytes: 4_000, folder: 'Projects/Research/Archive/Interviews/Transcripts' }),
+    row('f35', 'deep.txt', 'not_kept', { notKept: 'too_deep', bytes: 4_000, folder: 'a/b/c/d/e/f/g/h/i/j' }),
+    row('f36', 'window-only.pdf', 'two_copies'),
+  ];
   const listRows = () => [row('f1', 'holiday.jpg', 'two_copies'), row('f2', 'tax-return-2026.pdf', 'copying', { progress: 45, bytes: 18_400_000 }), row('f3', 'notes.txt', 'failed', { bytes: 12_000 }), row('f12', 'quote.pdf', 'shared', { sharedUntil: nowSeconds + 20 * 3600 }), row('f9', 'archive.zip', 'two_copies', { bytes: 90_000_000 })];
   const manyRows = () => Array.from({ length: 24 }, (_, i) => row(`m${i}`, `document-${String(i + 1).padStart(2, '0')}.pdf`, 'two_copies', { added: nowSeconds - 100 * i }));
 
@@ -43,7 +54,7 @@
     online: { configured: true, url: 'https://storage.example', host: 'storage.example', reachable: true, failedChecks: 0, usedBytes: 1_200_000_000, limitBytes: 5_000_000_000, full: false },
     approval: { state: 'active', byNpub: NPUB, deviceNpub: NPUB, until: nowSeconds + 300 * DAY, limitBytes: 5_000_000_000 },
     recovery: { keyList: 'ok', savedAt: nowSeconds - 20 * DAY, confirmed: true },
-    watchFolder: { enabled: false, path: '~/Wildbloom' },
+    watchFolder: { enabled: false, state: 'off', path: '~/Wildbloom' },
     limits: { dropMaxBytes: 1_000_000_000, shareMaxBytes: 250_000_000 },
     browserApproval: false,
   });
@@ -56,6 +67,7 @@
   if (name === 'empty') { files = []; state.online.usedBytes = 0; }
   else if (name === 'good') files = goodRows();
   else if (name === 'all-states') files = allRows();
+  else if (name === 'folder') { files = folderRows(); state.watchFolder = { enabled: true, state: 'on', path: '~/Wildbloom' }; }
   else if (name === 'many') files = manyRows();
   else if (name === 'no-online') { noOnline(); files = [row('f1', 'holiday.jpg', 'no_online'), row('f2', 'notes.txt', 'no_online', { bytes: 12_000 })]; }
   else if (name.startsWith('first-run-1') || name === 'first-run-restore') { firstRun('node'); files = []; noOnline(); }
@@ -71,7 +83,9 @@
     if (flag === 'ends') state.approval = { ...state.approval, until: nowSeconds + 12 * DAY };
     if (flag === 'recovery') state.recovery = { keyList: 'ok', confirmed: false };
     if (flag === 'keylist') state.recovery = { ...state.recovery, keyList: 'failed' };
-    if (flag === 'folder') state.watchFolder = { enabled: true, path: '~/Wildbloom' };
+    if (flag === 'folder') state.watchFolder = { enabled: true, state: 'on', path: '~/Wildbloom' };
+    if (flag === 'folder-unavailable') state.watchFolder = { enabled: true, state: 'unavailable', path: '~/Wildbloom' };
+    if (flag === 'folder-too-many') state.watchFolder = { enabled: true, state: 'too_many', path: '~/Wildbloom' };
     if (flag === 'no-online') noOnline();
     if (flag === 'good') files = goodRows();
     if (flag === 'shared') files = goodRows().concat([row('f12', 'quote.pdf', 'shared', { sharedUntil: nowSeconds + 20 * 3600 }), row('f22', 'plan.pdf', 'shared', { sharedUntil: nowSeconds + 3600 })]);
@@ -157,7 +171,9 @@
       stub.restoring = true;
       return { next: 'approve', host: hostOf(url || '') };
     },
-    set_watch_folder: ({ enabled }) => { stub.state.watchFolder = { ...stub.state.watchFolder, enabled }; },
+    set_watch_folder: ({ enabled }) => { stub.state.watchFolder = { ...stub.state.watchFolder, enabled, state: enabled ? 'on' : 'off' }; },
+    open_file: ({ id }) => { if (!stub.files.find((item) => item.id === id)?.inWatchFolder) throw { code: 'not_in_folder' }; },
+    reveal_file: ({ id }) => { const item = stub.files.find((entry) => entry.id === id); if (!item || !(item.inWatchFolder || item.state === 'not_kept')) throw { code: 'not_in_folder' }; },
     open_watch_folder: () => undefined,
     share_start: () => ({ state: 'preparing', progress: 10 }),
     share_again: () => ({ state: 'preparing', progress: 10 }),

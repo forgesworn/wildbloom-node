@@ -43,6 +43,8 @@ fn main() {
             "share_verify",
             "share_cancel",
             "stop_sharing",
+            "open_file",
+            "reveal_file",
         ]),
     ))
     .expect("failed to run tauri-build");

@@ -56,6 +56,9 @@ tokio = { version = "1.48.0", features = ["sync", "time", "process", "io-util", 
 tempfile = "3.23.0"
 # NFC folding of Wildbloom folder paths, as the envelope crate's name rules use.
 unicode-normalization = "0.1.25"
+# Files the Wildbloom folder replaces or removes go to the system Trash or
+# Recycle Bin, never deleted outright.  No chrono: the app never lists the Trash.
+trash = { version = "=5.2.9", default-features = false, features = ["coinit_apartmentthreaded"] }
 
 [dev-dependencies]
 # The headless Drop test's in-process Nostr relay for NIP-46.

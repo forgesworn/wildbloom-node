@@ -1362,6 +1362,8 @@ fn main() {
             drop::commands::restore,
             drop::commands::set_watch_folder,
             drop::commands::open_watch_folder,
+            drop::commands::open_file,
+            drop::commands::reveal_file,
             drop::commands::share_start,
             drop::commands::share_again,
             drop::commands::share_verify,
@@ -1477,7 +1479,7 @@ fn main() {
             if let Some(engine) = drop_engine(app) {
                 show_window(app, DROP_WINDOW);
                 tauri::async_runtime::spawn(async move {
-                    let _ = engine.add_paths(paths, None).await;
+                    let _ = engine.add_paths(paths).await;
                 });
             }
         }

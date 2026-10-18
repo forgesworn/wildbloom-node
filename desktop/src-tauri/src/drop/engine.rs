@@ -73,6 +73,12 @@ pub trait Host: Send + Sync + 'static {
     fn pick_files(&self) -> Vec<PathBuf>;
     /// Reveal a folder in the file manager.
     fn open_folder(&self, path: &Path);
+    /// Moves a file to the system Trash or Recycle Bin.  Never deletes it.
+    fn trash(&self, path: &Path) -> std::io::Result<()>;
+    /// Opens a file with the system's default app.
+    fn open_path(&self, path: &Path);
+    /// Shows a file selected in Finder, Explorer or the file manager.
+    fn reveal_path(&self, path: &Path);
 }
 
 /// Configuration that differs between the app and the tests.
@@ -166,6 +172,13 @@ pub struct Engine {
     pub(crate) pulled: Mutex<std::collections::HashSet<String>>,
     /// Runs a key list pull now.
     pub(crate) pull_wake: Notify,
+    /// Held by the folder pass for its whole run, and by a removal that
+    /// touches the folder.  Lock order: `keysync`, then `folder_lock`, then
+    /// `keylist`.  The folder pass never takes `keysync`, so `apply_key_list`
+    /// (which holds `keysync` and removes rows) cannot deadlock against it.
+    pub(crate) folder_lock: tokio::sync::Mutex<()>,
+    /// `off`, `on`, `unavailable` or `too_many`, as the last pass found it.
+    pub(crate) folder_state: Mutex<&'static str>,
 }
 
 impl std::fmt::Debug for Engine {
@@ -211,7 +224,11 @@ pub(crate) mod kv {
     pub const LAST_SEEN_SEQ: &str = "key_list_last_seen_seq";
     pub const KEY_LIST_LOCAL_SHA: &str = "key_list_local_sha256";
     pub const KEY_LIST_ONLINE_SHA: &str = "key_list_online_sha256";
+    /// The Wildbloom folder mirror is on (with [`FOLDER_ID`]).
     pub const WATCH_ENABLED: &str = "watch_enabled";
+    /// The random id in the folder's marker file, set when the folder is
+    /// turned on.
+    pub const FOLDER_ID: &str = "folder_id";
     pub const LAST_CHECK: &str = "last_copy_check";
     /// A sealed key list has not reached every node it should be on.
     pub const KEY_LIST_PENDING: &str = "key_list_pending";
@@ -228,6 +245,9 @@ impl Engine {
         store_factory: StoreFactory,
         rt: Handle,
     ) -> Result<Arc<Self>, String> {
+        // Frozen into every entry this computer adds, so cleaned once here.
+        let mut cfg = cfg;
+        cfg.computer_name = super::path::computer_origin(&cfg.computer_name);
         wildbloom_private_state::private_directory(&cfg.data_dir)
             .map_err(|_| "the Drop data directory is not private".to_string())?;
         let temp_lock = TempDirLock::acquire(&cfg.temp_dir).map_err(|e| e.to_string())?;
@@ -274,6 +294,8 @@ impl Engine {
             setup_lock: tokio::sync::RwLock::new(()),
             pulled: Mutex::new(std::collections::HashSet::new()),
             pull_wake: Notify::new(),
+            folder_lock: tokio::sync::Mutex::new(()),
+            folder_state: Mutex::new("off"),
         });
         let _ = engine.keychain();
         Ok(engine)
@@ -281,10 +303,23 @@ impl Engine {
 
     /// Starts the background workers.  Safe to call once.
     pub fn start(self: &Arc<Self>) {
+        // An install from before the mirror kept `watch_enabled` for the
+        // inbox folder.  The mirror moves and removes files, so the owner
+        // opts in again through its confirmation.  Links are kept for the
+        // enable-time rule that adopts inbox files in place.
+        if self.index.get_bool(kv::WATCH_ENABLED).unwrap_or(false)
+            && self.index.get(kv::FOLDER_ID).ok().flatten().is_none()
+        {
+            let _ = self.index.set_bool(kv::WATCH_ENABLED, false);
+        }
+        self.refresh_folder_state();
         // Rows left mid-step by a previous run.
         if let Ok(files) = self.index.files() {
             for file in files {
-                if file.local == local::ENCRYPTING {
+                if file.local == local::ENCRYPTING && file.watch_path.is_some() && self.mirror_on()
+                {
+                    self.forget_cut_off_import(&file);
+                } else if file.local == local::ENCRYPTING {
                     // The original was not fully encrypted; its id is never
                     // reused, so the row shows that it must be added again.
                     let _ = self.index.set_local(&file.id, local::UNREADABLE);
@@ -300,6 +335,27 @@ impl Engine {
         // The index and keychain are the durable record of the key list.
         self.keysync_wake.notify_one();
         self.spawn_workers();
+    }
+
+    /// A folder import cut off mid-encryption is forgotten, so the pass takes
+    /// its file in again.  An edit's link goes back to the version it was
+    /// replacing (with a size that cannot match), so it is taken in again as
+    /// an edit of that version.  It was never in the key list.
+    fn forget_cut_off_import(&self, file: &FileRecord) {
+        if let Some(prev) = file.prev.as_deref()
+            && let Ok(Some(old)) = self.index.file(prev)
+            && old.watch_path.is_none()
+        {
+            let _ = self.index.set_link(
+                prev,
+                file.watch_path.clone().map(|path| (path, u64::MAX, 0)),
+            );
+        }
+        if let (Some(id), Ok(keychain)) = (FileId::parse(&file.id), self.keychain()) {
+            let _ = keychain.remove_file_key(&id);
+        }
+        let _ = std::fs::remove_file(self.outbox_path(&file.id));
+        let _ = self.index.delete_file(&file.id);
     }
 
     /// Envelopes in the outbox whose row is gone (removed while encrypting,
@@ -458,6 +514,63 @@ impl Engine {
         envelope::drop_limits(self.cfg.online_blob_limit).max_source_bytes()
     }
 
+    // ------------------------------------------------------------- folder
+
+    /// Whether the Wildbloom folder mirror is on: turned on, with a folder id.
+    pub(crate) fn mirror_on(&self) -> bool {
+        self.index.get_bool(kv::WATCH_ENABLED).unwrap_or(false)
+            && self.index.get(kv::FOLDER_ID).ok().flatten().is_some()
+    }
+
+    /// Whether the folder is there now: its root is a real folder whose
+    /// marker holds this install's folder id.
+    pub(crate) fn folder_available(&self) -> bool {
+        let id = self
+            .index
+            .get(kv::FOLDER_ID)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        super::folder::available(&self.cfg.watch_dir, &id)
+    }
+
+    /// `off`, `on`, `unavailable` or `too_many`.
+    pub(crate) fn folder_state(&self) -> &'static str {
+        if !self.mirror_on() {
+            "off"
+        } else if !self.folder_available() {
+            "unavailable"
+        } else if matches!(self.folder_state.lock().map(|s| *s), Ok("too_many")) {
+            "too_many"
+        } else {
+            "on"
+        }
+    }
+
+    /// Records the folder state; emits the status when it changed.
+    pub(crate) fn set_folder_state(&self, state: &'static str) {
+        let changed = match self.folder_state.lock() {
+            Ok(mut slot) => std::mem::replace(&mut *slot, state) != state,
+            Err(_) => false,
+        };
+        if changed {
+            self.emit_status();
+        }
+    }
+
+    fn refresh_folder_state(&self) {
+        let state = if !self.mirror_on() {
+            "off"
+        } else if self.folder_available() {
+            "on"
+        } else {
+            "unavailable"
+        };
+        if let Ok(mut slot) = self.folder_state.lock() {
+            *slot = state;
+        }
+    }
+
     // -------------------------------------------------------------- status
 
     pub fn first_run(&self) -> Option<FirstRun> {
@@ -565,8 +678,9 @@ impl Engine {
             approval,
             recovery,
             watch_folder: WatchFolderStatus {
-                enabled: self.index.get_bool(kv::WATCH_ENABLED).unwrap_or(false),
+                enabled: self.mirror_on(),
                 path: self.cfg.watch_display.clone(),
+                state: self.folder_state(),
             },
             limits: LimitsStatus {
                 drop_max_bytes: self.drop_max_bytes(),
@@ -609,6 +723,7 @@ impl Engine {
         let mut shared_until = None;
         let mut sharing_ended = None;
         let state: &'static str = match (file.local.as_str(), file.online.as_str()) {
+            (local::NOT_KEPT, _) => "not_kept",
             (local::RESTORING, _) => "restoring",
             (local::ENCRYPTING | local::PENDING, _) => "encrypting",
             (local::UNREADABLE, _) => "unreadable",
@@ -662,8 +777,28 @@ impl Engine {
             progress,
             shared_until,
             sharing_ended,
-            in_watch_folder: file.watch_path.is_some(),
+            not_kept: (state == "not_kept").then_some(match file.note.as_deref() {
+                Some("too_big") => "too_big",
+                Some("too_long") => "too_long",
+                Some("too_deep") => "too_deep",
+                _ => "name",
+            }),
+            folder: self.row_folder(file),
+            // A "Not kept" row has a file there too (Show in Finder finds
+            // it), but nothing Wildbloom keeps.
+            in_watch_folder: file.watch_path.is_some() && state != "not_kept",
         }
+    }
+
+    /// The row's folder relative to the Wildbloom folder, for display: where
+    /// its file is, or (with the mirror on) where its entry path puts it.
+    fn row_folder(&self, file: &FileRecord) -> Option<String> {
+        let rel: Vec<String> = match &file.watch_path {
+            Some(path) => super::folder::relative(&self.cfg.watch_dir, Path::new(path))?,
+            None if self.mirror_on() => file.path.split('/').map(str::to_owned).collect(),
+            None => return None,
+        };
+        (rel.len() > 1).then(|| rel[..rel.len() - 1].join("/"))
     }
 
     pub(crate) fn emit_row(&self, id: &str) {
@@ -865,7 +1000,7 @@ impl Engine {
 
     fn requeue_all_online(&self) -> CommandResult<()> {
         for file in self.index.files().or_internal()? {
-            if file.local != local::UNREADABLE {
+            if file.local != local::UNREADABLE && file.local != local::NOT_KEPT {
                 self.index
                     .set_online(&file.id, online::QUEUED)
                     .or_internal()?;
@@ -941,18 +1076,161 @@ impl Engine {
         Ok(())
     }
 
-    pub fn set_watch_folder(self: &Arc<Self>, enabled: bool) -> CommandResult<()> {
+    /// Turns the Wildbloom folder mirror on or off.
+    ///
+    /// - On (from off): writes the marker with a new folder id.  Files kept
+    ///   through the earlier inbox folder are linked in place when they sit
+    ///   at the root under their own name, unchanged; one in a subfolder is
+    ///   taken in again at its real path, replacing its old entry once kept.
+    ///   Every other link is cleared, so files already in the folder are
+    ///   linked by content or taken in as new.
+    /// - On again (the folder or its marker was lost): if the marker is back,
+    ///   nothing changes.  Otherwise every link is cleared and a new marker
+    ///   written, so no deletion is ever inferred against a folder that was
+    ///   recreated empty.
+    /// - Off: every link is cleared; the files stay as the owner's own.
+    pub async fn set_watch_folder(self: &Arc<Self>, enabled: bool) -> CommandResult<()> {
+        let was_on = self.mirror_on();
+        if enabled && was_on && self.folder_available() {
+            self.refresh_folder_state();
+            self.emit_status();
+            self.watch_wake.notify_one();
+            self.pull_wake.notify_one();
+            return Ok(());
+        }
+        let _folder = self.folder_lock.lock().await;
         if enabled {
-            std::fs::create_dir_all(&self.cfg.watch_dir).map_err(|_| {
+            let id = FileId::random()
+                .map_err(|_| internal("random"))?
+                .to_string();
+            super::folder::write_marker(&self.cfg.watch_dir, &id).map_err(|_| {
                 CommandError::with_message("watch_folder", "Couldn't create the Wildbloom folder.")
             })?;
+            if was_on {
+                self.clear_folder_links()?;
+            } else {
+                self.adopt_inbox_links().await?;
+            }
+            self.index.set(kv::FOLDER_ID, &id).or_internal()?;
+        } else {
+            self.clear_folder_links()?;
+            self.index.unset(kv::FOLDER_ID).or_internal()?;
         }
         self.index
             .set_bool(kv::WATCH_ENABLED, enabled)
             .or_internal()?;
+        self.refresh_folder_state();
+        drop(_folder);
         self.emit_status();
+        for file in self.index.files().or_internal()? {
+            self.emit_row(&file.id);
+        }
         self.watch_wake.notify_one();
+        self.pull_wake.notify_one();
         Ok(())
+    }
+
+    /// Clears every link and drops "Not kept" rows.  The caller holds the
+    /// folder lock.
+    fn clear_folder_links(&self) -> CommandResult<()> {
+        for file in self.index.files().or_internal()? {
+            if file.local == local::NOT_KEPT {
+                self.index.delete_file(&file.id).or_internal()?;
+                self.host.emit_removed(&file.id);
+            } else if file.watch_path.is_some() {
+                self.index.set_link(&file.id, None).or_internal()?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The enable-time rule for files kept through the earlier inbox folder
+    /// (spec 2.7).  The caller holds the folder lock.
+    async fn adopt_inbox_links(self: &Arc<Self>) -> CommandResult<()> {
+        use super::folder::Stat;
+        let root = self.cfg.watch_dir.clone();
+        for file in self.index.files().or_internal()? {
+            let Some(link) = file.watch_path.clone() else {
+                continue;
+            };
+            if file.local == local::NOT_KEPT {
+                self.index.delete_file(&file.id).or_internal()?;
+                self.host.emit_removed(&file.id);
+                continue;
+            }
+            let path = PathBuf::from(&link);
+            let unchanged = matches!(
+                super::folder::stat_path(&root, &path),
+                Stat::Present(meta) if super::folder::matches(&meta, file.watch_size, file.watch_mtime)
+            );
+            let legacy = file.path == file.name
+                && file.sha256.is_some()
+                && file.local != local::UNREADABLE
+                && file.local != local::ENCRYPTING;
+            let rel = super::folder::relative_nfc(&root, &path);
+            match rel {
+                Some(rel) if unchanged && legacy => {
+                    if super::path::fold(&rel) == super::path::fold(&file.path) {
+                        // At the root under its own name: linked in place.
+                        continue;
+                    }
+                    self.index.set_link(&file.id, None).or_internal()?;
+                    let Ok(meta) = std::fs::symlink_metadata(&path) else {
+                        continue;
+                    };
+                    if super::watch::not_kept_reason(&rel, false, meta.len(), self.drop_max_bytes())
+                        .is_some()
+                    {
+                        continue;
+                    }
+                    let hash_path = path.clone();
+                    let Ok(Ok(hash)) =
+                        tokio::task::spawn_blocking(move || sha256_file(&hash_path)).await
+                    else {
+                        continue;
+                    };
+                    // Re-encrypted at its real path; the inbox entry is
+                    // removed once the new one is kept.
+                    let _ = self
+                        .import_folder_file(path, rel, &meta, hash, Some(file.id.clone()))
+                        .await;
+                }
+                _ => self.index.set_link(&file.id, None).or_internal()?,
+            }
+        }
+        Ok(())
+    }
+
+    /// Opens a row's file in the Wildbloom folder with its default app.
+    pub fn open_file(&self, id: &str) -> CommandResult<()> {
+        let path = self.folder_file(id)?;
+        self.host.open_path(&path);
+        Ok(())
+    }
+
+    /// Shows a row's file in Finder, Explorer or the file manager.
+    pub fn reveal_file(&self, id: &str) -> CommandResult<()> {
+        let path = self.folder_file(id)?;
+        self.host.reveal_path(&path);
+        Ok(())
+    }
+
+    /// The row's file in the folder, if it is there now (a "Not kept" row
+    /// counts).
+    fn folder_file(&self, id: &str) -> CommandResult<PathBuf> {
+        let file = self
+            .index
+            .file(id)
+            .or_internal()?
+            .ok_or(CommandError::code("not_found"))?;
+        let path = file
+            .watch_path
+            .map(PathBuf::from)
+            .ok_or(CommandError::code("not_in_folder"))?;
+        match super::folder::stat_path(&self.cfg.watch_dir, &path) {
+            super::folder::Stat::Present(_) => Ok(path),
+            _ => Err(CommandError::code("not_in_folder")),
+        }
     }
 
     pub fn open_watch_folder(&self) -> CommandResult<()> {
@@ -970,16 +1248,13 @@ impl Engine {
         let paths = tokio::task::spawn_blocking(move || host.pick_files())
             .await
             .unwrap_or_default();
-        self.add_paths(paths, None).await
+        self.add_paths(paths).await
     }
 
-    /// Classifies, de-duplicates and queues each path.  `watched` marks a file
-    /// taken in from the watched folder, with its size and mtime.
-    pub async fn add_paths(
-        self: &Arc<Self>,
-        paths: Vec<PathBuf>,
-        watched: Option<(u64, i64)>,
-    ) -> CommandResult<AddResult> {
+    /// Classifies, de-duplicates and queues each path from the window.
+    /// While the Wildbloom folder mirror is on, each file gets a free path at
+    /// the folder's root, and the folder pass places it once encrypted.
+    pub async fn add_paths(self: &Arc<Self>, paths: Vec<PathBuf>) -> CommandResult<AddResult> {
         let mut result = AddResult::default();
         if paths.is_empty() {
             return Ok(result);
@@ -987,6 +1262,7 @@ impl Engine {
         let _setup = self.setup_lock.read().await;
         self.identity()?;
         let limit = self.drop_max_bytes();
+        let mirror = self.mirror_on();
         for path in paths {
             let name = wildbloom_envelope::sanitise_name(
                 &path
@@ -1028,47 +1304,146 @@ impl Engine {
                 });
                 continue;
             }
-            let id = FileId::random()
-                .map_err(|_| internal("random"))?
-                .to_string();
-            let record = FileRecord {
-                id: id.clone(),
-                name: name.clone(),
-                media_type: guess_media_type(&name).to_owned(),
-                bytes: meta.len(),
-                added: now(),
-                plain_sha256: plain,
-                sha256: None,
-                size: None,
-                local: local::ENCRYPTING.into(),
-                online: if self.online_endpoint().is_some() {
-                    online::QUEUED.into()
-                } else {
-                    online::NONE.into()
-                },
-                attempts: 0,
-                next_attempt: 0,
-                watch_path: watched.map(|_| path.to_string_lossy().into_owned()),
-                watch_size: watched.map(|(size, _)| size),
-                watch_mtime: watched.map(|(_, mtime)| mtime),
-                // A version 1 entry: its path is its name.  Folder paths,
-                // `plain` and `from` are only written while the Wildbloom
-                // folder mirror is on.
-                path: name.clone(),
-                prev: None,
-                origin: String::new(),
-                entry_plain: String::new(),
-                note: None,
+            // A version 1 entry (its path is its name) while the mirror is
+            // off; a free root path, `plain` and `from` while it is on.
+            let fields = if mirror {
+                NewFields {
+                    path: self.free_root_path(&name)?,
+                    prev: None,
+                    origin: self.cfg.computer_name.clone(),
+                    entry_plain: plain.clone(),
+                }
+            } else {
+                NewFields {
+                    path: name.clone(),
+                    prev: None,
+                    origin: String::new(),
+                    entry_plain: String::new(),
+                }
             };
-            self.index.insert_file(&record).or_internal()?;
-            self.set_progress(&id, 0);
-            result.added.push(id.clone());
-            let engine = self.clone();
-            self.rt
-                .spawn(async move { engine.encrypt_and_keep(id, path).await });
+            let id = self.queue_new_file(path, name, meta.len(), plain, fields, None)?;
+            result.added.push(id);
         }
         self.emit_status();
         Ok(result)
+    }
+
+    /// Inserts a row for a new file and starts its encryption.
+    fn queue_new_file(
+        self: &Arc<Self>,
+        source: PathBuf,
+        name: String,
+        bytes: u64,
+        plain: String,
+        fields: NewFields,
+        link: Option<(String, u64, i64)>,
+    ) -> CommandResult<String> {
+        // Every entry must pass the key list's own checks, or every other
+        // computer would refuse the whole list.
+        if !(fields.path == name || super::path::valid_path(&fields.path))
+            || !super::device::valid_from(&fields.origin)
+        {
+            return Err(internal("not a valid entry path"));
+        }
+        let id = FileId::random()
+            .map_err(|_| internal("random"))?
+            .to_string();
+        let record = FileRecord {
+            id: id.clone(),
+            name: name.clone(),
+            media_type: guess_media_type(&name).to_owned(),
+            bytes,
+            added: now(),
+            plain_sha256: plain,
+            sha256: None,
+            size: None,
+            local: local::ENCRYPTING.into(),
+            online: if self.online_endpoint().is_some() {
+                online::QUEUED.into()
+            } else {
+                online::NONE.into()
+            },
+            attempts: 0,
+            next_attempt: 0,
+            watch_path: link.as_ref().map(|(path, _, _)| path.clone()),
+            watch_size: link.as_ref().map(|(_, size, _)| *size),
+            watch_mtime: link.as_ref().map(|(_, _, mtime)| *mtime),
+            path: fields.path,
+            prev: fields.prev,
+            origin: fields.origin,
+            entry_plain: fields.entry_plain,
+            note: None,
+        };
+        self.index.insert_file(&record).or_internal()?;
+        self.set_progress(&id, 0);
+        let engine = self.clone();
+        let task_id = id.clone();
+        self.rt
+            .spawn(async move { engine.encrypt_and_keep(task_id, source).await });
+        Ok(id)
+    }
+
+    /// Takes in a file found in the Wildbloom folder at `rel` (its entry
+    /// path, NFC): a new entry with a fresh key, linked to the file, with no
+    /// content de-duplication (the same bytes at two paths are two files).
+    /// An edit names the version it replaces as `prev` and keeps its path.
+    pub(crate) async fn import_folder_file(
+        self: &Arc<Self>,
+        source: PathBuf,
+        rel: String,
+        meta: &std::fs::Metadata,
+        plain: String,
+        prev: Option<String>,
+    ) -> CommandResult<String> {
+        let _setup = self.setup_lock.read().await;
+        self.identity()?;
+        // The envelope's own name for the file, which the entry carries and
+        // reconcile rebuilds from the row: they must be equal.
+        let name = wildbloom_envelope::sanitise_name(
+            &source
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        );
+        let link = (
+            source.to_string_lossy().into_owned(),
+            meta.len(),
+            super::folder::mtime_of(meta),
+        );
+        let fields = NewFields {
+            path: rel,
+            prev,
+            origin: self.cfg.computer_name.clone(),
+            entry_plain: plain.clone(),
+        };
+        let id = self.queue_new_file(source, name, meta.len(), plain, fields, Some(link))?;
+        self.emit_status();
+        Ok(id)
+    }
+
+    /// A root path no row and no file in the folder has yet: the name, or
+    /// `"{stem} 2{ext}"` and so on, compared by folded key.
+    fn free_root_path(&self, name: &str) -> CommandResult<String> {
+        let base = super::path::safe_component(name);
+        let mut taken = std::collections::HashSet::new();
+        for file in self.index.files().or_internal()? {
+            let parts: Vec<&str> = file.path.split('/').collect();
+            for n in 1..=parts.len() {
+                taken.insert(super::path::fold(&parts[..n].join("/")));
+            }
+        }
+        for n in 1..10_000u32 {
+            let candidate = if n == 1 {
+                base.clone()
+            } else {
+                super::folder::numbered(&base, n)
+            };
+            let on_disk = std::fs::symlink_metadata(self.cfg.watch_dir.join(&candidate)).is_ok();
+            if !on_disk && !taken.contains(&super::path::fold(&candidate)) {
+                return Ok(candidate);
+            }
+        }
+        Err(internal("no free name"))
     }
 
     /// Encrypts one new file under a fresh key (its id is never reused for
@@ -1224,6 +1599,9 @@ impl Engine {
                 self.clear_progress(id);
                 self.emit_row(id);
                 self.emit_status();
+                if self.online_endpoint().is_none() {
+                    self.complete_edit(id).await;
+                }
                 true
             }
             Err(_) => false,
@@ -1418,8 +1796,8 @@ impl Engine {
     }
 
     /// Remove in the window: deletes both copies, any shared copy and the
-    /// key, and tells the other computers through the key list.  The original
-    /// file is never touched.
+    /// key, and tells the other computers through the key list.  While the
+    /// Wildbloom folder mirror is on, its file there goes to the Trash.
     pub async fn remove(self: &Arc<Self>, id: &str) -> CommandResult<()> {
         self.remove_row(id, RemoveHow::Window).await?;
         self.run_pending_deletes().await;
@@ -1428,8 +1806,14 @@ impl Engine {
 
     /// Removes one row: its own copies (deletions a node cannot take now are
     /// queued against the node that holds the copy), any shared copy, the key
-    /// and the row, with a tombstone written before the key goes.  Nothing on
-    /// disk outside app data is touched.
+    /// and the row, with a tombstone written before the key goes.
+    ///
+    /// While the mirror is on, a removal in the window or from another
+    /// computer first moves the row's unchanged file in the folder to the
+    /// Trash (never deleting it).  A file changed here and not yet taken in
+    /// is left alone and unlinked, so it is taken in as new and the change
+    /// wins.  If the file cannot be moved, nothing is removed and the error
+    /// says so (a remote removal is retried on the next pull).
     ///
     /// Online deletions go only to nodes where this computer's device key
     /// claims the copy (`online_copies`).  BUD-12 deletion is self-only: a
@@ -1443,11 +1827,30 @@ impl Engine {
         id: &str,
         how: RemoveHow,
     ) -> CommandResult<()> {
-        let file = self
+        let mut file = self
             .index
             .file(id)
             .or_internal()?
             .ok_or(CommandError::code("not_found"))?;
+        // Held whether or not the row is linked yet: a pass placing its file
+        // right now finishes first, so the file is never left behind to be
+        // taken in again.
+        let _folder = if matches!(how, RemoveHow::Window | RemoveHow::Remote { .. })
+            && file.local != local::NOT_KEPT
+            && self.mirror_on()
+        {
+            let guard = self.folder_lock.lock().await;
+            // The folder pass may have moved the link while this waited.
+            file = self
+                .index
+                .file(id)
+                .or_internal()?
+                .ok_or(CommandError::code("not_found"))?;
+            self.remove_folder_file(&file)?;
+            Some(guard)
+        } else {
+            None
+        };
         // An encryption still running for this row sees the flag and keeps
         // neither its key nor its envelope.
         if let Ok(mut removed) = self.removed_ids.lock() {
@@ -1458,7 +1861,7 @@ impl Engine {
         // content does not change here.
         let at = match how {
             RemoveHow::Remote { at } => at,
-            RemoveHow::Window | RemoveHow::Superseded => now(),
+            RemoveHow::Window | RemoveHow::FromFolder | RemoveHow::Superseded => now(),
         };
         if let Some(sha) = &file.sha256 {
             self.index
@@ -1502,12 +1905,85 @@ impl Engine {
         self.clear_progress(id);
         self.host.emit_removed(id);
         self.emit_status();
+        drop(_folder);
         // A remote removal came from the key list; publishing it again would
         // only re-seal the same content.
         if !matches!(how, RemoveHow::Remote { .. }) {
             self.keysync_wake.notify_one();
         }
         Ok(())
+    }
+
+    /// The folder side of a removal in the window or from another computer.
+    /// The caller holds the folder lock.
+    fn remove_folder_file(&self, file: &FileRecord) -> CommandResult<()> {
+        use super::folder::Stat;
+        let Some(path) = file.watch_path.as_deref().map(PathBuf::from) else {
+            return Ok(());
+        };
+        if !self.folder_available() {
+            // Removed now, its file would be taken in again when the folder
+            // is back.  A remote removal waits; the owner is told why.
+            return Err(CommandError::with_message(
+                "folder_unavailable",
+                "Your Wildbloom folder can't be found, so files in it can't be removed now.",
+            ));
+        }
+        let root = &self.cfg.watch_dir;
+        let Some(rel) = super::folder::relative(root, &path) else {
+            self.index.set_link(&file.id, None).or_internal()?;
+            return Ok(());
+        };
+        match super::folder::stat_under(root, &rel) {
+            Stat::Present(meta)
+                if super::folder::matches(&meta, file.watch_size, file.watch_mtime) =>
+            {
+                if !self.move_to_trash(&rel) {
+                    return Err(CommandError::with_message(
+                        "trash_failed",
+                        "Couldn't move the file in your Wildbloom folder to the Trash.",
+                    ));
+                }
+                if let Some(parent) = path.parent() {
+                    super::folder::sweep_empty(root, &[parent.to_path_buf()].into_iter().collect());
+                }
+            }
+            // Changed here and not taken in yet: the change is kept and will
+            // be taken in as a new file.  Unreadable or a link: left alone.
+            Stat::Present(_) | Stat::Unknown => {
+                self.index.set_link(&file.id, None).or_internal()?;
+            }
+            Stat::Missing => {}
+        }
+        Ok(())
+    }
+
+    /// Moves the folder file at `rel` to the Trash, or to the hidden
+    /// fallback folder.  Never deletes it.
+    pub(crate) fn move_to_trash(&self, rel: &[String]) -> bool {
+        let (year, month, day) = super::status::ymd(now());
+        let date = format!("{year:04}-{month:02}-{day:02}");
+        let host = self.host.clone();
+        super::folder::remove_to_trash(&self.cfg.watch_dir, rel, &date, &move |path| {
+            host.trash(path)
+        })
+    }
+
+    /// An edit is complete once its new version is safely kept (online, or
+    /// locally when no online node is set): the version it replaces is then
+    /// removed as superseded, which publishes its tombstone.
+    pub(crate) async fn complete_edit(self: &Arc<Self>, id: &str) {
+        let Ok(Some(file)) = self.index.file(id) else {
+            return;
+        };
+        let Some(prev) = file.prev else {
+            return;
+        };
+        if matches!(self.index.file(&prev), Ok(Some(_)))
+            && self.remove_row(&prev, RemoveHow::Superseded).await.is_ok()
+        {
+            self.deletes_wake.notify_one();
+        }
     }
 
     /// Sends every queued deletion that is due to the node it was queued for.
@@ -1623,11 +2099,22 @@ pub fn local_node_trust_args(
         .collect()
 }
 
+/// The frozen key list entry fields of a new row.
+pub(crate) struct NewFields {
+    pub path: String,
+    pub prev: Option<String>,
+    pub origin: String,
+    pub entry_plain: String,
+}
+
 /// Why a row is removed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RemoveHow {
     /// The owner chose Remove in the window.
     Window,
+    /// Its file was deleted from the Wildbloom folder (inferred by the
+    /// folder pass).  There is nothing left in the folder to move.
+    FromFolder,
     /// A newer version or an identical entry replaces it.  Its tombstone is
     /// new, so it is published.
     Superseded,

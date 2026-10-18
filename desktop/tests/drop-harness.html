@@ -68,6 +68,9 @@
         } else if (name === 'first-run-3-used') {
           const copy = await waitFor(() => [...document.querySelectorAll('#view-first button')].find((b) => b.textContent === 'Copy'));
           copy.click();
+        } else if (name === 'confirm-folder-on') {
+          const toggle = await waitFor(() => document.getElementById('folder-toggle'));
+          toggle.click();
         } else if (name === 'confirm-remove' || name === 'confirm-stop') {
           const id = name === 'confirm-stop' ? 'f12' : 'f1';
           const more = await waitFor(() => document.querySelector(`li.row[data-id="${id}"] [data-ctl="more"]`));

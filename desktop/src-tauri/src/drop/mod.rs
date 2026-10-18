@@ -24,7 +24,8 @@
 //!   [`index`] (the private SQLite file index), [`client`] (node HTTP),
 //!   [`mirror`] (online copies and checks), [`approve`] (NIP-46 approval),
 //!   [`keysync`] (key list and restore), [`share`] and [`relay`] (sharing),
-//!   [`watch`] (the Wildbloom folder) and [`status`] (the status line).
+//!   [`watch`] and [`folder`] (the Wildbloom folder mirror) and [`status`]
+//!   (the status line).
 //! - [`commands`]: the Tauri commands and the host that emits events.
 //!
 //! Secrets are zeroised on drop where the types allow it, and no `Debug` or
@@ -42,6 +43,7 @@ pub mod device;
 mod e2e;
 pub mod engine;
 pub mod envelope;
+pub mod folder;
 pub mod index;
 pub mod keychain;
 pub mod keysync;

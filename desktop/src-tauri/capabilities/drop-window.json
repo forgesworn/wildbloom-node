@@ -34,6 +34,8 @@
     "allow-restore",
     "allow-set-watch-folder",
     "allow-open-watch-folder",
+    "allow-open-file",
+    "allow-reveal-file",
     "allow-share-start",
     "allow-share-again",
     "allow-share-verify",

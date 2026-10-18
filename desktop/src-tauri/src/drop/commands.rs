@@ -213,6 +213,52 @@ impl Host for TauriHost {
         };
         let _ = std::process::Command::new(program).arg(path).spawn();
     }
+
+    fn trash(&self, path: &Path) -> std::io::Result<()> {
+        #[allow(unused_mut)]
+        let mut context = trash::TrashContext::default();
+        // The Finder method goes through AppleScript and asks for Automation
+        // permission; NSFileManager does not.
+        #[cfg(target_os = "macos")]
+        {
+            use trash::macos::{DeleteMethod, TrashContextExtMacos as _};
+            context.set_delete_method(DeleteMethod::NsFileManager);
+        }
+        // The error text names the path, so it is not passed on.
+        context
+            .delete(path)
+            .map_err(|_| std::io::Error::other("could not move the file to the Trash"))
+    }
+
+    fn open_path(&self, path: &Path) {
+        // Each program takes the path as its own argument; no shell runs.
+        let program = if cfg!(target_os = "macos") {
+            "open"
+        } else if cfg!(windows) {
+            "explorer"
+        } else {
+            "xdg-open"
+        };
+        let _ = std::process::Command::new(program).arg(path).spawn();
+    }
+
+    fn reveal_path(&self, path: &Path) {
+        let mut command = if cfg!(target_os = "macos") {
+            let mut command = std::process::Command::new("open");
+            command.arg("-R").arg(path);
+            command
+        } else if cfg!(windows) {
+            let mut command = std::process::Command::new("explorer");
+            command.arg("/select,").arg(path);
+            command
+        } else {
+            // No portable "select this file"; open its folder instead.
+            let mut command = std::process::Command::new("xdg-open");
+            command.arg(path.parent().unwrap_or(path));
+            command
+        };
+        let _ = command.spawn();
+    }
 }
 
 // ------------------------------------------------------------- commands
@@ -244,7 +290,7 @@ pub async fn add_paths(
         dropped.extend(late);
         refused = still;
     }
-    let mut result = engine(&slot)?.add_paths(dropped, None).await?;
+    let mut result = engine(&slot)?.add_paths(dropped).await?;
     for path in refused {
         result.refused.push(Refused {
             name: wildbloom_envelope::sanitise_name(
@@ -388,7 +434,17 @@ pub async fn restore(
 
 #[tauri::command]
 pub async fn set_watch_folder(slot: State<'_, DropSlot>, enabled: bool) -> CommandResult<()> {
-    engine(&slot)?.set_watch_folder(enabled)
+    engine(&slot)?.set_watch_folder(enabled).await
+}
+
+#[tauri::command]
+pub async fn open_file(slot: State<'_, DropSlot>, id: String) -> CommandResult<()> {
+    engine(&slot)?.open_file(&id)
+}
+
+#[tauri::command]
+pub async fn reveal_file(slot: State<'_, DropSlot>, id: String) -> CommandResult<()> {
+    engine(&slot)?.reveal_file(&id)
 }
 
 #[tauri::command]

@@ -988,7 +988,7 @@ fn check_entry(entry: &KeyListEntry) -> Result<(), KeyListError> {
 
 /// A computer name as an entry may carry it: empty, or at most 64 UTF-16
 /// units of NFC text with no control character, `"` or `\`.
-fn valid_from(from: &str) -> bool {
+pub(crate) fn valid_from(from: &str) -> bool {
     use unicode_normalization::UnicodeNormalization as _;
     from.encode_utf16().count() <= MAX_FROM_UTF16
         && !from
