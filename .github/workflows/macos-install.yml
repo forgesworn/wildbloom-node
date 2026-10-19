@@ -62,7 +62,7 @@ jobs:
           candidates=("$candidate_dir/"*.dmg)
           test "${#candidates[@]}" -eq 1
           test "$(sha256sum "${candidates[0]}" | cut -d ' ' -f 1)" = "$CANDIDATE_SHA256"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: signed-candidate-${{ matrix.arch }}
           path: ${{ runner.temp }}/signed-candidate/*.dmg
@@ -117,7 +117,7 @@ jobs:
             --require-upgrade --output "$RUNNER_TEMP/macos-install.json"
       - name: Retain sanitised installation evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: signed-macos-install-${{ matrix.os }}
           path: ${{ runner.temp }}/macos-install.json
