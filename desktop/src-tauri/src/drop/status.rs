@@ -93,6 +93,14 @@ pub fn resolve(status: &DropStatus, rows: &[FileRow], now: u64) -> StatusLine {
             "Your Wildbloom folder has more than 20,000 items. Changes there are paused.",
         );
     }
+    let held = rows.iter().filter(|r| r.state == "held").count();
+    if held > 0 {
+        return attention(&format!(
+            "{} deleted from your Wildbloom folder. {} kept until you choose.",
+            plural(held, "file was", "files were"),
+            if held == 1 { "It's" } else { "They're" }
+        ));
+    }
     if status.approval.state == "expired" {
         return attention("Approval for this computer has ended. New files stay on this computer.");
     }
@@ -325,6 +333,55 @@ mod tests {
         s.keychain = "unavailable";
         assert_eq!(
             resolve(&s, &[], now).text,
+            "Wildbloom can't reach your keychain."
+        );
+    }
+
+    #[test]
+    fn held_removals_follow_the_folder_lines() {
+        let now = 1_900_000_000;
+        let mut s = status();
+        s.watch_folder.enabled = true;
+        s.watch_folder.state = "on";
+        let held = |n: usize| -> Vec<FileRow> { (0..n).map(|_| row("held")).collect() };
+        let line = resolve(&s, &held(342), now);
+        assert_eq!(
+            line.text,
+            "342 files were deleted from your Wildbloom folder. They're kept until you choose."
+        );
+        assert_eq!(line.tone, Tone::Attention);
+        assert_eq!(
+            resolve(&s, &held(1), now).text,
+            "1 file was deleted from your Wildbloom folder. It's kept until you choose."
+        );
+        // Above everything after the folder lines.
+        let mut rows = held(2);
+        rows.extend([row("failed"), row("not_kept"), row("copying")]);
+        s.approval.state = "expired";
+        s.online.failed_checks = 3;
+        s.online.full = true;
+        s.recovery.key_list = "failed";
+        assert!(
+            resolve(&s, &rows, now)
+                .text
+                .starts_with("2 files were deleted")
+        );
+        // Below the folder lines and the keychain.
+        s.watch_folder.state = "too_many";
+        assert!(
+            resolve(&s, &rows, now)
+                .text
+                .starts_with("Your Wildbloom folder has more than 20,000 items")
+        );
+        s.watch_folder.state = "unavailable";
+        assert!(
+            resolve(&s, &rows, now)
+                .text
+                .starts_with("Your Wildbloom folder can't be found")
+        );
+        s.keychain = "unavailable";
+        assert_eq!(
+            resolve(&s, &rows, now).text,
             "Wildbloom can't reach your keychain."
         );
     }

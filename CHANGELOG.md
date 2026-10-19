@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.9 preview - Unreleased
+
+- Hold back a mass removal from the Wildbloom folder until the owner chooses.
+  When many files vanish from the folder at once (50 files, or 10 that are at
+  least half of the folder, within 10 minutes), Wildbloom removes none of them
+  anywhere: the other computers keep their copies and no encrypted copy is
+  deleted. The status line says how many were deleted, and **Review…** lists a
+  few of them with **Put them back** (written back from their encrypted copies),
+  **Remove them everywhere** or **Decide later**. A moved or renamed folder is
+  never held, a few deleted files still go through at once, and adds and edits
+  keep working. The hold survives restarts. Only the computer where the files
+  were deleted holds them; update every computer so each has the brake.
+- The Drop index moves to schema 5, adding the held removals. 0.3.8 and earlier
+  refuse a schema 5 index, so do not downgrade after upgrading.
+
 ## 0.3.8 preview - 2026-10-19
 
 - Learn when a shared file has been downloaded. The recipient's page confirms

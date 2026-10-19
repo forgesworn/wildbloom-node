@@ -1352,6 +1352,7 @@ fn main() {
             drop::commands::copy_back,
             drop::commands::save_copy,
             drop::commands::remove,
+            drop::commands::resolve_held_removals,
             drop::commands::check_online_node,
             drop::commands::set_online_node,
             drop::commands::approve_device,

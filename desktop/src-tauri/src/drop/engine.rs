@@ -179,6 +179,9 @@ pub struct Engine {
     pub(crate) folder_lock: tokio::sync::Mutex<()>,
     /// `off`, `on`, `unavailable` or `too_many`, as the last pass found it.
     pub(crate) folder_state: Mutex<&'static str>,
+    /// When each deletion the folder pass released in the brake's window was
+    /// inferred (see [`super::watch::brake`]).  In memory only.
+    pub(crate) removal_window: Mutex<std::collections::VecDeque<Instant>>,
 }
 
 impl std::fmt::Debug for Engine {
@@ -302,6 +305,7 @@ impl Engine {
             pull_wake: Notify::new(),
             folder_lock: tokio::sync::Mutex::new(()),
             folder_state: Mutex::new("off"),
+            removal_window: Mutex::new(std::collections::VecDeque::new()),
         });
         let _ = engine.keychain();
         Ok(engine)
@@ -712,15 +716,21 @@ impl Engine {
             .into_iter()
             .map(|s| (s.file_id.clone(), s))
             .collect();
+        let held = self.index.held().unwrap_or_default();
         self.index
             .files()
             .unwrap_or_default()
             .iter()
-            .map(|f| self.row_for(f, shares.get(&f.id)))
+            .map(|f| self.row_for(f, shares.get(&f.id), held.contains(&f.id)))
             .collect()
     }
 
-    fn row_for(&self, file: &FileRecord, share: Option<&index::ShareRecord>) -> FileRow {
+    fn row_for(
+        &self,
+        file: &FileRecord,
+        share: Option<&index::ShareRecord>,
+        held: bool,
+    ) -> FileRow {
         let progress = self
             .progress
             .lock()
@@ -731,6 +741,8 @@ impl Engine {
         let mut sharing_ended = None;
         let mut downloaded_at = None;
         let state: &'static str = match (file.local.as_str(), file.online.as_str()) {
+            // Deleted from the folder, held back until the owner chooses.
+            _ if held && file.local != local::NOT_KEPT => "held",
             (local::NOT_KEPT, _) => "not_kept",
             (local::RESTORING, _) => "restoring",
             (local::ENCRYPTING | local::PENDING, _) => "encrypting",
@@ -799,8 +811,8 @@ impl Engine {
             }),
             folder: self.row_folder(file),
             // A "Not kept" row has a file there too (Show in Finder finds
-            // it), but nothing Wildbloom keeps.
-            in_watch_folder: file.watch_path.is_some() && state != "not_kept",
+            // it), but nothing Wildbloom keeps.  A held row's file is gone.
+            in_watch_folder: file.watch_path.is_some() && !matches!(state, "not_kept" | "held"),
         }
     }
 
@@ -820,7 +832,9 @@ impl Engine {
             return;
         };
         let share = self.index.share(id).ok().flatten();
-        self.host.emit_file(&self.row_for(&file, share.as_ref()));
+        let held = self.index.is_held(id).unwrap_or(false);
+        self.host
+            .emit_file(&self.row_for(&file, share.as_ref(), held));
     }
 
     /// Records progress and emits at most four row updates a second.
@@ -1144,9 +1158,14 @@ impl Engine {
         Ok(())
     }
 
-    /// Clears every link and drops "Not kept" rows.  The caller holds the
-    /// folder lock.
+    /// Clears every link and drops "Not kept" rows.  Held deletions end with
+    /// nothing removed: their rows stay kept, and are placed again whenever
+    /// the folder is next on.  The caller holds the folder lock.
     fn clear_folder_links(&self) -> CommandResult<()> {
+        self.index.clear_holds().or_internal()?;
+        if let Ok(mut window) = self.removal_window.lock() {
+            window.clear();
+        }
         for file in self.index.files().or_internal()? {
             if file.local == local::NOT_KEPT {
                 self.index.delete_file(&file.id).or_internal()?;
@@ -1816,6 +1835,83 @@ impl Engine {
         self.remove_row(id, RemoveHow::Window).await?;
         self.run_pending_deletes().await;
         Ok(())
+    }
+
+    /// The owner's choice for deletions from the Wildbloom folder that the
+    /// mass-removal brake held back (`resolve_held_removals`).  Only rows in
+    /// `ids` that are still held are touched.
+    ///
+    /// - `remove`: each one whose file is still missing is removed as an
+    ///   inferred deletion would have been.  One that came back leaves the
+    ///   hold and stays; one that can't be seen stays held.
+    /// - `put_back`: each hold and link is cleared, so the next pass writes
+    ///   the file back at its place from its encrypted copy, never over
+    ///   anything.
+    ///
+    /// Either way the brake's count starts again.
+    pub async fn resolve_held_removals(
+        self: &Arc<Self>,
+        ids: &[String],
+        choice: &str,
+    ) -> CommandResult<HeldResolved> {
+        use super::folder::Stat;
+        let remove = match choice {
+            "remove" => true,
+            "put_back" => false,
+            _ => return Err(CommandError::code("bad_choice")),
+        };
+        let folder = self.folder_lock.lock().await;
+        if remove && self.mirror_on() && !self.folder_available() {
+            return Err(CommandError::with_message(
+                "folder_unavailable",
+                "Your Wildbloom folder can't be found, so files in it can't be removed now.",
+            ));
+        }
+        let mut held = self.index.held().or_internal()?;
+        let mut count = 0u32;
+        let mut touched = Vec::new();
+        // Each held id once, however often it is named.
+        for id in ids.iter().filter(|id| held.remove(*id)) {
+            let Some(file) = self.index.file(id).or_internal()? else {
+                continue;
+            };
+            if !remove {
+                self.index.release_hold(id).or_internal()?;
+                self.index.set_link(id, None).or_internal()?;
+                touched.push(id.clone());
+                count += 1;
+                continue;
+            }
+            let stat = file.watch_path.as_deref().map_or(Stat::Missing, |path| {
+                super::folder::stat_path(&self.cfg.watch_dir, Path::new(path))
+            });
+            match stat {
+                Stat::Missing => {
+                    // The row and its hold go together.
+                    if self.remove_row(id, RemoveHow::FromFolder).await.is_ok() {
+                        count += 1;
+                    }
+                }
+                Stat::Present(_) => {
+                    self.index.release_hold(id).or_internal()?;
+                    touched.push(id.clone());
+                }
+                Stat::Unknown => {}
+            }
+        }
+        if let Ok(mut window) = self.removal_window.lock() {
+            window.clear();
+        }
+        drop(folder);
+        for id in &touched {
+            self.emit_row(id);
+        }
+        self.emit_status();
+        if remove {
+            self.run_pending_deletes().await;
+        }
+        self.watch_wake.notify_one();
+        Ok(HeldResolved { count })
     }
 
     /// Removes one row: its own copies (deletions a node cannot take now are

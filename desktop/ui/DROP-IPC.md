@@ -68,6 +68,10 @@ Conventions
   "Use folder again" (`set_watch_folder` with `enabled: true`). `too_many` means a scan hit the
   item limit; the line, straight after that one, is "Your Wildbloom folder has more than 20,000
   items. Changes there are paused." with no action. `enabled` stays true in both.
+- **Added.** Rows in state `held` add, straight after the two folder lines and before "Approval
+  for this computer has ended": "{n} files were deleted from your Wildbloom folder. They're kept
+  until you choose." (1: "1 file was deleted from your Wildbloom folder. It's kept until you
+  choose.") with "Review…", which opens the review dialog (see `held` below).
 - **Added.** Rows in state `not_kept` add, after "{n} files have only 1 copy" and the key list
   line: "{n} files in your Wildbloom folder can't be kept." (1: "1 file in your Wildbloom folder
   can't be kept."). They are left out of the "All {n} files have 2 copies" count.
@@ -88,7 +92,8 @@ Conventions
   state: "encrypting" | "queued" | "copying" | "two_copies" | "no_online" | "waiting" | "failed"
        | "missing_online" | "online_full" | "missing_local" | "restoring" | "shared"
        | "stop_pending" | "sharing_ended" | "share_owner_only" | "unreadable"
-       | "not_kept",                     // Added.
+       | "not_kept"                      // Added.
+       | "held",                         // Added.
   progress: number | null,         // 0 to 100, for encrypting, copying, restoring
   sharedUntil?: number,            // state "shared"
   sharingEnded?: number,           // state "sharing_ended" (shown for 24 h)
@@ -110,6 +115,40 @@ the Trash. Its encrypted copies and key are deleted, which can't be undone." ("R
 Windows). With the folder off it keeps the earlier copy (plus the "It stays in your Wildbloom
 folder" line for linked rows).
 
+**Added.** `held`: a linked file that vanished from the Wildbloom folder as part of a mass
+deletion, which the brake holds back until the owner chooses. Nothing about it has changed
+anywhere else: no tombstone, its copies and key are kept, and the other computers keep their
+copies. Rust holds deletions inferred by the folder pass (never window removals, other
+computers' removals or replaced versions) when, within 10 minutes and counting files missing
+that are still settling, they reach 50 files, or 10 files that are at least half of the files
+in the folder. A deletion whose content is still in
+the folder (a move or a rename) is never held or counted. While any row is held, every further
+inferred deletion joins the hold. A held file that comes back (or a different file saved at its
+place, which is an edit as ever) leaves the hold. Turning the folder off, or "Use folder again"
+with a new marker, ends every hold with nothing removed. The hold survives restarts (Drop index
+schema 5). Copy "Deleted from your folder · kept until you choose", spoken "Deleted from your
+Wildbloom folder. Kept until you choose.", warning icon, no Share, `inWatchFolder` false. Menu:
+"Put Back" ("Put back" off macOS), "Save a Copy…", "Remove…". Put Back sends
+`resolve_held_removals` with that one id and `put_back`, then the notice "Putting {name} back in
+your Wildbloom folder."
+
+The review dialog (from "Review…") lists the held rows the UI has, sorted by folder then name:
+
+- Heading "{n} files were deleted from your Wildbloom folder" (1: "1 file was deleted from your
+  Wildbloom folder").
+- "That's more than Wildbloom removes without asking. Your other computers and your online node
+  still have them." (1: "… still have it.")
+- Up to 5 names as `folder/name`, then "and {k} more." when there are more.
+- "If you remove them everywhere, copies in your other Wildbloom folders go to the Trash. Their
+  encrypted copies and keys are deleted, which can't be undone." ("Recycle Bin" on Windows; 1:
+  "If you remove it everywhere, … Its encrypted copies and key are deleted, …")
+- Buttons "Put them back" (primary, focused), "Remove them everywhere" and "Decide later"
+  (also Escape, which sends nothing). 1: "Put it back", "Remove it everywhere". macOS and
+  GNOME: Remove · Decide later · Put back; Windows and KDE: Put back · Remove · Decide later.
+- The choice sends `resolve_held_removals` with the listed ids, then the notice "Putting {n}
+  files back in your Wildbloom folder." or "Removed {n} files from Wildbloom." with Rust's count.
+  A row held while the dialog was open is not in the ids and stays held.
+
 States map one to one onto the rows table in section 6.2, plus `share_owner_only` (**added**):
 the approval ended before the shared copy could be deleted, so the node moved it to its owner
 and only the owner can remove it. Copy "2 copies · only your online node’s owner can remove
@@ -127,6 +166,7 @@ the shared copy now", warning icon, menu as "2 copies". Shown for a day. `name` 
 | `retry` | `{ id: string \| null }` | nothing. `null` means every failed row ("Retry all"). Also used for "Copy again". |
 | `copy_back` | `{ id }` | nothing |
 | `save_copy` | `{ id }` | `{ folder: string }` (display name of the folder, for "Saved {name} to {folder}."), or `null` if the owner cancelled. **Changed:** Rust always opens the native save dialog; the page never names a path. |
+| `resolve_held_removals` | `{ ids: string[], choice: "remove" \| "put_back" }` | `{ count: number }`, the rows it acted on. **Added.** Only rows in `ids` that are still `held` are touched. `remove` removes each one whose file is still missing from the folder as a deletion there would have been (its encrypted copies and key are deleted and the other computers move their copies to the Trash); one that came back leaves the hold and stays, and one whose place can't be read stays held and is not counted. `put_back` ends each hold and the next folder pass writes the file back at its place from its encrypted copy (never over anything). Either way the brake's 10-minute count starts again. Rejects `{ code: "bad_choice" }` for any other `choice`, and `remove` rejects `{ code: "folder_unavailable", message }` while the folder can't be found, as `remove` does. Then `drop://file` per row and `drop://status`. |
 | `remove` | `{ id }` | nothing. **Added:** while the folder is on, rejects `{ code: "folder_unavailable", message }` when the row has a file in a Wildbloom folder that can't be found (removing it then would bring the file back when the folder returns), and `{ code: "trash_failed", message }` when that file could not be moved to the Trash or Recycle Bin. Nothing is removed in either case; the UI shows `message`. |
 
 `AddResult`

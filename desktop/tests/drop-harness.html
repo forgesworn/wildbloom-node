@@ -82,6 +82,10 @@
           more.click();
           const menu = await waitFor(() => stub.lastMenu);
           menu.items.find((item) => item.text.startsWith(name === 'confirm-stop' ? 'Stop' : 'Remove')).action();
+        } else if (name === 'confirm-held') {
+          const action = await waitFor(() => { const button = document.getElementById('status-action'); return button && !button.hidden && button.textContent === 'Review…' && button; });
+          action.click();
+          await waitFor(() => document.querySelector('dialog.held[open]'));
         } else if (name === 'notice-folder') {
           await waitFor(() => document.querySelector('li.row'));
           stub.emit('tauri://drag-drop', { paths: ['/folder/Pictures'] });
