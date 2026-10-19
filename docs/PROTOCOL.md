@@ -211,3 +211,238 @@ A future ForgeSworn-owned QUIC lane with an opaque WebSocket relay may carry the
 same blob stream behind `BlobFetcher`.  It must remain optional: Tor and direct
 HTTPS Blossom are already interoperable choices, and no WebRTC/STUN/TURN layer
 is required.
+
+## Direct send (experimental)
+
+Profile `wildbloom-direct/1`.  Direct send moves one file between Drop and a
+person's browser over a WebRTC data channel that is set up inside a
+word-verified Foregather live channel.  It is specified here before it is
+built.  Version 1 covers a page sending a file to Drop (`to-drop`).
+
+The node takes no part in the transfer.  Its only role is the existing
+[pairing creation-grant issuer](#pairing-creation-grant-issuer), which lets
+Drop open the session.  `wildbloomd` runs no WebRTC, STUN or TURN code, and
+Blossom storage and the transports above are unchanged.  Nothing about the
+file rests on any server.
+
+### Session
+
+Drop always opens the session, as it does for Share.  It obtains a one-use live
+grant from the issuer, allocates a Foregather live session with namespace
+`wildbloom.drop` and purpose `send`, four words, one attempt and a lifetime of
+at most 600 seconds, and shows the link and words.  The page checks namespace
+and purpose against its own configuration, never against the link.  After the
+PAKE both people compare three check words.  Only then do both ends switch the
+confirmed channel to Foregather's `foregather-exchange/1` profile
+(foregather-kit 0.6.0 or later); each exchange message carries one
+`wildbloom-direct/1` message.  Drop is the inviter and always makes the WebRTC
+offer.  `dir` in the invitation, not the pairing role, says which way the file
+goes.
+
+### Message encoding
+
+Every message is one JSON object in UTF-8, at most 16,379 bytes, in strict
+canonical form:
+
+- no whitespace outside strings, members in ascending order of their ASCII
+  names, no duplicate names, and exactly the members listed for its event;
+- strings escape only `"`, `\` and U+0000 to U+001F, using `\b`, `\f`, `\n`,
+  `\r` and `\t` where they exist and lower-case `\u00xx` otherwise; every other
+  character, including `/` and non-ASCII, is literal, and lone surrogates are
+  refused;
+- numbers are integers from 0 to 2^53 - 1 in shortest decimal form, with no
+  sign, fraction or exponent; booleans are `true` or `false`, and there is no
+  `null`.
+
+This is what `JSON.stringify` produces for an object built with its members in
+that order, and what `serde_json` produces for a sorted map.  A reader parses
+the message, checks it, serialises it again and compares the bytes; any
+difference refuses it.  Every message has `"v":1` and an `event`.  A reader
+that does not implement the version refuses it with `stop`, reason
+`unsupported`.
+
+### Messages
+
+| From | Index | `event` | Other members |
+| --- | --- | --- | --- |
+| Drop | 0 | `invite` | `dir`, `hide`, `ice`, `id`, `max` |
+| page | 0 | `manifest` | `name`, `size`, `type` |
+| Drop | 1 | `accept` | `sdp`: Drop's offer |
+| Drop | 1 | `decline` | none |
+| page | 1 | `answer` | `key`, `sdp`: the page's answer |
+| Drop | 2 to 6 | `restart` | `sdp`: an ICE restart offer |
+| page | 2 to 6 | `restart-answer` | `sdp` |
+| either | its next index | `stop` | `reason` |
+
+The index is the sender's exchange message index.  The order is:
+
+1. Drop sends `invite` as soon as both people confirm the check words.
+2. The page reads and checks it, then sends `manifest` for the file the person
+   chooses, or `stop`.
+3. Drop shows the owner the name and size, then sends `accept` or `decline`.
+   `decline` ends the direct send.
+4. The page reads `accept` and sends `answer`.
+5. Within the session deadline Drop may restart ICE at most five times.  It
+   sends `restart` at index k + 1 only after reading the page's message at
+   index k, and the page answers at the same index with `restart-answer`.
+6. Either side may send `stop` in place of its next message (Drop's first
+   message is always `invite`) and then sends nothing more; a side that reads
+   `stop` ends too.  Each side sends at most eight messages, indexes 0 to 7.
+
+An event at an index the table does not allow, from the wrong side, or a ninth
+message is a protocol failure: the reader sends `stop` with reason `failed` if
+it still can, and ends.  Neither side creates an `RTCPeerConnection` before
+`accept`: Drop creates its connection after the owner accepts, and the page on
+reading `accept`.  A declined or abandoned session therefore exposes no address
+and allocates nothing on a TURN server.
+
+### Invitation and manifest
+
+| Member | Rule |
+| --- | --- |
+| `dir` | `"to-drop"`: the page sends the file to Drop.  `"from-drop"` is reserved for Drop sending to the page; its message order is not specified yet.  A page refuses a direction it does not implement with `unsupported`; the `send` page implements only `to-drop` |
+| `hide` | `true` when Drop uses relay-only ICE and its address is hidden behind TURN.  It only tells the page what to say |
+| `ice` | 1 to 4 servers, each exactly `{"credential","urls","username"}`.  `urls` holds 1 to 4 `stun:`, `turn:` or `turns:` URLs of at most 256 bytes; `username` and `credential` hold 1 to 256 bytes without control characters.  At least one URL is `turn:` or `turns:` |
+| `id` | 16 random bytes in canonical unpadded base64url: the transfer's name in each app's own state.  It is never sent to a server, and is neither the relay locator nor a TURN username |
+| `max` | The largest file, in bytes, Drop will accept: 1 to 250,000,000 in v1 |
+| `name` | The FSWNENC2 metadata name: a fixed point of the shared name rule (`sanitise_name` in `crates/envelope`) |
+| `size` | The file's exact size in bytes, 0 to `max` |
+| `type` | The FSWNENC2 metadata media type: lower case, not empty (`application/octet-stream` when unknown), at most 255 UTF-16 units, no control characters |
+
+The manifest is exactly the metadata the page will seal into the envelope, so
+both sides know the envelope's length from it.  The page does not offer a file
+larger than `max`, and Drop refuses one with `unsupported`.
+
+`reason` in `stop` is `cancelled` (a person stopped or closed the page),
+`unsupported` (this end cannot use what the other offered: version, direction,
+ICE server or size) or `failed` (a protocol, connection or verification
+failure).
+
+### ICE servers and the TURN credential
+
+Drop obtains two short-lived TURN REST credentials (coturn's `use-auth-secret`
+form, each with its own random username label): one for itself and one for the
+page.  The page's credential travels only inside `invite`, after the check
+words, so only the verified peer receives it.  It never appears in the link, a
+URL, the relay's public fields, a log or browser storage, and the page forgets
+it when the direct send ends.  The route that mints credentials is outside this
+section.
+
+Each URL in `ice` must equal, byte for byte, an entry of the page's build-time
+allowlist; otherwise the page refuses with `unsupported`.  A paired but hostile
+inviter therefore cannot point the page at its own TURN server to learn an
+address the page asked to hide.  The page builds its configuration only from
+`ice` and adds no other server; Drop uses its own credential with the same
+servers.
+
+Each side decides for itself whether to hide its own address.  Hiding means
+`iceTransportPolicy: "relay"` with STUN URLs removed: the other device then sees
+only the TURN server's address, while the TURN server still sees the real one.
+Drop hides by default; the page connects directly unless the person turns
+hiding on.  Browsers already hide local addresses behind mDNS names, because
+these pages never ask for camera or microphone access.
+
+### Session descriptions
+
+Descriptions are not trickled.  Each side sends `localDescription.sdp` once ICE
+gathering completes, or three seconds after gathering starts, whichever comes
+first.  A description is at most 8,000 bytes of printable ASCII with CRLF line
+ends, so every message stays under 16,379 bytes.  The reader refuses one that
+does not start with `v=0`, does not have exactly one media section
+`m=application <port> UDP/DTLS/SCTP webrtc-datachannel`, or has no
+`a=fingerprint:sha-256` line.  Offers and answers reach each side only through
+the AEAD channel whose words the people compared, so the DTLS fingerprints and
+ICE credentials are bound to the paired peer: neither the relay nor a STUN or
+TURN server can substitute them.
+
+### Data channel and frames
+
+Each side has one `RTCPeerConnection` and one pre-negotiated data channel:
+`negotiated: true`, `id: 0`, ordered and reliable (no `maxRetransmits` or
+`maxPacketLifeTime`), label `wildbloom-direct/1`, binary messages only.  Any
+other data channel, a media track or a text message ends the connection.
+
+The file travels as one FSWNENC2 envelope in per-file mode, sealed with the
+`key` from `answer` (fresh for every transfer) and the manifest as its
+metadata.  Its length E follows from the manifest.  With M the byte length of
+the metadata JSON `{"name":…,"size":…,"type":…}`, let P be FSWNENC2's padded
+length of 4 + M + `size` bytes (at least 64 KiB, then the next power of two up
+to 1 MiB, then whole MiB); then E = 56 + P + 16 × ⌈P / 1,048,576⌉.
+
+Frames are binary and big-endian, and their first byte is their type:
+
+| Type | Frame | Layout and length | From | Meaning |
+| --- | --- | --- | --- | --- |
+| `01` | DATA | `01 offset_u64 bytes`, 10 to 65,536 bytes | sender | envelope bytes starting at `offset` |
+| `02` | ACK | `02 next_u64`, 9 bytes | receiver | the first `next` envelope bytes are on disk |
+| `03` | END | `03 sha256_32 size_u64`, 41 bytes | sender | every byte is sent: the file's SHA-256 and size |
+| `04` | KEPT | `04`, 1 byte | receiver | verified and kept |
+| `05` | STOP | `05 reason_u8`, 2 bytes | either | ending: 1 cancelled, 2 failed, 3 storage |
+
+In `to-drop` the page is the sender and Drop the receiver.  Any other type
+(`06` is reserved for a later resume across connections), length or direction
+is a failure: the reader sends STOP 2 and closes.
+
+- DATA offsets are contiguous from 0 and the bytes total exactly E.  A gap, an
+  overlap, a byte past E or DATA after END is a failure.
+- The sender's frames are at most F = min(`sctp.maxMessageSize`, 65,536) bytes.
+  If F is below 16,384 the sender stops with reason 2.
+- The sender never has more than 8,388,608 envelope bytes in flight beyond the
+  last ACK.  It pauses while `bufferedAmount` exceeds 1 MiB and resumes on
+  `bufferedamountlow`, with the threshold at 256 KiB.  The receiver sends ACK at
+  least every 1,048,576 bytes it writes and when it reaches E; `next` strictly
+  increases and never exceeds the bytes received.  The sender shows progress
+  from ACKs, never from bytes queued.
+- After END the receiver checks, in order: exactly E bytes arrived; the envelope
+  opens with `key`, every record authenticates, and the record count and
+  padding bucket match the header; the metadata equals the manifest exactly;
+  the plaintext's size and SHA-256 equal END.  Only then does it keep the file
+  and send KEPT.  Any mismatch sends STOP 2 and deletes both the envelope and
+  plaintext temp files.  Nothing can be saved before KEPT.
+- The sender says the file arrived only after reading KEPT on this channel.
+- After KEPT or STOP both sides close the connection, Drop deletes the relay
+  session, and both close the exchange.  An unknown STOP reason reads as 2.
+
+### Reconnection and the deadline
+
+While the session is open, at most 600 seconds from issue, Drop answers an ICE
+failure or a network change with `restart` on the same connection.  The DTLS
+session, SCTP association and data channel carry on, and SCTP retransmits
+whatever was outstanding, so no frame changes and the application resends
+nothing.  Every envelope record is encrypted exactly once.  If the data channel
+closes, the direct send has failed: v1 has no resume, and the people start again
+with a new link.  The data channel may outlive the session, but once the
+deadline passes no restart is possible and an ICE failure ends the direct send.
+
+### Limits
+
+| Bound | v1 value |
+| --- | --- |
+| Exchange message | 16,379 bytes of canonical JSON |
+| Messages per side | 8, indexes 0 to 7, within the exchange's 32 |
+| ICE restarts | 5 |
+| Session description | 8,000 bytes |
+| ICE servers | 1 to 4, each with 1 to 4 URLs of at most 256 bytes |
+| File | `max`, at most 250,000,000 bytes |
+| Data frame | at most 65,536 bytes; F at least 16,384 |
+| Unacknowledged envelope bytes | 8,388,608 |
+| Session | at most 600 seconds; the data channel may outlive it |
+
+### What servers learn
+
+The pairing relay holds the hellos, proofs and a few KiB of encrypted exchange
+messages until Drop deletes the session or it expires; logical expiry is not
+erasure.  STUN and TURN servers see both addresses, byte counts and timing.  A
+TURN server relays DTLS records that carry FSWNENC2 records, and stores nothing.
+No server sees the words, the check words, the descriptions, or the file's
+name, size, key or bytes, and TURN usernames share no identifier with the relay
+session.  Without hiding, each side sees the other's public address.
+
+### Vectors
+
+`vectors/wildbloom-direct-v1.json` holds synthetic examples: valid messages
+with their exact text and SHA-256, refused messages with the `stop` reason the
+reader sends, valid and refused data-channel frames, and envelope lengths.  The
+first envelope length matches the FSWNENC2 known-answer vector's 65,608 bytes.
+Servers, credentials and keys in it are synthetic.  No Rust or TypeScript
+implementation checks these vectors yet; Drop and the page must pass them.

@@ -1,0 +1,2 @@
+# Frozen vectors are asserted by SHA-256; never convert line endings.
+*.json -text
