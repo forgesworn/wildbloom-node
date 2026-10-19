@@ -1,10 +1,12 @@
-//! Device grant, delegated claim and pairing issuer tests.  Synthetic keys,
-//! hashes and domains only; Foregather is a local stand-in router.
+//! Device grant, delegated claim, pairing issuer and TURN credential issuer
+//! tests.  Synthetic keys, hashes, domains and secrets only; Foregather is a
+//! local stand-in router.
 use super::{
     Grants, GrantsConfig,
     event::{DEVICE_GRANT_KIND, MAX_GRANT_SECONDS},
     gate,
     issuer::{Issuer, OperatorToken},
+    turn::{TurnIssuer, TurnSecret},
 };
 use axum::{
     Json, Router,
@@ -1140,6 +1142,16 @@ async fn tokens_and_authorisation_events_never_reach_the_logs() {
     assert_eq!(status, StatusCode::CREATED);
     let upload_header = bud11(&keys(10), "upload", Some(&sha(b"logged?")));
     upload(&node, &keys(10), b"logged?").await;
+    let turn = turn_request(&keys(10), now, b"");
+    let turn_header = turn
+        .headers()
+        .get(header::AUTHORIZATION)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let (status, turn_body, _) = call(&turn_app(&node), turn).await;
+    assert_eq!(status, StatusCode::CREATED);
     node.call(revoke_request(&keys(1), &keys(10), now + 1))
         .await;
     upload(&node, &keys(10), b"refused").await;
@@ -1149,13 +1161,22 @@ async fn tokens_and_authorisation_events_never_reach_the_logs() {
         logs.contains("accepted an owner-signed device grant"),
         "{logs}"
     );
-    for secret in [
+    assert!(logs.contains("issued a pair of TURN credentials"), "{logs}");
+    let mut secrets = vec![
         URL_SAFE_NO_PAD.encode(OPERATOR_TOKEN_BYTES),
         URL_SAFE_NO_PAD.encode([9_u8; 32]),
         grant_sig,
         issue_header.trim_start_matches("Nostr ").to_owned(),
         upload_header.trim_start_matches("Nostr ").to_owned(),
-    ] {
+        TURN_SECRET.to_owned(),
+        turn_header.trim_start_matches("Nostr ").to_owned(),
+    ];
+    for side in ["own", "peer"] {
+        for member in ["credential", "username"] {
+            secrets.push(turn_body[side][member].as_str().unwrap().to_owned());
+        }
+    }
+    for secret in secrets {
         assert!(!logs.contains(&secret), "a secret value reached the logs");
     }
 }
@@ -2031,4 +2052,289 @@ fn migrated_preview_members_join_at_the_migration_time() {
     );
     let rows = super::db::read_rows(&connection).unwrap();
     assert_eq!(rows.members["k"].since, 12_345);
+}
+
+const TURN_SECRET: &str = "synthetic-wildbloom-turn-secret-0001";
+const TURN_URLS: [&str; 3] = [
+    "stun:turn.example.net:3478",
+    "turn:turn.example.net:3478?transport=udp",
+    "turns:turn.example.net:5349?transport=tcp",
+];
+
+fn turn_app(node: &Node) -> Router {
+    let urls = super::turn::ice_urls(&TURN_URLS.map(str::to_owned)).unwrap();
+    TurnIssuer::new(
+        node.grants.clone(),
+        urls,
+        TurnSecret::parse(TURN_SECRET).unwrap(),
+    )
+    .router()
+}
+
+fn turn_request_signed(authorization: String, body: &[u8]) -> Request<Body> {
+    Request::builder()
+        .method(Method::POST)
+        .uri("/turn/v1/credentials")
+        .header(header::AUTHORIZATION, authorization)
+        .body(Body::from(body.to_vec()))
+        .unwrap()
+}
+
+fn turn_request(signer: &Keys, created_at: u64, body: &[u8]) -> Request<Body> {
+    let url = format!("{ORIGIN}turn/v1/credentials");
+    turn_request_signed(nip98(signer, &url, "POST", body, created_at), body)
+}
+
+/// The verified event id inside a NIP-98 `Authorization` header.
+fn nip98_event_id(request: &Request<Body>) -> String {
+    let header = request.headers()[header::AUTHORIZATION].to_str().unwrap();
+    let event = STANDARD
+        .decode(header.trim_start_matches("Nostr "))
+        .unwrap();
+    serde_json::from_slice::<Value>(&event).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+/// Check one returned ICE entry and return its random label.
+fn turn_label(entry: &Value, expires: u64) -> String {
+    let object = entry.as_object().unwrap();
+    assert_eq!(
+        object.keys().collect::<Vec<_>>(),
+        ["credential", "urls", "username"]
+    );
+    assert_eq!(entry["urls"], json!(TURN_URLS));
+    let username = entry["username"].as_str().unwrap();
+    let (timestamp, label) = username.split_once(':').unwrap();
+    assert_eq!(timestamp, expires.to_string());
+    assert_eq!(URL_SAFE_NO_PAD.decode(label).unwrap().len(), 16);
+    assert_eq!(label.len(), 22);
+    let credential = entry["credential"].as_str().unwrap();
+    assert_eq!(credential.len(), 28);
+    assert_eq!(STANDARD.decode(credential).unwrap().len(), 20);
+    assert_eq!(
+        TurnSecret::parse(TURN_SECRET)
+            .unwrap()
+            .credential(username)
+            .unwrap(),
+        credential
+    );
+    for value in [username, credential] {
+        assert!((1..=256).contains(&value.len()));
+        assert!(!value.chars().any(char::is_control));
+    }
+    label.to_owned()
+}
+
+#[tokio::test]
+async fn turn_issuer_returns_two_fresh_credentials_to_a_granted_device() {
+    let (_dir, node) = node().await;
+    let app = turn_app(&node);
+    let now = node.now();
+    node.call(post_grant(grant_event(&keys(1), &standard_grant(), now)))
+        .await;
+
+    let mut labels = Vec::new();
+    for created_at in [now, now + 1] {
+        let request = turn_request(&keys(10), created_at, b"");
+        let event_id = nip98_event_id(&request);
+        let before = node.now();
+        let response = app.clone().oneshot(request).await.unwrap();
+        let after = node.now();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let bytes = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let text = String::from_utf8(bytes.to_vec()).unwrap();
+        let body = serde_json::from_slice::<Value>(&bytes).unwrap();
+        assert_eq!(
+            body.as_object().unwrap().keys().collect::<Vec<_>>(),
+            ["expires", "own", "peer"]
+        );
+        let expires = body["expires"].as_u64().unwrap();
+        assert!((before + 3600..=after + 3600).contains(&expires));
+        let own = turn_label(&body["own"], expires);
+        let peer = turn_label(&body["peer"], expires);
+        // Exactly these bytes: canonical member order and no other members.
+        let entry = |side: &str| {
+            format!(
+                r#"{{"credential":"{}","urls":{},"username":"{}"}}"#,
+                body[side]["credential"].as_str().unwrap(),
+                serde_json::to_string(&TURN_URLS).unwrap(),
+                body[side]["username"].as_str().unwrap(),
+            )
+        };
+        assert_eq!(
+            text,
+            format!(
+                r#"{{"expires":{expires},"own":{},"peer":{}}}"#,
+                entry("own"),
+                entry("peer")
+            )
+        );
+        // Nothing in the response names the device, the request or the secret.
+        for private in [hex(&keys(10)), event_id, TURN_SECRET.to_owned()] {
+            assert!(!text.contains(&private));
+        }
+        labels.extend([own, peer]);
+    }
+    let distinct = labels.iter().collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(distinct.len(), labels.len());
+}
+
+#[tokio::test]
+async fn turn_issuer_refuses_unauthorised_requests() {
+    let (_dir, node) = node().await;
+    let app = turn_app(&node);
+    let now = node.now();
+    node.call(post_grant(grant_event(&keys(1), &standard_grant(), now)))
+        .await;
+    let url = format!("{ORIGIN}turn/v1/credentials");
+
+    // Unknown device, the recovery identity and the owner.
+    for signer in [keys(2), keys(11), keys(1)] {
+        assert_eq!(
+            call(&app, turn_request(&signer, now, b"")).await.0,
+            StatusCode::FORBIDDEN
+        );
+    }
+    // A stale event, a wrong URL, method or payload, a body, a query and no
+    // authorisation at all.
+    assert_eq!(
+        call(&app, turn_request(&keys(10), now - 61, b"")).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    for (wrong_url, method, payload) in [
+        (
+            "https://other.example/turn/v1/credentials",
+            "POST",
+            &b""[..],
+        ),
+        (
+            "https://node.example/pairing/v1/live-grants",
+            "POST",
+            &b""[..],
+        ),
+        (url.as_str(), "GET", &b""[..]),
+        (url.as_str(), "POST", &b"x"[..]),
+    ] {
+        let request = turn_request_signed(nip98(&keys(10), wrong_url, method, payload, now), b"");
+        assert_eq!(call(&app, request).await.0, StatusCode::UNAUTHORIZED);
+    }
+    assert_eq!(
+        call(&app, turn_request(&keys(10), now, b"{}")).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    let query = Request::builder()
+        .method(Method::POST)
+        .uri("/turn/v1/credentials?x=1")
+        .header(
+            header::AUTHORIZATION,
+            nip98(&keys(10), &url, "POST", b"", now),
+        )
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(call(&app, query).await.0, StatusCode::BAD_REQUEST);
+    let missing = Request::builder()
+        .method(Method::POST)
+        .uri("/turn/v1/credentials")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(call(&app, missing).await.0, StatusCode::UNAUTHORIZED);
+
+    // A replayed NIP-98 event is refused after one use, with the response
+    // redacted like the pairing issuer's.
+    let first = turn_request(&keys(10), now + 1, b"");
+    let replay = turn_request(&keys(10), now + 1, b"");
+    assert_eq!(call(&app, first).await.0, StatusCode::CREATED);
+    let (status, body, text) = call(&app, replay).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        body,
+        json!({"error": "TURN credential request was already used"})
+    );
+    assert!(!text.contains(TURN_SECRET));
+
+    // A revoked device grant obtains nothing more.
+    node.call(revoke_request(&keys(1), &keys(10), now + 2))
+        .await;
+    assert_eq!(
+        call(&app, turn_request(&keys(10), now + 3, b"")).await.0,
+        StatusCode::FORBIDDEN
+    );
+
+    // Nor does an expired one.
+    let brief = Grant {
+        device: 20,
+        recovery: 21,
+        until_in: 5,
+        ..standard_grant()
+    };
+    node.call(post_grant(grant_event(&keys(1), &brief, now)))
+        .await;
+    assert_eq!(
+        call(&app, turn_request(&keys(20), now, b"")).await.0,
+        StatusCode::CREATED
+    );
+    node.advance(10);
+    assert_eq!(
+        call(&app, turn_request(&keys(20), node.now(), b"")).await.0,
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test]
+async fn turn_budget_is_its_own_and_a_refusal_spends_no_event_id() {
+    let (_dir, node) = node().await;
+    let relay = relay(StatusCode::CREATED).await;
+    let pairing = issuer_app(&node, &relay);
+    let app = turn_app(&node);
+    let long = Grant {
+        until_in: 3 * 3600,
+        ..standard_grant()
+    };
+    node.call(post_grant(grant_event(&keys(1), &long, node.now())))
+        .await;
+    let t0 = node.now();
+    let limit = u64::from(super::turn::RATE_LIMIT);
+    assert_eq!(limit, 30);
+    for age in 0..limit {
+        assert_eq!(
+            call(&app, turn_request(&keys(10), t0 - age, b"")).await.0,
+            StatusCode::CREATED
+        );
+    }
+    // Over budget: refused, and its event id is still unspent.
+    let refused = turn_request(&keys(10), t0 - limit, b"");
+    let refused_id = nip98_event_id(&refused);
+    let (status, body, _) = call(&app, refused).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(body, json!({"error": "TURN credential budget is spent"}));
+    assert!(
+        node.grants.consume_event(&refused_id, t0 + 3600).unwrap(),
+        "a refused request spent its event id"
+    );
+    // The pairing budget is separate and untouched.
+    assert_eq!(
+        call(&pairing, issue_request(&keys(10), t0, b"")).await.0,
+        StatusCode::CREATED
+    );
+    // A second device has a budget of its own.
+    let other = Grant {
+        device: 20,
+        recovery: 21,
+        ..long
+    };
+    node.call(post_grant(grant_event(&keys(1), &other, t0)))
+        .await;
+    assert_eq!(
+        call(&app, turn_request(&keys(20), t0, b"")).await.0,
+        StatusCode::CREATED
+    );
+    // An hour later the budget has rolled over.
+    node.advance(3600);
+    assert_eq!(
+        call(&app, turn_request(&keys(10), node.now(), b"")).await.0,
+        StatusCode::CREATED
+    );
 }

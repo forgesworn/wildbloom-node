@@ -15,8 +15,13 @@ storage, network exposure and Nostr authorisation as security boundaries.
   trust a filename, URL, MIME type or client-provided digest on its own.
 - Temporary files, the SQLite database and Tor material are private operator
   state.  Use restrictive permissions where the platform supports them.
-- Do not introduce WebRTC, STUN or TURN.  New transports sit behind an explicit
-  adapter and must retain standard Blossom HTTP interoperability.
+- `wildbloomd` runs no WebRTC, STUN or TURN, and blob transport stays standard
+  Blossom HTTP.  New transports sit behind an explicit adapter and must retain
+  Blossom interoperability.  Direct send (`docs/PROTOCOL.md`) is the only
+  exception, and it stays narrow: the node may mint short-lived TURN REST
+  credentials for an operator's coturn, and Drop (`desktop/`) may run WebRTC in
+  its webview for a person-to-person transfer that never touches the node's
+  storage.
 - Do not claim durable replication until independent nodes and repair after
   loss have been exercised by an automated acceptance test.
 - Tests and documentation must use synthetic keys, hashes and domains only.

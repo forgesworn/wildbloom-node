@@ -147,6 +147,29 @@ struct Cli {
     )]
     pairing_operator_token_file: Option<PathBuf>,
 
+    /// Issue short-lived TURN credentials to granted devices for direct send.
+    /// The shared secret comes from --turn-secret-file or the
+    /// WILDBLOOM_TURN_SECRET environment variable, never an argument.
+    #[arg(
+        long,
+        env = "WILDBLOOM_TURN_ISSUER",
+        requires_all = ["device_grants", "turn_urls"]
+    )]
+    turn_issuer: bool,
+
+    /// stun:, turn: or turns: URL returned with every TURN credential (1 to 4; repeatable or comma-separated).
+    #[arg(
+        long = "turn-url",
+        env = "WILDBLOOM_TURN_URLS",
+        value_delimiter = ',',
+        requires = "turn_issuer"
+    )]
+    turn_urls: Vec<String>,
+
+    /// Private (0600) file holding the TURN server's static-auth-secret.
+    #[arg(long, env = "WILDBLOOM_TURN_SECRET_FILE", requires = "turn_issuer")]
+    turn_secret_file: Option<PathBuf>,
+
     /// Accept signed BUD-04 mirrors from unknown keys as evictable guest data.
     /// Direct unknown uploads remain denied.
     #[arg(long, env = "WILDBLOOM_OPEN_SHELTER")]
@@ -231,6 +254,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !cli.bind.ip().is_loopback() && !cli.allow_public_bind {
         return Err("refusing a non-loopback bind without --allow-public-bind".into());
     }
+    let turn_issuer = if cli.turn_issuer {
+        Some((
+            grants::turn::ice_urls(&cli.turn_urls)?,
+            grants::turn::TurnSecret::from_sources(
+                cli.turn_secret_file.as_deref(),
+                std::env::var_os(grants::turn::SECRET_ENV),
+            )?,
+        ))
+    } else {
+        None
+    };
     let store = Store::open(StoreConfig {
         root: data_dir.clone(),
         quota_bytes: cli.quota_bytes,
@@ -418,6 +452,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         if let (Some(token), Some(relay_url)) = (pairing_issuer_token, &cli.pairing_relay_url) {
             let issuer = grants::issuer::Issuer::new(device_grants.clone(), relay_url, token)?;
+            routes = routes.merge(issuer.router());
+        }
+        if let Some((urls, secret)) = turn_issuer {
+            let issuer = grants::turn::TurnIssuer::new(device_grants.clone(), urls, secret);
             routes = routes.merge(issuer.router());
         }
     }
@@ -688,6 +726,57 @@ mod tests {
         ])
         .unwrap();
         assert!(cli.device_grants && cli.pairing_issuer);
+    }
+
+    #[test]
+    fn the_turn_issuer_is_an_explicit_opt_in_that_needs_device_grants() {
+        let cli = Cli::try_parse_from(["wildbloomd"]).unwrap();
+        assert!(!cli.turn_issuer && cli.turn_urls.is_empty() && cli.turn_secret_file.is_none());
+        for refused in [
+            &["wildbloomd", "--turn-issuer"][..],
+            &["wildbloomd", "--device-grants", "--turn-issuer"][..],
+            &[
+                "wildbloomd",
+                "--turn-issuer",
+                "--turn-url",
+                "turn:turn.example.net:3478",
+            ][..],
+            &["wildbloomd", "--turn-url", "turn:turn.example.net:3478"][..],
+            &[
+                "wildbloomd",
+                "--turn-secret-file",
+                "/var/lib/example/turn-secret",
+            ][..],
+            &[
+                "wildbloomd",
+                "--device-grants",
+                "--turn-url",
+                "turn:turn.example.net:3478",
+            ][..],
+        ] {
+            assert!(Cli::try_parse_from(refused).is_err(), "{refused:?}");
+        }
+        let cli = Cli::try_parse_from([
+            "wildbloomd",
+            "--device-grants",
+            "--turn-issuer",
+            "--turn-url",
+            "stun:turn.example.net:3478",
+            "--turn-url",
+            "turns:turn.example.net:5349?transport=tcp",
+            "--turn-secret-file",
+            "/var/lib/example/turn-secret",
+        ])
+        .unwrap();
+        assert!(cli.device_grants && cli.turn_issuer && !cli.pairing_issuer);
+        assert_eq!(
+            cli.turn_urls,
+            [
+                "stun:turn.example.net:3478",
+                "turns:turn.example.net:5349?transport=tcp"
+            ]
+        );
+        assert!(grants::turn::ice_urls(&cli.turn_urls).is_ok());
     }
 
     #[test]

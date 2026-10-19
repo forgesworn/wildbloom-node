@@ -59,6 +59,14 @@
   HTTP, and never logs or returns it.  A granted device can obtain at most 30
   one-use live creation grants in any rolling hour; each grant is usable for
   five minutes and allocates sessions of at most ten minutes.
+- The optional TURN credential issuer holds the TURN server's
+  `static-auth-secret`, read from a `0600` file (recommended) or the
+  environment, removes it from child process environments, and never logs or
+  returns it; only HMAC outputs leave the node.  It uses the pairing issuer's
+  NIP-98 and device grant checks with a separate budget of 30 requests per
+  device in any rolling hour.  Anyone holding a returned credential can open
+  allocations on that TURN server until it expires an hour later, so Drop
+  hands the peer's credential only to the person whose check words matched.
 - Revocation is committed and enforced by the gate at once; it waits for no
   upload.  Delegated write bodies must keep arriving and keep up a minimum
   average rate after a grace period, and a sweep waits only briefly for one ended key's in-flight

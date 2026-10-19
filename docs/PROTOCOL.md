@@ -184,6 +184,85 @@ event id is spent, so a refused request spends neither.  The upstream reply is c
 one-use, 600-second grant before the token is passed on; the management `id` is
 not returned.  Upstream failures are redacted to `502` or `503`.
 
+### TURN credential issuer
+
+`--turn-issuer --turn-url <url>` (with `--device-grants`) adds one route for
+[direct send](#direct-send-experimental):
+
+| Endpoint | Authority | Result |
+| --- | --- | --- |
+| `POST /turn/v1/credentials` | NIP-98 `POST`, empty body, signed by a device with an active grant | `201 {expires,own,peer}` |
+
+`--turn-url` is given 1 to 4 times, or comma-separated.  Each value is a
+distinct `stun:`, `turn:` or `turns:` URL of at most 256 bytes of printable
+ASCII without spaces, quotes or backslashes, and at least one is `turn:` or
+`turns:`.  The URLs are checked at start-up; a node with a bad one does not
+start.
+
+The authority is the pairing issuer's, through the same code: the checkout
+NIP-98 profile (exact `u` and `method`, a `payload` tag for the empty body, at
+most 60 seconds old), a single-use event id, and a signer that is a device with
+an active grant.  Owners and recovery identities are refused.  Each device may
+make at most 30 requests in any rolling hour.  That budget is kept apart from
+the pairing issuer's and is checked before the event id is spent, so a refused
+request spends neither.  Refusals use the pairing issuer's status codes and
+redacted bodies, among them `400` for a body or a query, `401` for a missing or
+invalid NIP-98 event, `403` without an active device grant, `409` for a reused
+event and `429` once the budget is spent.
+
+The response carries `Cache-Control: no-store` and is exactly:
+
+```json
+{"expires":1800003600,"own":{"credential":"<28 characters>","urls":["turn:turn.example.net:3478?transport=udp"],"username":"1800003600:<22 characters>"},"peer":{"credential":"<28 characters>","urls":["turn:turn.example.net:3478?transport=udp"],"username":"1800003600:<22 characters>"}}
+```
+
+`own` is for the caller and `peer` for the verified person at the other end.
+Each has exactly the members and limits of an [`ice`](#invitation-and-manifest)
+entry, so Drop puts `peer` into `invite` unchanged.  `urls` are the configured
+URLs in their configured order.  `expires` is the issue time plus 3,600
+seconds.  Each credential is coturn's TURN REST form (`use-auth-secret` with
+the default `:` separator):
+
+- `username` is `<expires>:<label>`, where `label` is 16 fresh random bytes in
+  unpadded base64url, minted by the node for that credential alone;
+- `credential` is the standard padded base64 of HMAC-SHA1 keyed with the secret
+  over the bytes of `username`.
+
+The secret is the TURN server's `static-auth-secret` string.  It comes from
+`--turn-secret-file` (an absolute, mode `0600` file; recommended) or the
+`WILDBLOOM_TURN_SECRET` environment variable, exactly one of the two, never a
+command-line argument.  The variable is removed from the environment of the
+Tor and signer child processes.  The node removes exactly one trailing `\n` or
+`\r\n`; what remains must be 32 to 256 bytes of printable ASCII (`!` to `~`)
+other than `"`, `'` and `#`, which a configuration file or a shell could read
+differently.  Anything else, such as a second trailing newline or a leading
+space, stops the node from starting rather than being trimmed, so it never
+signs with a different string from the one coturn reads.  The secret is never
+logged or returned.
+
+The TURN server learns each username: an expiry and a random label that
+appears nowhere else.  It never learns a device key, a NIP-98 event, the relay
+session or a direct send's `id`.  It still sees addresses, byte counts and
+timing, as [What servers learn](#what-servers-learn) says.  The node learns
+only that a granted device asked for credentials, and when.
+
+coturn checks the expiry when an allocation is made.  In a local check with
+coturn 4.17.2, a new allocation after `expires` was refused, while an
+allocation made before it could still be refreshed after it.
+
+Operator notes:
+
+- The coturn in front of it needs this secret as an additional
+  `static-auth-secret` line.  The line must be distinct from any other
+  service's secret on that server, such as KithMoot's on
+  `kithmoot.forgesworn.dev`, so it can be rotated or revoked alone.  A local
+  check with coturn 4.17.2 accepted credentials made from either of two
+  `static-auth-secret` lines and refused one made from neither.
+- Nothing works until both are deployed: the node flags and the coturn line.
+  Until then the node issues credentials that the TURN server refuses.
+- To rotate, add the new line to coturn, restart the node with the new secret,
+  and remove the old line an hour later.
+
 ## Experimental private storage offer
 
 An operator may send the following JSON as the plaintext of a NIP-17 private
@@ -219,11 +298,13 @@ person's browser over a WebRTC data channel that is set up inside a
 word-verified Foregather live channel.  It is specified here before it is
 built.  Version 1 covers a page sending a file to Drop (`to-drop`).
 
-The node takes no part in the transfer.  Its only role is the existing
+The node takes no part in the transfer.  Its roles are the existing
 [pairing creation-grant issuer](#pairing-creation-grant-issuer), which lets
-Drop open the session.  `wildbloomd` runs no WebRTC, STUN or TURN code, and
-Blossom storage and the transports above are unchanged.  Nothing about the
-file rests on any server.
+Drop open the session, and the
+[TURN credential issuer](#turn-credential-issuer), which mints the TURN
+credentials.  `wildbloomd` runs no WebRTC, STUN or TURN code, and Blossom
+storage and the transports above are unchanged.  Nothing about the file rests
+on any server.
 
 ### Session
 
@@ -325,8 +406,9 @@ form, each with its own random username label): one for itself and one for the
 page.  The page's credential travels only inside `invite`, after the check
 words, so only the verified peer receives it.  It never appears in the link, a
 URL, the relay's public fields, a log or browser storage, and the page forgets
-it when the direct send ends.  The route that mints credentials is outside this
-section.
+it when the direct send ends.  Drop obtains both from the node's
+[TURN credential issuer](#turn-credential-issuer) after the check words and
+before `invite`, and puts `peer` into `ice` unchanged.
 
 Each URL in `ice` must equal, byte for byte, an entry of the page's build-time
 allowlist; otherwise the page refuses with `unsupported`.  A paired but hostile
