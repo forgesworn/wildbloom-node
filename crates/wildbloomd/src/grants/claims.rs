@@ -1,6 +1,6 @@
 //! Blocking store work for the delegated claim lifecycle: move to the owner,
 //! hand back on a later grant, release on a key's delete, and re-adopt after a
-//! rollback demoted claims.
+//! rollback demoted claims.  Also the deletion of an ended request key's claims.
 //!
 //! Every walk is paginated through the core's public listing API; nothing is
 //! capped or silently truncated.  Hash sets hold 32-byte digests only.
@@ -231,6 +231,39 @@ pub(super) fn transfer(
         }
         if !full {
             return Ok(moved);
+        }
+    }
+}
+
+/// Delete every claim an ended request key holds, whatever its tier (an older
+/// binary may have demoted them to guest), except claims under a separate paid
+/// allowance.  Nothing moves to the owner.  Deleted claims leave the listing,
+/// so the cursor only advances over claims that stay; another signer's claim
+/// on the same blob keeps the bytes.
+pub(super) fn remove_all(store: &Store, key: &str) -> Result<u64, String> {
+    let paid = hash_set(store, key, Some(PAID_ONLY)).map_err(|e| e.to_string())?;
+    let mut attempted = HashSet::new();
+    let mut cursor: Option<String> = None;
+    let mut removed = 0_u64;
+    loop {
+        let page = store
+            .list_claims(key, cursor.as_deref(), PAGE)
+            .map_err(|e| e.to_string())?;
+        let full = page.len() == PAGE;
+        for claim in page {
+            let id = digest(&claim.sha256);
+            if paid.contains(&id) || !attempted.insert(id) {
+                cursor = Some(claim.sha256);
+                continue;
+            }
+            match store.delete_claim(&claim.sha256, key) {
+                Ok(_) => removed += 1,
+                Err(StoreError::NotClaimant) => {}
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+        if !full {
+            return Ok(removed);
         }
     }
 }

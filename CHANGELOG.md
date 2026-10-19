@@ -14,6 +14,17 @@
   were deleted holds them; update every computer so each has the brake.
 - The Drop index moves to schema 5, adding the held removals. 0.3.8 and earlier
   refuse a schema 5 index, so do not downgrade after upgrading.
+- Add opt-in request grants for one-off uploads, the node half of Request a
+  file. With `--request-grants` (and `--device-grants`), a granted device can
+  let a fresh key upload one file of at most 270,532,608 bytes for at most 24
+  hours (`POST /request/v1/upload-grants`), with at most 3 open and 10 an hour
+  per device, refused when the device has no room to keep the file. The key
+  can only upload, preflight, list, read and delete its own claims. When the
+  grant ends (its time, the device's `DELETE`, or the device's own grant
+  ending) its claims are deleted, not moved to the owner. Records live in
+  `request-grants.sqlite3`. `docs/PROTOCOL.md` describes the
+  `wildbloom-request/1` invitation and reply, with shared test vectors in
+  `vectors/wildbloom-request-v1.json`.
 
 ## 0.3.8 preview - 2026-10-19
 

@@ -22,6 +22,7 @@ impl Principal {
 /// Checkout's strict NIP-98 profile. Exact strings are checked before crypto;
 /// body hashes are mandatory for POST, even for an empty body. Repeated signed
 /// requests are safe only because every mutation is idempotent by order ID.
+/// `GET` and `DELETE` carry no body and no `payload` tag.
 pub fn authenticate(
     header: &str,
     url: &str,
@@ -29,7 +30,8 @@ pub fn authenticate(
     body: &[u8],
     now: u64,
 ) -> Result<Principal, Error> {
-    if header.len() > 12_000 || body.len() > 16_384 || !matches!(method, "GET" | "POST") {
+    if header.len() > 12_000 || body.len() > 16_384 || !matches!(method, "GET" | "POST" | "DELETE")
+    {
         return Err(Error::Unauthorised);
     }
     let encoded = header.strip_prefix("Nostr ").ok_or(Error::Unauthorised)?;
@@ -67,7 +69,7 @@ pub fn authenticate(
     if method == "POST" && tag("payload")? != Some(expected.as_str()) {
         return Err(Error::Unauthorised);
     }
-    if method == "GET" && (!body.is_empty() || tag("payload")?.is_some()) {
+    if method != "POST" && (!body.is_empty() || tag("payload")?.is_some()) {
         return Err(Error::Unauthorised);
     }
     event.verify().map_err(|_| Error::Unauthorised)?;

@@ -305,6 +305,27 @@ fn authentication_binds_exact_body_url_method_time_and_signature() {
     assert!(authenticate(&auth(&key, url, "GET", b"", t, vec![]), url, "GET", b"", t).is_ok());
 }
 #[test]
+fn delete_is_bodiless_like_get_and_other_methods_are_refused() {
+    let key = keys(1);
+    let url = "https://node.example/request/v1/upload-grants/00";
+    let t = now().unwrap();
+    let delete = auth(&key, url, "DELETE", b"", t, vec![]);
+    assert!(authenticate(&delete, url, "DELETE", b"", t).is_ok());
+    assert!(authenticate(&delete, url, "DELETE", b"{}", t).is_err());
+    assert!(authenticate(&delete, url, "GET", b"", t).is_err());
+    let with_payload = auth(
+        &key,
+        url,
+        "DELETE",
+        b"",
+        t,
+        vec![vec!["payload".into(), digest(b"")]],
+    );
+    assert!(authenticate(&with_payload, url, "DELETE", b"", t).is_err());
+    let put = auth(&key, url, "PUT", b"", t, vec![]);
+    assert!(authenticate(&put, url, "PUT", b"", t).is_err());
+}
+#[test]
 fn configuration_refuses_unreviewed_transports_and_bad_terms() {
     let mut c = config();
     assert!(c.validate().is_ok());

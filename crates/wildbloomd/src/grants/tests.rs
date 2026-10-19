@@ -31,6 +31,8 @@ use std::{
 use tower::ServiceExt;
 use wildbloom_core::{AppState, BlossomConfig, ServerMetadata, Store, StoreConfig, router};
 
+mod requests;
+
 const SERVER: &str = "node.example";
 const ORIGIN: &str = "https://node.example/";
 const MIB: u64 = 1024 * 1024;
@@ -55,11 +57,14 @@ struct Node {
     state: AppState,
     app: Router,
     offset: Arc<AtomicI64>,
+    /// A clock that never moves, for time-exact vectors.
+    fixed: Option<u64>,
 }
 
 impl Node {
     fn now(&self) -> u64 {
-        real_now().saturating_add_signed(self.offset.load(Ordering::SeqCst))
+        self.fixed
+            .unwrap_or_else(|| real_now().saturating_add_signed(self.offset.load(Ordering::SeqCst)))
     }
 
     fn advance(&self, seconds: i64) {
@@ -91,6 +96,29 @@ async fn node_with(
     owners: &[u64],
     friends: Vec<wildbloom_core::FriendGrant>,
 ) -> Node {
+    node_built(root, offset, owners, friends, false).await
+}
+
+/// `request_routes` mounts the request grant routes; request records are
+/// opened either way, as the binary does once they exist.
+async fn node_built(
+    root: PathBuf,
+    offset: Arc<AtomicI64>,
+    owners: &[u64],
+    friends: Vec<wildbloom_core::FriendGrant>,
+    request_routes: bool,
+) -> Node {
+    node_clocked(root, offset, owners, friends, request_routes, None).await
+}
+
+async fn node_clocked(
+    root: PathBuf,
+    offset: Arc<AtomicI64>,
+    owners: &[u64],
+    friends: Vec<wildbloom_core::FriendGrant>,
+    request_routes: bool,
+    fixed: Option<u64>,
+) -> Node {
     let owners = owners.iter().map(|n| hex(&keys(*n))).collect::<Vec<_>>();
     let store = Store::open(StoreConfig {
         root: root.clone(),
@@ -108,9 +136,16 @@ async fn node_with(
             cli_friend_grants: friends,
             reserved_keys: vec![hex(&keys(99))],
         },
-        Arc::new(move || real_now().saturating_add_signed(clock_offset.load(Ordering::SeqCst))),
+        Arc::new(move || {
+            fixed.unwrap_or_else(|| {
+                real_now().saturating_add_signed(clock_offset.load(Ordering::SeqCst))
+            })
+        }),
     )
     .unwrap();
+    if request_routes || super::requests::has_database(&root) {
+        grants.open_requests(&root).unwrap();
+    }
     let state = AppState::new(
         store,
         BlossomConfig {
@@ -127,14 +162,18 @@ async fn node_with(
     .unwrap();
     grants.attach(state.clone());
     grants.startup().await.unwrap();
-    let app = router(state.clone())
+    let mut app = router(state.clone())
         .layer(from_fn_with_state(grants.clone(), gate))
         .merge(grants.router());
+    if request_routes {
+        app = app.merge(grants.request_router());
+    }
     Node {
         grants,
         state,
         app,
         offset,
+        fixed,
     }
 }
 
