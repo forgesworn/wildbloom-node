@@ -135,11 +135,6 @@ struct Cli {
     )]
     pairing_issuer: bool,
 
-    /// Let granted devices issue request grants on /request/v1/upload-grants:
-    /// a fresh key may upload one file's bytes for at most 24 hours.
-    #[arg(long, env = "WILDBLOOM_REQUEST_GRANTS", requires = "device_grants")]
-    request_grants: bool,
-
     /// Foregather resolver API base, for example https://relay.example/ (loopback HTTP allowed).
     #[arg(long, env = "WILDBLOOM_PAIRING_RELAY_URL", requires = "pairing_issuer")]
     pairing_relay_url: Option<Url>,
@@ -313,10 +308,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .as_ref()
         .map(|path| services::Profile::read(path))
         .transpose()?;
-    // Recorded request grants are honoured the same way: their gate and
-    // end-of-grant deletion keep running with the routes turned off.
-    let request_records = grants::requests::has_database(&data_dir);
-    let device_grants = if cli.device_grants || grants::has_database(&data_dir) || request_records {
+    let device_grants = if cli.device_grants || grants::has_database(&data_dir) {
         Some(grants::Grants::open(
             &data_dir,
             grants::GrantsConfig {
@@ -334,11 +326,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         None
     };
-    if let Some(device_grants) = &device_grants
-        && (cli.request_grants || request_records)
-    {
-        device_grants.open_requests(&data_dir)?;
-    }
     let pairing_issuer_token = if cli.pairing_issuer {
         Some(
             match (
@@ -428,9 +415,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ));
         if cli.device_grants {
             routes = routes.merge(device_grants.router());
-        }
-        if cli.request_grants {
-            routes = routes.merge(device_grants.request_router());
         }
         if let (Some(token), Some(relay_url)) = (pairing_issuer_token, &cli.pairing_relay_url) {
             let issuer = grants::issuer::Issuer::new(device_grants.clone(), relay_url, token)?;
@@ -669,22 +653,6 @@ mod tests {
     fn parses_the_hidden_desktop_parent_contract() {
         let cli = Cli::try_parse_from(["wildbloomd", "--parent-pid", "1234"]).unwrap();
         assert_eq!(cli.parent_pid, Some(1234));
-    }
-
-    #[test]
-    fn request_grants_are_an_explicit_opt_in_that_needs_device_grants() {
-        let cli = Cli::try_parse_from(["wildbloomd"]).unwrap();
-        assert!(!cli.request_grants);
-        assert!(Cli::try_parse_from(["wildbloomd", "--request-grants"]).is_err());
-        let cli = Cli::try_parse_from([
-            "wildbloomd",
-            "--allow-pubkey",
-            &"a".repeat(64),
-            "--device-grants",
-            "--request-grants",
-        ])
-        .unwrap();
-        assert!(cli.device_grants && cli.request_grants);
     }
 
     #[test]

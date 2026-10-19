@@ -20,9 +20,6 @@
 //!   owner uploads and mirrors before they reach the core).
 //! * At start-up, claims of delegated keys that an older binary demoted to
 //!   guest are re-adopted.
-//!
-//! Request grants ([`requests`]) reuse the gate, the in-flight accounting and
-//! the sweep, but their claims are deleted when they end, not moved.
 use crate::grants::event::{Action, Authorised, EventError, GrantTerms};
 use axum::{
     Json, Router,
@@ -53,7 +50,6 @@ mod claims;
 mod db;
 pub mod event;
 pub mod issuer;
-pub mod requests;
 #[cfg(test)]
 mod tests;
 
@@ -172,8 +168,6 @@ struct Inner {
     /// delete the gate completes itself.
     delete_auth: AuthPolicy,
     app: OnceLock<AppState>,
-    /// Request grant records, when enabled or already on disk.
-    requests: OnceLock<requests::Requests>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -188,12 +182,6 @@ pub enum GrantsError {
         "a persisted device or recovery key is now also a configured owner, friend or service key; remove the conflicting configuration"
     )]
     Conflict,
-    #[error("request grant database has an unsupported schema version {0}")]
-    RequestSchema(i64),
-    #[error(
-        "a recorded request key is now also an owner, friend, service, device or recovery key; remove the conflicting configuration"
-    )]
-    RequestConflict,
 }
 
 #[derive(Debug)]
@@ -332,7 +320,6 @@ impl Grants {
                 ),
                 delete_auth: AuthPolicy::new(config.server_names.clone()).with_public_writes(true),
                 app: OnceLock::new(),
-                requests: OnceLock::new(),
             }),
         };
         grants.reload()?;
@@ -357,8 +344,8 @@ impl Grants {
             .collect()
     }
 
-    /// CLI friend grants plus every delegated and request key the core must
-    /// currently hold.  Supply this as `BlossomConfig::friend_grants`.
+    /// CLI friend grants plus every delegated key the core must currently
+    /// hold.  Supply this as `BlossomConfig::friend_grants`.
     pub fn core_friend_grants(&self) -> Vec<FriendGrant> {
         let snapshot = self.snapshot();
         self.inner
@@ -372,20 +359,16 @@ impl Grants {
                 grant_id: core_grant_id(key),
                 issuer: Some(member.issuer.clone()),
             }))
-            .chain(self.request_friend_grants())
             .collect()
     }
 
-    /// Every delegated and request key this node has recorded.
+    /// Every delegated key this node has recorded.
     pub fn known_keys(&self) -> Vec<String> {
         let snapshot = self.snapshot();
         let mut keys = snapshot.members.keys().cloned().collect::<BTreeSet<_>>();
         for row in snapshot.grants.values() {
             keys.insert(row.device.clone());
             keys.insert(row.recovery.clone());
-        }
-        if let Some(requests) = self.requests() {
-            keys.extend(requests.rows().keys().cloned());
         }
         keys.into_iter().collect()
     }
@@ -424,8 +407,7 @@ impl Grants {
                     }
                 }
             }
-            let removed = self.sweep_locked().await?;
-            (removed, self.sweep_requests_locked().await?)
+            self.sweep_locked().await?
         };
         self.finish_sweep(pending).await
     }
@@ -540,14 +522,10 @@ impl Grants {
         .map_err(|_| ApiError::unavailable())?
     }
 
-    /// Count a delegated write as in flight if its key is active.
+    /// Count a delegated write as in flight if its key is active.  The count
+    /// is taken before the check, so a sweep that sees zero in flight after a
+    /// key ended cannot race a write that saw the key active.
     fn begin_write(&self, key: &str) -> Option<InFlight> {
-        self.begin_write_if(key, |grants| grants.is_active(key))
-    }
-
-    /// The count is taken before the check, so a sweep that sees zero in
-    /// flight after a key ended cannot race a write that saw the key active.
-    fn begin_write_if(&self, key: &str, active: impl FnOnce(&Self) -> bool) -> Option<InFlight> {
         if let Ok(mut counts) = self.inner.in_flight.lock() {
             *counts.entry(key.to_owned()).or_default() += 1;
         }
@@ -555,7 +533,7 @@ impl Grants {
             grants: self.clone(),
             key: key.to_owned(),
         };
-        active(self).then_some(flight)
+        self.is_active(key).then_some(flight)
     }
 
     fn in_flight(&self, key: &str) -> usize {
@@ -687,9 +665,6 @@ impl Grants {
                     "a delegated key cannot be an owner, friend or service key",
                 ));
             }
-            if self.requests().is_some_and(|requests| requests.knows(key)) {
-                return Err(ApiError::conflict("a request key cannot be delegated"));
-            }
             if snapshot
                 .members
                 .get(key)
@@ -803,13 +778,6 @@ impl Grants {
             tx.commit().map_err(|_| ApiError::unavailable())?;
         }
         self.reload().map_err(|_| ApiError::unavailable())?;
-        // The device's request grants end with it, for good: a later grant
-        // for the same device does not bring them back.
-        if let Some(requests) = self.requests()
-            && requests.end_device(device, now).is_err()
-        {
-            tracing::warn!("could not record the end of a revoked device's request grants");
-        }
         // The gate refuses the key from here on; the claim move runs in
         // maintenance so a slow in-flight upload cannot delay this reply.
         self.inner.wake.notify_one();
@@ -857,42 +825,35 @@ impl Grants {
     }
 
     /// One maintenance pass: hand back moved claims to active keys, keep
-    /// recovery ceilings current, move ended keys' claims to their owner, and
-    /// delete ended request keys' claims.
+    /// recovery ceilings current, and move ended keys' claims to their owner.
     pub async fn sweep_ended(&self) -> Result<(), String> {
         let pending = {
             let _update = self.inner.updates.lock().await;
-            let removed = self.sweep_locked().await?;
-            (removed, self.sweep_requests_locked().await?)
+            self.sweep_locked().await?
         };
         self.finish_sweep(pending).await
     }
 
     /// Push the reduced set to the core outside the state lock.  On failure,
     /// keys that left the set are put back (unless re-granted meanwhile) so
-    /// the next pass retries; their moves are recorded and idempotent, and a
-    /// request key's claims are already gone.
-    async fn finish_sweep(
-        &self,
-        (removed, cleaned): (Option<Vec<(String, Member)>>, Vec<String>),
-    ) -> Result<(), String> {
-        if removed.is_none() && cleaned.is_empty() {
+    /// the next pass retries; their moves are recorded and idempotent.
+    async fn finish_sweep(&self, removed: Option<Vec<(String, Member)>>) -> Result<(), String> {
+        let Some(removed) = removed else {
             return Ok(());
-        }
+        };
         let Err(error) = self.push_core_policy().await else {
             return Ok(());
         };
         let _update = self.inner.updates.lock().await;
         let current = self.snapshot();
         if let Ok(db) = self.inner.db.lock() {
-            for (key, member) in removed.iter().flatten() {
+            for (key, member) in &removed {
                 if !current.members.contains_key(key) {
                     let _ = db::write_member(&db, key, member);
                 }
             }
         }
         let _ = self.reload();
-        self.unclean_requests(&cleaned);
         Err(format!("core refused the reduced delegated set: {error}"))
     }
 
@@ -1229,34 +1190,6 @@ async fn get_grant(
     }
 }
 
-/// What the core router's CORS layer adds to an actual (non-preflight)
-/// response.  shelter-kit's `router` wraps its routes in tower-http's
-/// `CorsLayer` with any origin and this expose list; with a wildcard origin and
-/// fixed method and header lists it sends no `Vary`.  The
-/// gate sits outside that layer, so a response it answers itself would reach a
-/// browser without them and read as a network error; it adds the same headers.
-/// A test pins them to the core's.  Preflight `OPTIONS` requests are reads and
-/// pass the gate untouched, so the core still answers them.
-const CORE_CORS_EXPOSE: &str = "content-length,content-range,content-type,etag,accept-ranges,content-disposition,x-content-type-options,x-reason";
-
-fn with_core_cors(mut response: Response) -> Response {
-    let headers = response.headers_mut();
-    headers.insert(
-        header::ACCESS_CONTROL_ALLOW_ORIGIN,
-        HeaderValue::from_static("*"),
-    );
-    headers.insert(
-        header::ACCESS_CONTROL_EXPOSE_HEADERS,
-        HeaderValue::from_static(CORE_CORS_EXPOSE),
-    );
-    response
-}
-
-/// A refusal the gate answers itself, with the core's CORS headers.
-fn gate_refusal(error: ApiError) -> Response {
-    with_core_cors(error.into_response())
-}
-
 /// Requests the gate lets through for an ended key: reads only.  `HEAD
 /// /upload` is BUD-06 write preflight, so it is not a read.
 fn is_read(method: &Method, path: &str) -> bool {
@@ -1311,12 +1244,9 @@ fn bounded_body(body: Body) -> Body {
 ///
 /// * An owner's own upload or mirror is recorded before it reaches the core,
 ///   so a move hand-back never drops an owner-initiated claim.
-/// * A request key may only upload, preflight and delete while its grant is
-///   active (see [`requests::gate`]).
 /// * A delegated key whose grant has ended can only read.
 /// * An active delegated key's writes are counted in flight and bounded, and
 ///   its deletes also release owner claims a move created.
-/// * Every response the gate answers itself carries the core's CORS headers.
 pub async fn gate(State(grants): State<Grants>, request: Request, next: Next) -> Response {
     if is_read(request.method(), request.uri().path()) {
         return next.run(request).await;
@@ -1335,21 +1265,16 @@ pub async fn gate(State(grants): State<Grants>, request: Request, next: Next) ->
         if request.method() == Method::PUT && (path == "/upload" || path == "/mirror") {
             // The event's `x` tags cover every hash the core could claim.
             if let Err(error) = grants.mark_owner_writes(&signer, hashes).await {
-                return gate_refusal(error);
+                return error.into_response();
             }
         }
         return next.run(request).await;
-    }
-    if let Some(requests) = grants.requests()
-        && requests.knows(&signer)
-    {
-        return requests::gate(&grants, &signer, request, next).await;
     }
     if !grants.snapshot().knows(&signer) {
         return next.run(request).await;
     }
     let Some(_flight) = grants.begin_write(&signer) else {
-        return gate_refusal(ApiError::forbidden("the delegated storage grant has ended"));
+        return ApiError::forbidden("the delegated storage grant has ended").into_response();
     };
     let is_delete = request.method() == Method::DELETE;
     let path = request.uri().path().to_owned();
@@ -1364,7 +1289,7 @@ pub async fn gate(State(grants): State<Grants>, request: Request, next: Next) ->
             .await
     {
         grants.inner.wake.notify_one();
-        return with_core_cors(response);
+        return response;
     }
     let (parts, body) = request.into_parts();
     let response = next

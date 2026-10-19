@@ -59,16 +59,6 @@
   HTTP, and never logs or returns it.  A granted device can obtain at most 30
   one-use live creation grants in any rolling hour; each grant is usable for
   five minutes and allocates sessions of at most ten minutes.
-- Optional request grants (`--request-grants`) let an active device give a
-  fresh, never-seen key upload-only authority over at most 270,532,608 bytes
-  for at most 24 hours, with at most 3 open and 10 issued per device per hour,
-  and only when the device's own ceiling could keep the file.  The key cannot
-  mirror, obtain pairing grants or touch grant routes.  A stolen request key
-  (for example from the sender's tab) gives that and no more.  When the grant
-  ends the gate refuses the key at once and the sweep deletes its claims, so a
-  stranger's bytes do not stay on the node.  With request grants on, a
-  stranger's key can write to the node, so an owner-only node is no longer
-  only a personal backup.
 - Revocation is committed and enforced by the gate at once; it waits for no
   upload.  Delegated write bodies must keep arriving and keep up a minimum
   average rate after a grace period, and a sweep waits only briefly for one ended key's in-flight
