@@ -1,12 +1,18 @@
 //! Opt-in pairing issuer: a currently granted device exchanges one fresh
 //! NIP-98 request for a one-use Foregather `live` creation grant.
 //!
-//! The operator token reaches Foregather only in this module's outbound
-//! `Authorization` header.  It is never logged, echoed or returned.
-use super::{ApiError, Grants, cors, no_store};
+//! The NIP-98 profile, device check and budget are the shared
+//! [`DeviceAuth`] gate, with a budget of its own.  The operator token reaches
+//! Foregather only in this module's outbound `Authorization` header.  It is
+//! never logged, echoed or returned.
+use super::{
+    ApiError, Grants, cors,
+    device_auth::{DeviceAuth, Refusals},
+    no_store,
+};
 use axum::{
     Json, Router,
-    body::{Body, to_bytes},
+    body::Body,
     extract::{Request, State},
     http::{HeaderValue, Method, StatusCode, header},
     response::{IntoResponse, Response},
@@ -14,12 +20,7 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::{HashMap, VecDeque},
-    path::Path,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{path::Path, sync::Arc, time::Duration};
 use url::Url;
 
 pub const ISSUER_PATH: &str = "pairing/v1/live-grants";
@@ -30,12 +31,14 @@ pub const TOKEN_ENV: &str = "WILDBLOOM_PAIRING_OPERATOR_TOKEN";
 pub const MAX_INVITATION_LIFETIME: u64 = 600;
 /// A creation grant only needs to cover the allocation that follows it.
 pub const GRANT_TTL: u64 = 300;
-/// Per-device issuance budget within any rolling window.
+/// Per-device issuance budget within any rolling hour.
 pub const RATE_LIMIT: u32 = 30;
-pub const RATE_WINDOW: u64 = 60 * 60;
 const MAX_UPSTREAM_BYTES: usize = 4096;
-/// NIP-98 freshness in the checkout profile is 60 s old or 30 s ahead.
-const REPLAY_WINDOW: u64 = 120;
+static REFUSALS: Refusals = Refusals {
+    unauthorised: "pairing request is not authorised",
+    spent: "pairing request budget is spent",
+    replayed: "pairing request was already used",
+};
 
 /// The Foregather operator creation token.  Debug output is redacted.
 #[derive(Clone)]
@@ -103,11 +106,10 @@ pub fn relay_api_url(url: &Url) -> Result<Url, &'static str> {
 
 #[derive(Clone)]
 pub struct Issuer {
-    grants: Grants,
+    auth: DeviceAuth,
     endpoint: Url,
     token: OperatorToken,
     client: reqwest::Client,
-    rate: Arc<Mutex<HashMap<String, VecDeque<u64>>>>,
 }
 
 #[derive(Serialize)]
@@ -161,11 +163,10 @@ impl Issuer {
             .build()
             .map_err(|_| "could not build the pairing issuer HTTP client")?;
         Ok(Self {
-            grants,
+            auth: DeviceAuth::new(grants, ISSUER_PATH, RATE_LIMIT, &REFUSALS),
             endpoint,
             token,
             client,
-            rate: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -176,64 +177,8 @@ impl Issuer {
             .layer(cors(&[Method::POST]))
     }
 
-    async fn authorise(&self, request: Request<Body>) -> Result<String, ApiError> {
-        if request.uri().query().is_some() {
-            return Err(ApiError::bad_request("queries are not accepted"));
-        }
-        let header = super::single_authorization(request.headers())?.to_owned();
-        let body = to_bytes(request.into_body(), 1024)
-            .await
-            .map_err(|_| ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "body is too large"))?;
-        if !body.is_empty() {
-            return Err(ApiError::bad_request("the request body must be empty"));
-        }
-        let now = self.grants.now();
-        let principal = wildbloom_checkout::authenticate(
-            &header,
-            &format!("{}{ISSUER_PATH}", self.grants.inner.origin),
-            "POST",
-            &body,
-            now,
-        )
-        .map_err(|_| ApiError::unauthorised("pairing request is not authorised"))?;
-        let device = principal.pubkey().to_owned();
-        if !self.grants.is_active_device(&device) {
-            return Err(ApiError::forbidden("the device has no active grant"));
-        }
-        // Sliding window, checked before the replay row is written so a
-        // refused request spends neither budget nor the event id.
-        let mut rate = self.rate.lock().map_err(|_| ApiError::unavailable())?;
-        for window in rate.values_mut() {
-            while window
-                .front()
-                .is_some_and(|issued| now.saturating_sub(*issued) >= RATE_WINDOW)
-            {
-                window.pop_front();
-            }
-        }
-        rate.retain(|_, window| !window.is_empty());
-        if rate
-            .get(&device)
-            .is_some_and(|window| window.len() >= RATE_LIMIT as usize)
-        {
-            return Err(ApiError::new(
-                StatusCode::TOO_MANY_REQUESTS,
-                "pairing request budget is spent",
-            ));
-        }
-        if !self
-            .grants
-            .consume_event(principal.event_id(), now.saturating_add(REPLAY_WINDOW))?
-        {
-            return Err(ApiError::conflict("pairing request was already used"));
-        }
-        rate.entry(device.clone()).or_default().push_back(now);
-        drop(rate);
-        Ok(device)
-    }
-
     async fn request_grant(&self) -> Result<LiveGrant, ApiError> {
-        let expires = self.grants.now().saturating_add(GRANT_TTL);
+        let expires = self.auth.now().saturating_add(GRANT_TTL);
         let body = serde_json::to_vec(&UpstreamRequest {
             resource: "live",
             expires,
@@ -306,7 +251,7 @@ impl Issuer {
 
 async fn issue(State(issuer): State<Issuer>, request: Request<Body>) -> Response {
     let result = async {
-        issuer.authorise(request).await?;
+        issuer.auth.authorise(request).await?;
         issuer.request_grant().await
     }
     .await;

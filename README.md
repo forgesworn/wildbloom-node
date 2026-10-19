@@ -14,7 +14,7 @@ Wildbloom Node is a small, cross-platform Blossom server.  It stores blobs on
 your disk by SHA-256 and accepts only tightly scoped Nostr authorisation.  Tor
 is an optional transport, not a storage requirement.  The same node can use a
 persistent Tor v3 onion, stay local-only, or sit behind an operator-managed
-HTTPS reverse proxy.  It does not use WebRTC, STUN or TURN.
+HTTPS reverse proxy.  It runs no WebRTC, STUN or TURN itself.
 
 This is a production candidate, not a durability promise.  The headless node
 targets macOS, Linux and Windows.  The native tray application lets the
@@ -218,6 +218,9 @@ Useful controls:
 --pairing-issuer               issue one-use Foregather live grants to devices
 --pairing-relay-url <URL>      Foregather API base for --pairing-issuer
 --pairing-operator-token-file <PATH>  private file holding its operator token
+--turn-issuer                  issue short-lived TURN credentials to devices
+--turn-url <URL>               stun:, turn: or turns: URL for --turn-issuer, 1 to 4
+--turn-secret-file <PATH>      private file holding the TURN static-auth-secret
 --service-profile <PATH>       opt-in public service listing (docs/SERVICE-DISCOVERY.md)
 --checkout-profile <PATH>      opt-in paid checkout, needs --no-tor (docs/CHECKOUT.md)
 --max-concurrent-writes <N>    concurrent upload/mirror limit, default 4

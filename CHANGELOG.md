@@ -14,6 +14,17 @@
   were deleted holds them; update every computer so each has the brake.
 - The Drop index moves to schema 5, adding the held removals. 0.3.8 and earlier
   refuse a schema 5 index, so do not downgrade after upgrading.
+- Add an opt-in TURN credential issuer (`--turn-issuer`, with `--device-grants`
+  and one to four `--turn-url`s) for the planned direct send. A granted
+  device's NIP-98 request to `POST /turn/v1/credentials` returns two TURN REST
+  credentials valid for an hour, one for itself and one for the person at the
+  other end, each with a fresh random username label. Each device may make 30
+  requests an hour, counted apart from the pairing issuer's. The secret is the
+  TURN server's `static-auth-secret`, read from a private file or
+  `WILDBLOOM_TURN_SECRET`, and is never logged or returned. Nothing works until
+  the TURN server also has the matching `static-auth-secret` line. The pairing
+  issuer now shares its NIP-98 and device grant checks with this route; its
+  behaviour is unchanged.
 
 ## 0.3.8 preview - 2026-10-19
 

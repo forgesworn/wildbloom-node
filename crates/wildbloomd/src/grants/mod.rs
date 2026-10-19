@@ -48,10 +48,16 @@ use wildbloom_core::{AppState, FriendGrant, auth::AuthPolicy};
 
 mod claims;
 mod db;
+mod device_auth;
 pub mod event;
 pub mod issuer;
 #[cfg(test)]
 mod tests;
+pub mod turn;
+
+/// Environment variables that may carry an issuer secret.  Tor and the
+/// replica signer are started without them.
+pub const SECRET_ENVS: [&str; 2] = [issuer::TOKEN_ENV, turn::SECRET_ENV];
 
 /// Core-side expiry of a delegated friend grant: never.  See the module docs.
 pub const CORE_GRANT_SENTINEL: u64 = i64::MAX as u64;

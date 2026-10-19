@@ -22,6 +22,22 @@ pub struct CommandSigner {
     pub timeout: Duration,
 }
 
+impl CommandSigner {
+    fn command(&self) -> tokio::process::Command {
+        let mut command = tokio::process::Command::new(&self.executable);
+        for name in crate::grants::SECRET_ENVS {
+            command.env_remove(name);
+        }
+        command
+            .args(&self.arguments)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        command
+    }
+}
+
 impl Signer for CommandSigner {
     fn sign<'a>(
         &'a self,
@@ -35,15 +51,7 @@ impl Signer for CommandSigner {
             if input.len() > MAX_EVENT_BYTES {
                 return Err(SignerError);
             }
-            let mut child = tokio::process::Command::new(&self.executable)
-                .env_remove(crate::grants::issuer::TOKEN_ENV)
-                .args(&self.arguments)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .kill_on_drop(true)
-                .spawn()
-                .map_err(|_| SignerError)?;
+            let mut child = self.command().spawn().map_err(|_| SignerError)?;
             let mut stdin = child.stdin.take().ok_or(SignerError)?;
             let stdout = child.stdout.take().ok_or(SignerError)?;
             // Concurrent bounded input/output also handles a helper which writes
@@ -82,5 +90,32 @@ impl Signer for CommandSigner {
                 }
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn the_signer_never_inherits_issuer_secrets() {
+        let signer = CommandSigner {
+            executable: PathBuf::from("/usr/bin/signer"),
+            arguments: vec!["--sign".into()],
+            timeout: Duration::from_secs(1),
+        };
+        let command = signer.command();
+        let environment = command.as_std().get_envs().collect::<Vec<_>>();
+        for name in [
+            crate::grants::issuer::TOKEN_ENV,
+            crate::grants::turn::SECRET_ENV,
+        ] {
+            assert!(environment.contains(&(OsStr::new(name), None)), "{name}");
+        }
+        assert_eq!(
+            command.as_std().get_args().collect::<Vec<_>>(),
+            [OsStr::new("--sign")]
+        );
     }
 }

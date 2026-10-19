@@ -19,13 +19,16 @@ clap.workspace = true
 directories.workspace = true
 fs2.workspace = true
 futures-util.workspace = true
+getrandom = "0.3.4"
 hex.workspace = true
+hmac = "0.13.0"
 nostr.workspace = true
 reqwest.workspace = true
 rusqlite = { version = "0.40.0", features = ["bundled"] }
 rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha1 = "0.11.0"
 sha2.workspace = true
 sha3.workspace = true
 tempfile.workspace = true

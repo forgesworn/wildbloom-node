@@ -141,8 +141,10 @@ fn managed_tor_command(
     target: &str,
 ) -> Command {
     let mut command = Command::new(binary);
+    for name in crate::grants::SECRET_ENVS {
+        command.env_remove(name);
+    }
     command
-        .env_remove(crate::grants::issuer::TOKEN_ENV)
         .arg("-f")
         .arg(torrc)
         .arg("--DataDirectory")
@@ -274,5 +276,24 @@ mod tests {
                 .windows(2)
                 .any(|pair| { pair == [OsStr::new("--UseMicrodescriptors"), OsStr::new("0")] })
         );
+    }
+
+    #[test]
+    fn managed_tor_never_inherits_issuer_secrets() {
+        assert_eq!(
+            crate::grants::SECRET_ENVS,
+            ["WILDBLOOM_PAIRING_OPERATOR_TOKEN", "WILDBLOOM_TURN_SECRET"]
+        );
+        let command = managed_tor_command(
+            Path::new("tor"),
+            Path::new("torrc"),
+            Path::new("client"),
+            Path::new("onion-service"),
+            "127.0.0.1:3742",
+        );
+        let environment = command.as_std().get_envs().collect::<Vec<_>>();
+        for name in crate::grants::SECRET_ENVS {
+            assert!(environment.contains(&(OsStr::new(name), None)), "{name}");
+        }
     }
 }
