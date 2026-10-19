@@ -198,6 +198,9 @@ jobs:
             jq -n '{bundle:{createUpdaterArtifacts:false}}' \
               > desktop/src-tauri/tauri.production.conf.json
           fi
+      - name: Send Apple ticket lookups over TCP
+        if: runner.os == 'macOS'
+        run: scripts/ci-apple-lookups-over-tcp.sh
       - name: Sign nested macOS Tor code with Developer ID
         if: runner.os == 'macOS'
         run: scripts/sign-macos-tor-runtime.sh "$APPLE_SIGNING_IDENTITY" desktop/src-tauri/tor-runtime

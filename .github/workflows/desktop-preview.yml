@@ -117,6 +117,9 @@ jobs:
       - name: Install and exercise the Linux package
         if: runner.os == 'Linux'
         run: scripts/accept-desktop-linux.sh "desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+      - name: Send Apple ticket lookups over TCP
+        if: runner.os == 'macOS'
+        run: scripts/ci-apple-lookups-over-tcp.sh
       - name: Install and exercise the macOS package against the signed baseline
         if: runner.os == 'macOS'
         run: |
