@@ -1591,8 +1591,8 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "foregather-kit"
-version = "0.4.0"
-source = "git+https://github.com/forgesworn/foregather-kit?tag=v0.4.0#b092d7eb2aa6aaf2ba10e459dbd044042b57fae1"
+version = "0.5.0"
+source = "git+https://github.com/forgesworn/foregather-kit?tag=v0.5.0#26c97357eaaaf45f8bb18fcebf2360202c0d6ee8"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",

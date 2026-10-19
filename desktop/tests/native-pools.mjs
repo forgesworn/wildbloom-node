@@ -235,7 +235,7 @@ try {
   for (const command of ['recovery_key_for_display', 'share_start', 'save_recovery_file', 'remove']) {
     assert.match(await invokeOutcome(command), /not allowed/i, `node window must not call ${command}`);
   }
-  for (const command of ['node_status', 'save_settings', 'import_pool', 'open_drop_flow']) {
+  for (const command of ['node_status', 'save_settings', 'import_pool', 'open_drop_flow', 'set_sharing']) {
     assert.match(await invokeOutcome(command, 'drop'), /not allowed/i, `Drop window must not call ${command}`);
   }
   assert.equal(await invokeOutcome('drop_status'), 'allowed', 'node window reads Drop status');

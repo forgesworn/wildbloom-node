@@ -31,6 +31,7 @@
     "allow-renew-approval",
     "allow-approval-status",
     "allow-cancel-approval",
-    "allow-open-drop-flow"
+    "allow-open-drop-flow",
+    "allow-set-sharing"
   ]
 }

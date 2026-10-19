@@ -76,6 +76,17 @@ pub struct LimitsStatus {
     pub share_max_bytes: u64,
 }
 
+/// What happens to a shared copy once its recipient confirms the download,
+/// and how long a sent copy stays otherwise.  Read when a file is sent.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SharingSettings {
+    /// `delete` (the default) or `keep`.
+    pub after_download: &'static str,
+    /// 3600, 86400 (the default) or 604800.
+    pub expiry_seconds: u64,
+}
+
 /// `DropStatus` without `files`: the `drop://status` payload.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -88,6 +99,7 @@ pub struct DropStatus {
     pub recovery: RecoveryStatus,
     pub watch_folder: WatchFolderStatus,
     pub limits: LimitsStatus,
+    pub sharing: SharingSettings,
     pub browser_approval: bool,
 }
 
@@ -113,6 +125,10 @@ pub struct FileRow {
     pub shared_until: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sharing_ended: Option<u64>,
+    /// When the recipient confirmed the download: on `shared` (the copy is
+    /// kept), `sharing_ended` (deleted) and `stop_pending` (being deleted).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub downloaded_at: Option<u64>,
     /// Why a `not_kept` row is not kept: `too_big`, `name`, `too_long` or
     /// `too_deep`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -236,6 +252,19 @@ pub struct ShareState {
     pub tries_left: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delete_at: Option<u64>,
+    /// `sent`: whether a download confirmation can still arrive.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub awaiting_download: Option<bool>,
+    /// `sent`: `delete` or `keep`, the policy this share was sent with.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_download: Option<&'static str>,
+    /// `downloaded`: when the recipient confirmed it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub downloaded_at: Option<u64>,
+    /// `downloaded`: `deleted`, `deleting` (queued until the online node
+    /// answers) or `kept` (until `delete_at`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub copy: Option<&'static str>,
 }
 
 impl ShareState {
@@ -250,6 +279,10 @@ impl ShareState {
             expires_at: None,
             tries_left: None,
             delete_at: None,
+            awaiting_download: None,
+            after_download: None,
+            downloaded_at: None,
+            copy: None,
         }
     }
 }
@@ -261,6 +294,8 @@ impl std::fmt::Debug for ShareState {
             .field("state", &self.state)
             .field("progress", &self.progress)
             .field("expires_at", &self.expires_at)
+            .field("awaiting_download", &self.awaiting_download)
+            .field("copy", &self.copy)
             .finish_non_exhaustive()
     }
 }

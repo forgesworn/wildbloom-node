@@ -44,6 +44,8 @@ Conventions
   watchFolder: { enabled: boolean, path: string,          // path is for display, for example "~/Wildbloom"
                  state: "off" | "on" | "unavailable" | "too_many" },   // Added.
   limits: { dropMaxBytes: number, shareMaxBytes: number },
+  sharing: { afterDownload: "delete" | "keep",              // Added.
+             expirySeconds: 3600 | 86400 | 604800 },
   browserApproval: boolean                                  // true once the browser route exists; hides or shows its link
 }
 ```
@@ -69,6 +71,12 @@ Conventions
 - **Added.** Rows in state `not_kept` add, after "{n} files have only 1 copy" and the key list
   line: "{n} files in your Wildbloom folder can't be kept." (1: "1 file in your Wildbloom folder
   can't be kept."). They are left out of the "All {n} files have 2 copies" count.
+- **Added.** `sharing` is the node window's Sharing settings (`set_sharing`). `afterDownload`
+  is what happens to a shared copy once its recipient confirms the download: `delete` (the
+  default) deletes it at once, `keep` keeps it until its deletion time. `expirySeconds` is
+  how long a sent copy stays otherwise: an hour, a day (the default) or a week. Both are read
+  when a file is sent; a share already sent keeps what it was sent with. A changed setting
+  is sent as `drop://status`.
 - The status line (spec 6.1) is resolved in `drop.js` from these fields and the rows, in the
   priority order of the spec. The tray tooltip and menu status item (Rust) must resolve the
   same order from the same data; the copy is in section 6.1 of the design spec.
@@ -84,6 +92,8 @@ Conventions
   progress: number | null,         // 0 to 100, for encrypting, copying, restoring
   sharedUntil?: number,            // state "shared"
   sharingEnded?: number,           // state "sharing_ended" (shown for 24 h)
+  downloadedAt?: number,           // Added. When the recipient confirmed the download, on "shared" (the copy
+                                   // is kept), "sharing_ended" (deleted) and "stop_pending" (being deleted)
   notKept?: "too_big" | "name" | "too_long" | "too_deep",   // Added. State "not_kept" only
   folder?: string,                 // Added. Parent path relative to the Wildbloom folder, shown muted under the name
   inWatchFolder?: boolean }        // Changed: the row is linked to a file in the Wildbloom folder
@@ -144,6 +154,7 @@ the shared copy now", warning icon, menu as "2 copies". Shown for a day. `name` 
 | `restore` | `{ recoveryKey: string \| null, recoveryFile: string \| null, url: string \| null }` | `{ next: "approve" \| "done", host?: string }`. Exactly one of `recoveryKey` and `recoveryFile` is set. `recoveryFile` is a path from `dialog.open`; Rust reads it, and uses its online node address when `url` is null. Rejects `{ code, host }` with `bad_key`, `no_answer`, `not_a_node`, `tls`, `offline`. `approve` means the new computer must be approved next; the restore itself continues in Rust after approval. |
 | `set_watch_folder` | `{ enabled: boolean }` | nothing. **Changed:** the UI asks "Keep a readable copy of every file in ~/Wildbloom?" (Turn on / Cancel) before sending `enabled: true` from the Drop window or node settings. It sends `enabled: true` without asking from "Use folder again" (the folder is already on). **Added:** "Use folder again" changes nothing when the folder and its marker are back; when the marker is still missing (or another folder's), Rust clears every link and writes a new marker, so files already there are linked again by content at their place and anything else is taken in as new. No deletion is ever inferred against a recreated folder. |
 | `open_watch_folder` | none | nothing |
+| `set_sharing` | `{ afterDownload: "delete" \| "keep", expirySeconds: 3600 \| 86400 \| 604800 }` | nothing. **Added**, node window only: the Sharing settings, then `drop://status` with the new `sharing`. Any other value (a different string, another number, a non-integer) rejects `{ code: "bad_setting" }` and nothing is stored. Applies to files sent afterwards. |
 
 `ApprovalStatus`
 
@@ -169,23 +180,50 @@ After a restore, if listing or decrypting fails once the computer is approved, R
 | `share_start` | `{ id }` | the first `ShareState`, then `share://state` events. Also used for "Try again". |
 | `share_again` | `{ id }` | the first `ShareState`. A fresh offer, locator and words that reuse the existing shared copy if it still exists. Used for "Share again" on a shared row and for "Start again". |
 | `share_verify` | `{ id, matches: boolean }` | optionally the next `ShareState` (`sending` or `mismatch`); otherwise the event follows. |
-| `share_cancel` | `{ id }` | nothing. Means "the sheet closed": Rust ends the live session, and deletes the shared copy if nothing was sent. The UI does not call it after `sent` or `too_big`, and treats it as best effort. |
-| `stop_sharing` | `{ id }` | nothing. Deletes the shared copy (queued until online if needed; the row shows `stop_pending`). |
+| `share_cancel` | `{ id }` | nothing. Means "the sheet closed": Rust ends the live session, and deletes the shared copy if nothing was sent. The UI does not call it after `sent`, `downloaded` or `too_big`, and treats it as best effort. **Changed:** after `sent` it would also stop listening for the download confirmation, so closing a sent sheet must not call it. |
+| `stop_sharing` | `{ id }` | nothing. Deletes the shared copy (queued until online if needed; the row shows `stop_pending`). Also stops listening for a download confirmation. |
 
 `ShareState` (command results and `share://state` payloads, with `id` added in events)
 
 ```
 { id: string,
   state: "preparing" | "ready" | "opened" | "check" | "sending" | "sent" | "expired"
-       | "wrong_words" | "mismatch" | "left" | "relay_unreachable" | "node_unreachable",
+       | "wrong_words" | "mismatch" | "left" | "relay_unreachable" | "node_unreachable"
+       | "downloaded",                // Added.
   progress?: number,        // preparing, 0 to 100
   link?: string,            // ready, opened, check, and wrong_words with triesLeft > 0
   words?: string[4],        // same states as link
   checkWords?: string[3],   // check
   expiresAt?: number,       // ready, opened, check: when the 600 s window ends; the UI runs the countdown
   triesLeft?: number,       // wrong_words: above 0 keeps the sheet on the link and words
-  deleteAt?: number }       // sent: when the shared copy will be deleted
+  deleteAt?: number,        // sent, and downloaded with copy "kept": when the shared copy will be deleted
+  awaitingDownload?: boolean,         // Added. sent: true while a download confirmation can still arrive
+  afterDownload?: "delete" | "keep",  // Added. sent: the policy this share was sent with
+  downloadedAt?: number,              // Added. downloaded: when the recipient confirmed it
+  copy?: "deleted" | "deleting" | "kept" }   // Added. downloaded: what happened to the shared copy
 ```
+
+**Added.** Download confirmation. After the recipient's receipt Rust emits `sent` with
+`awaitingDownload: true` and keeps listening, in the background whether or not the sheet is
+open, until the live session's deadline (the same 600 s window as the link, counted from
+when it was made). The recipient's page sends one confirmation on the same encrypted channel
+once it has saved the file. Then:
+
+- Rust records the time on the share and emits `downloaded` with `downloadedAt` and `copy`,
+  plus `drop://file` for the row (with `downloadedAt`), even when no sheet is open.
+- With `afterDownload: "delete"` the shared copy is deleted at once (`copy: "deleted"`, row
+  `sharing_ended`), or queued when the online node can't be reached (`copy: "deleting"`, row
+  `stop_pending` until it is deleted, then `sharing_ended`).
+- With `"keep"` it stays until `deleteAt` (`copy: "kept"`, row `shared`).
+
+When the window ends with no confirmation, or with anything that is not a valid one (the
+relay can withhold a confirmation but cannot forge one), Rust emits `sent` again with
+`awaitingDownload: false` and nothing else changes: the copy stays until `deleteAt` or Stop
+sharing. A missing confirmation never means anything. A missing `awaitingDownload` means
+false. The listening ends with Stop sharing, Remove, Share again, an online node change or
+quitting the app; it does not survive a restart, and none of these emits a further state.
+A sent share that is only listening does not count as an open share for the quit
+confirmation.
 
 The UI shows "too big" itself, without a command, when `bytes > limits.shareMaxBytes`.
 A command that rejects with `{ code: "node_unreachable" }` shows that state; any other
@@ -231,11 +269,12 @@ Every app command is listed in the build's app manifest, so a window can call on
 capability allows:
 
 - **Drop window** (`capabilities/drop-window.json`): every Drop command above except
-  `open_drop_flow`. No node settings, pool or updater commands.
+  `open_drop_flow` and `set_sharing`. No node settings, sharing settings, pool or updater
+  commands.
 - **Node window** (`capabilities/default.json`): its own node, pool and update commands, plus
   `platform_info`, `drop_status`, `check_online_node`, `set_online_node`, `approve_device`,
   `renew_approval`, `approval_status`, `cancel_approval`, `set_watch_folder`,
-  `open_watch_folder` and `open_drop_flow`. (`open_file` and `reveal_file` are Drop window only.) It cannot share, remove or save files, restore, or
+  `open_watch_folder`, `open_drop_flow` and `set_sharing` (**added**). (`open_file` and `reveal_file` are Drop window only.) It cannot share, remove or save files, restore, or
   read or save the recovery key.
 
 ## Behaviour Rust can rely on
@@ -247,4 +286,4 @@ capability allows:
 - First run is driven by `drop_status.firstRun.step`. The UI never skips ahead on its own,
   except that restore shows its own screen between `node` and `approve`.
 - Dismissing a sheet or step while an approval is waiting calls `cancel_approval`.
-- Closing the share sheet calls `share_cancel` (not after `sent`).
+- Closing the share sheet calls `share_cancel` (not after `sent` or `downloaded`).

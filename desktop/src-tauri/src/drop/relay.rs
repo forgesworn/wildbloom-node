@@ -29,7 +29,7 @@ pub enum RelayError {
 }
 
 impl RelayError {
-    fn transient(&self) -> bool {
+    pub(crate) fn transient(&self) -> bool {
         matches!(
             self,
             Self::Unreachable | Self::Http(408 | 429 | 502 | 503 | 504)

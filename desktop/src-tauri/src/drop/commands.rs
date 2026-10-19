@@ -437,6 +437,19 @@ pub async fn set_watch_folder(slot: State<'_, DropSlot>, enabled: bool) -> Comma
     engine(&slot)?.set_watch_folder(enabled).await
 }
 
+/// From the node window's settings: what happens to a shared copy after a
+/// confirmed download, and how long a sent copy stays.  `expirySeconds` is
+/// taken as any JSON value so that a non-integer is the typed `bad_setting`
+/// rejection rather than an argument error.
+#[tauri::command]
+pub async fn set_sharing(
+    slot: State<'_, DropSlot>,
+    after_download: String,
+    expiry_seconds: serde_json::Value,
+) -> CommandResult<()> {
+    engine(&slot)?.set_sharing(&after_download, expiry_seconds.as_u64())
+}
+
 #[tauri::command]
 pub async fn open_file(slot: State<'_, DropSlot>, id: String) -> CommandResult<()> {
     engine(&slot)?.open_file(&id)

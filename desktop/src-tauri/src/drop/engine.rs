@@ -234,6 +234,12 @@ pub(crate) mod kv {
     pub const KEY_LIST_PENDING: &str = "key_list_pending";
     /// The key list could not be opened or sealed; shown in the status line.
     pub const KEY_LIST_FAILED: &str = "key_list_failed";
+    /// What happens to a shared copy once its download is confirmed:
+    /// `delete` (also when unset) or `keep`.
+    pub const SHARE_AFTER_DOWNLOAD: &str = "share_after_download";
+    /// How long a sent copy stays, in seconds: 3600, 86400 (also when unset)
+    /// or 604800.
+    pub const SHARE_EXPIRY_SECONDS: &str = "share_expiry_seconds";
 }
 
 impl Engine {
@@ -686,6 +692,7 @@ impl Engine {
                 drop_max_bytes: self.drop_max_bytes(),
                 share_max_bytes: SHARE_MAX_PLAINTEXT_BYTES,
             },
+            sharing: super::share::SharingPolicy::load(&self.index).settings(),
             browser_approval: false,
         }
     }
@@ -722,6 +729,7 @@ impl Engine {
         let now = now();
         let mut shared_until = None;
         let mut sharing_ended = None;
+        let mut downloaded_at = None;
         let state: &'static str = match (file.local.as_str(), file.online.as_str()) {
             (local::NOT_KEPT, _) => "not_kept",
             (local::RESTORING, _) => "restoring",
@@ -738,9 +746,13 @@ impl Engine {
             _ => match share.map(|s| s.state.as_str()) {
                 Some(index::share::SENT) => {
                     shared_until = share.and_then(|s| s.delete_at);
+                    downloaded_at = share.and_then(|s| s.downloaded_at);
                     "shared"
                 }
-                Some(index::share::STOP_PENDING) => "stop_pending",
+                Some(index::share::STOP_PENDING) => {
+                    downloaded_at = share.and_then(|s| s.downloaded_at);
+                    "stop_pending"
+                }
                 // Shown until the record is swept a day after it was marked.
                 Some(index::share::OWNER_ONLY) => "share_owner_only",
                 // A replaced shared copy stranded on the node, for a day.
@@ -759,6 +771,7 @@ impl Engine {
                         .is_some_and(|at| now.saturating_sub(at) < 86_400) =>
                 {
                     sharing_ended = share.and_then(|s| s.ended_at);
+                    downloaded_at = share.and_then(|s| s.downloaded_at);
                     "sharing_ended"
                 }
                 _ => "two_copies",
@@ -777,6 +790,7 @@ impl Engine {
             progress,
             shared_until,
             sharing_ended,
+            downloaded_at,
             not_kept: (state == "not_kept").then_some(match file.note.as_deref() {
                 Some("too_big") => "too_big",
                 Some("too_long") => "too_long",
