@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.8 preview - Unreleased
+## 0.3.8 preview - 2026-10-19
 
 - Learn when a shared file has been downloaded. The recipient's page confirms
   the download over the same encrypted connection (foregather-kit 0.5.0's

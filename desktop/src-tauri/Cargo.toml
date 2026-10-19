@@ -1,6 +1,6 @@
 [package]
 name = "wildbloom-desktop"
-version = "0.3.7"
+version = "0.3.8"
 description = "Wildbloom Node desktop tray application"
 authors = ["ForgeSworn"]
 license = "MIT"
