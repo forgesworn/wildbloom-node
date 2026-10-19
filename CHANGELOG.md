@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.8 preview - Unreleased
+
+- Learn when a shared file has been downloaded. The recipient's page confirms
+  the download over the same encrypted connection (foregather-kit 0.5.0's
+  optional transfer reply) while the link is open, within 10 minutes of making
+  it. The share window and the file's row then show **Downloaded**, and by
+  default the shared copy is deleted at once, so a share works once. Without a
+  confirmation the copy is deleted when it expires or on Stop sharing, as before.
+- Add Sharing settings: delete the shared copy after a confirmed download or
+  keep it until it expires, and how long shared copies last (1 hour, 24 hours
+  or 7 days). Changes apply to files shared afterwards.
+- Make the Drop window calmer. Rows with both copies drop their "2 copies"
+  label, Share appears on hover or keyboard focus (always on touch screens),
+  the drop band goes once there are files, **Add files…** moves to the footer,
+  and the share window keeps its heading and status in fixed places.
+- The Drop index moves to schema 4, adding the download time to shares. 0.3.7
+  and earlier refuse a schema 4 index, so do not downgrade after upgrading.
+
 ## 0.3.7 preview - 2026-10-19
 
 - Check the key list for changes from the owner's other computers every 10
