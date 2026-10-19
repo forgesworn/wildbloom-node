@@ -235,7 +235,6 @@ async fn issue(State(issuer): State<TurnIssuer>, request: Request<Body>) -> Resp
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write as _;
 
     /// Synthetic: 36 bytes of printable ASCII.
     const SECRET: &str = "synthetic-wildbloom-turn-secret-0001";
@@ -308,9 +307,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("turn-secret");
-        let mut file = std::fs::File::create(&path).unwrap();
-        file.write_all(format!("{SECRET}\n").as_bytes()).unwrap();
-        drop(file);
+        std::fs::write(&path, format!("{SECRET}\n")).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         let secret = TurnSecret::from_file(&path).unwrap();
         assert_eq!(secret.credential(USERNAME).unwrap(), EXPECTED);
