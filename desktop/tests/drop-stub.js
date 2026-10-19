@@ -44,6 +44,16 @@
     row('f35', 'deep.txt', 'not_kept', { notKept: 'too_deep', bytes: 4_000, folder: 'a/b/c/d/e/f/g/h/i/j' }),
     row('f36', 'window-only.pdf', 'two_copies'),
   ];
+  // Deletions from the Wildbloom folder held back by the mass-removal brake, beside two kept rows.
+  const heldRows = () => [
+    row('h1', 'report.pdf', 'held', { folder: 'Work/2026' }),
+    row('h2', 'budget.xlsx', 'held', { folder: 'Work/2026' }),
+    row('h3', 'minutes-from-the-very-long-planning-meeting-in-september-final.docx', 'held', { folder: 'Work/Meetings/Autumn/September' }),
+    row('h4', 'holiday.jpg', 'held', { folder: 'Photos' }),
+    row('h5', 'beach.jpg', 'held', { folder: 'Photos' }),
+    row('h6', 'notes.txt', 'held'),
+    row('h7', 'draft.txt', 'held'),
+  ];
   const listRows = () => [row('f1', 'holiday.jpg', 'two_copies'), row('f2', 'tax-return-2026.pdf', 'copying', { progress: 45, bytes: 18_400_000 }), row('f3', 'notes.txt', 'failed', { bytes: 12_000 }), row('f12', 'quote.pdf', 'shared', { sharedUntil: nowSeconds + 20 * 3600 }), row('f9', 'archive.zip', 'two_copies', { bytes: 90_000_000 })];
   const manyRows = () => Array.from({ length: 24 }, (_, i) => row(`m${i}`, `document-${String(i + 1).padStart(2, '0')}.pdf`, 'two_copies', { added: nowSeconds - 100 * i }));
 
@@ -69,6 +79,8 @@
   else if (name === 'good') files = goodRows();
   else if (name === 'all-states') files = allRows();
   else if (name === 'folder') { files = folderRows(); state.watchFolder = { enabled: true, state: 'on', path: '~/Wildbloom' }; }
+  else if (name === 'held' || name === 'confirm-held') { files = heldRows().concat([row('f30', 'cv.pdf', 'two_copies', { inWatchFolder: true }), row('f31', 'plan.pdf', 'two_copies', { inWatchFolder: true, folder: 'Work' })]); state.watchFolder = { enabled: true, state: 'on', path: '~/Wildbloom' }; }
+  else if (name === 'held-one') { files = heldRows().slice(0, 1).concat([row('f30', 'cv.pdf', 'two_copies', { inWatchFolder: true })]); state.watchFolder = { enabled: true, state: 'on', path: '~/Wildbloom' }; }
   else if (name === 'many') files = manyRows();
   else if (name === 'no-online') { noOnline(); files = [row('f1', 'holiday.jpg', 'no_online'), row('f2', 'notes.txt', 'no_online', { bytes: 12_000 })]; }
   else if (name.startsWith('first-run-1') || name === 'first-run-restore') { firstRun('node'); files = []; noOnline(); }
@@ -88,6 +100,7 @@
     if (flag === 'folder-unavailable') state.watchFolder = { enabled: true, state: 'unavailable', path: '~/Wildbloom' };
     if (flag === 'folder-too-many') state.watchFolder = { enabled: true, state: 'too_many', path: '~/Wildbloom' };
     if (flag === 'no-online') noOnline();
+    if (flag === 'held') files = files.concat(heldRows());
     if (flag === 'good') files = goodRows();
     if (flag === 'downloads') files = files.concat([row('f40', 'brief.pdf', 'shared', { sharedUntil: nowSeconds + 20 * 3600, downloadedAt: nowSeconds - 1080 }), row('f41', 'deck.key', 'sharing_ended', { sharingEnded: nowSeconds - 1080, downloadedAt: nowSeconds - 1080 }), row('f42', 'map.png', 'stop_pending', { downloadedAt: nowSeconds - 1080 })]);
     if (flag === 'shared') files = goodRows().concat([row('f12', 'quote.pdf', 'shared', { sharedUntil: nowSeconds + 20 * 3600 }), row('f22', 'plan.pdf', 'shared', { sharedUntil: nowSeconds + 3600 })]);
@@ -144,6 +157,17 @@
     save_copy: () => (stub.saveCancelled ? null : { folder: 'Downloads' }),
     open_drop_flow: () => undefined,
     remove: ({ id }) => { stub.files = stub.files.filter((item) => item.id !== id); stub.emit('drop://file', { id, removed: true }); },
+    resolve_held_removals: ({ ids, choice }) => {
+      if (choice !== 'remove' && choice !== 'put_back') throw { code: 'bad_choice' };
+      const held = stub.files.filter((item) => item.state === 'held' && ids.includes(item.id));
+      for (const item of held) {
+        if (choice === 'remove') {
+          stub.files = stub.files.filter((entry) => entry.id !== item.id);
+          stub.emit('drop://file', { id: item.id, removed: true });
+        } else stub.pushRow({ ...item, state: 'two_copies', inWatchFolder: true });
+      }
+      return { count: held.length };
+    },
     stop_sharing: () => undefined,
     set_sharing: ({ afterDownload, expirySeconds }) => { stub.state.sharing = { afterDownload, expirySeconds }; },
     check_online_node: ({ url }) => {

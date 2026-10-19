@@ -8,6 +8,8 @@
 //! ```text
 //! WILDBLOOM_E2E_BIN_DIR=/path/to/bin cargo test drop_end_to_end -- --ignored --nocapture
 //! WILDBLOOM_E2E_BIN_DIR=/path/to/bin cargo test drop_two_computers_in_step -- --ignored --nocapture
+//! WILDBLOOM_E2E_BIN_DIR=/path/to/bin cargo test drop_two_computers_folder -- --ignored --nocapture
+//! WILDBLOOM_E2E_BIN_DIR=/path/to/bin cargo test drop_folder_removal_brake -- --ignored --nocapture
 //! ```
 //!
 //! `bin` holds `wildbloomd-local` (this repository's daemon),
@@ -2240,6 +2242,242 @@ async fn drop_two_computers_folder() {
     assert!(b.rows().iter().all(|r| !r.in_watch_folder));
     assert_eq!(tree(&b_root), before);
     drop(b_rt);
+}
+
+/// The mass-removal brake across two computers.  A folder renamed on A is a
+/// move and is never held.  Ten of twelve files deleted at once on A are
+/// held: B's files and every encrypted copy stay, across a restart of A,
+/// until the owner chooses.  Put back makes A's folder whole again.  The same
+/// deletion confirmed reaches B's Trash and every node, and a single
+/// deletion afterwards flows without asking.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs WILDBLOOM_E2E_BIN_DIR with wildbloomd-local, wildbloomd-grants and foregather-server"]
+async fn drop_folder_removal_brake() {
+    const LIMIT: u64 = 1024 * 1024;
+    let Some(svc) = services().await else {
+        return;
+    };
+    let (http, online) = (svc.http.clone(), svc.online.clone());
+    let report = |step: &str| eprintln!("e2e-brake: {step}");
+    let a_root = svc.work_path.join("a-home/Wildbloom");
+    let b_root = svc.work_path.join("b-home/Wildbloom");
+
+    // B sets up first; A restores from its recovery key on its own runtime,
+    // so A can restart.
+    let (b, b_host, _b_store, recovery_key) = approved_engine(&svc, "b", &b_root, LIMIT).await;
+    b.set_watch_folder(true).await.unwrap();
+    let a_store = Arc::new(MemoryStore::default());
+    let a_host = test_host(&svc.bin, &svc.work_path, "a");
+    let mut a_rt = Computer::start();
+    let mut a = engine_for(
+        &a_host,
+        &a_store,
+        &svc.relay_api,
+        &a_root,
+        a_rt.handle(),
+        LIMIT,
+    );
+    a.restore(Some(&recovery_key), None, Some(&svc.online_url))
+        .await
+        .unwrap();
+    approve(&a, &svc.bunker).await;
+    a.set_watch_folder(true).await.unwrap();
+    let every_node = [
+        a_host.local_node().endpoint.unwrap(),
+        b_host.local_node().endpoint.unwrap(),
+        online.clone(),
+    ];
+    report("A and B share one recovery key, both folders on");
+
+    let names: Vec<String> = (0..12).map(|i| format!("file-{i:02}.txt")).collect();
+    let content = |i: usize| bytes_of(101 + 2 * i as u32, 20_000);
+    let b_has = |dir: &str, upto: usize| {
+        let tree = tree(&b_root);
+        names[..upto]
+            .iter()
+            .enumerate()
+            .all(|(i, n)| tree.get(&format!("{dir}/{n}")) == Some(&content(i)))
+    };
+    let all_online = |engine: &Arc<Engine>, n: usize| {
+        let rows = engine.rows();
+        rows.len() == n && rows.iter().all(|r| r.state == "two_copies")
+    };
+    let held_on = |engine: &Arc<Engine>| engine.rows().iter().filter(|r| r.state == "held").count();
+    for (i, name) in names.iter().enumerate() {
+        put(&a_root, &format!("Batch/{name}"), &content(i));
+    }
+    until("B has the batch", 180, || b_has("Batch", 12).then_some(())).await;
+    until("A's batch is online", 120, || {
+        all_online(&a, 12).then_some(())
+    })
+    .await;
+    report("twelve files added on A reached B and the online node");
+
+    // a. A folder renamed is a move: nothing is held, and B follows.
+    std::fs::rename(a_root.join("Batch"), a_root.join("Moved")).unwrap();
+    until("B follows the rename", 180, || {
+        (b_has("Moved", 12) && tree(&b_root).keys().all(|k| !k.starts_with("Batch/"))).then_some(())
+    })
+    .await;
+    assert!(a.index.held().unwrap().is_empty(), "a rename is never held");
+    until("A's moved files are online", 120, || {
+        all_online(&a, 12).then_some(())
+    })
+    .await;
+    report("a: a folder renamed on A was a move; nothing was held and B followed");
+
+    // b. Ten of twelve deleted at once on A: held, and nothing changes
+    // anywhere else.
+    let ids: Vec<String> = names[..10]
+        .iter()
+        .map(|n| row_at(&a, &a_root, &format!("Moved/{n}")).unwrap())
+        .collect();
+    let shas: Vec<String> = ids
+        .iter()
+        .map(|id| a.index.file(id).unwrap().unwrap().sha256.unwrap())
+        .collect();
+    let stones = a.index.tombstones().unwrap().len();
+    let b_trashed = b_host.trashed.lock().unwrap().len();
+    let b_before = tree(&b_root);
+    let b_rows = kept_ids(&b);
+    for name in &names[..10] {
+        std::fs::remove_file(a_root.join("Moved").join(name)).unwrap();
+    }
+    until("A holds the deletions", 60, || {
+        (held_on(&a) == 10).then_some(())
+    })
+    .await;
+    assert_eq!(
+        a.status_line().text,
+        "10 files were deleted from your Wildbloom folder. They're kept until you choose."
+    );
+    let untouched = |a: &Arc<Engine>, what: &str| {
+        let what = what.to_owned();
+        let (a, b, http, every_node, shas, b_before, b_rows) = (
+            a.clone(),
+            b.clone(),
+            http.clone(),
+            every_node.clone(),
+            shas.clone(),
+            b_before.clone(),
+            b_rows.clone(),
+        );
+        let (b_host, b_root) = (b_host.clone(), b_root.clone());
+        async move {
+            assert_eq!(tree(&b_root), b_before, "{what}: B's folder is unchanged");
+            assert_eq!(kept_ids(&b), b_rows, "{what}: B's rows are unchanged");
+            assert_eq!(
+                b_host.trashed.lock().unwrap().len(),
+                b_trashed,
+                "{what}: nothing went to B's Trash"
+            );
+            assert_eq!(
+                a.index.tombstones().unwrap().len(),
+                stones,
+                "{what}: no tombstone"
+            );
+            assert!(
+                a.index
+                    .pending_deletes()
+                    .unwrap()
+                    .iter()
+                    .all(|d| !shas.contains(&d.sha256)),
+                "{what}: no deletion queued"
+            );
+            for sha in &shas {
+                for node in &every_node {
+                    assert!(
+                        client::head(&http, node, sha).await.unwrap().is_some(),
+                        "{what}: every encrypted copy stays"
+                    );
+                }
+            }
+        }
+    };
+    // Several of B's pulls.
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    untouched(&a, "held").await;
+    report("b: ten deletions at once on A were held; B and every node kept them");
+
+    // c. The hold survives a restart of A.
+    let weak = Arc::downgrade(&a);
+    drop(a);
+    drop(a_rt);
+    until("A stopped", 30, || weak.upgrade().is_none().then_some(())).await;
+    a_rt = Computer::start();
+    a = engine_for(
+        &a_host,
+        &a_store,
+        &svc.relay_api,
+        &a_root,
+        a_rt.handle(),
+        LIMIT,
+    );
+    assert_eq!(held_on(&a), 10);
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    assert_eq!(
+        held_on(&a),
+        10,
+        "still held after passes on the restarted A"
+    );
+    untouched(&a, "after a restart").await;
+    report("c: the hold survived a restart of A");
+
+    // d. Put them back: A's folder is whole again, and B never changed.
+    let done = a.resolve_held_removals(&ids, "put_back").await.unwrap();
+    assert_eq!(done.count, 10);
+    until("A's folder is whole again", 120, || {
+        let tree = tree(&a_root);
+        names
+            .iter()
+            .enumerate()
+            .all(|(i, n)| tree.get(&format!("Moved/{n}")) == Some(&content(i)))
+            .then_some(())
+    })
+    .await;
+    assert_eq!(tree(&a_root), tree(&b_root));
+    assert!(a.index.held().unwrap().is_empty());
+    assert_eq!(held_on(&a), 0);
+    untouched(&a, "put back").await;
+    report("d: Put them back restored A's folder from the encrypted copies");
+
+    // e. Deleted again and confirmed: B's copies go to its Trash and every
+    // encrypted copy is deleted.  The two files left stay everywhere.
+    for name in &names[..10] {
+        std::fs::remove_file(a_root.join("Moved").join(name)).unwrap();
+    }
+    until("A holds them again", 60, || {
+        (held_on(&a) == 10).then_some(())
+    })
+    .await;
+    let done = a.resolve_held_removals(&ids, "remove").await.unwrap();
+    assert_eq!(done.count, 10);
+    until("B moves them to its Trash", 120, || {
+        names[..10]
+            .iter()
+            .all(|n| !b_root.join("Moved").join(n).exists())
+            .then_some(())
+    })
+    .await;
+    let trashed = trashed_bytes(&b_host);
+    assert!((0..10).all(|i| trashed.contains(&content(i))));
+    for sha in &shas {
+        wait_gone(&http, &every_node, sha, "a confirmed removal").await;
+    }
+    let left = tree(&b_root);
+    assert_eq!(left.get("Moved/file-10.txt"), Some(&content(10)));
+    assert_eq!(left.get("Moved/file-11.txt"), Some(&content(11)));
+    report("e: confirmed, the removal reached B's Trash and every node");
+
+    // f. One file deleted afterwards flows without asking.
+    std::fs::remove_file(a_root.join("Moved").join(&names[11])).unwrap();
+    until("B lets the one file go", 90, || {
+        (!b_root.join("Moved").join(&names[11]).exists()).then_some(())
+    })
+    .await;
+    assert!(a.index.held().unwrap().is_empty());
+    report("f: a single deletion afterwards flowed at once");
+    drop(a_rt);
 }
 
 /// Waits for a JSON file the browser driver writes into the hand-off folder.

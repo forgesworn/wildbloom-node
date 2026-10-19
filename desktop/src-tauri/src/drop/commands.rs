@@ -335,6 +335,17 @@ pub async fn remove(slot: State<'_, DropSlot>, id: String) -> CommandResult<()> 
     engine(&slot)?.remove(&id).await
 }
 
+/// The owner's choice for deletions from the Wildbloom folder that the
+/// mass-removal brake held back: `remove` or `put_back`, for these rows.
+#[tauri::command]
+pub async fn resolve_held_removals(
+    slot: State<'_, DropSlot>,
+    ids: Vec<String>,
+    choice: String,
+) -> CommandResult<HeldResolved> {
+    engine(&slot)?.resolve_held_removals(&ids, &choice).await
+}
+
 #[tauri::command]
 pub async fn check_online_node(slot: State<'_, DropSlot>, url: String) -> CommandResult<NodeCheck> {
     engine(&slot)?.check_online_node(&url).await

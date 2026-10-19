@@ -35,6 +35,7 @@ fn main() {
             "copy_back",
             "save_copy",
             "remove",
+            "resolve_held_removals",
             "recovery_key_for_display",
             "save_recovery_file",
             "confirm_recovery_saved",

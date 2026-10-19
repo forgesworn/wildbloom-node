@@ -172,6 +172,13 @@ pub struct AddResult {
     pub duplicates: Vec<Duplicate>,
 }
 
+/// `resolve_held_removals`'s answer: how many held rows it acted on.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct HeldResolved {
+    pub count: u32,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SavedCopy {

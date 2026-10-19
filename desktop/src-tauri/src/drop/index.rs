@@ -137,8 +137,9 @@ pub enum IndexError {
 
 /// The schema this build reads and writes.  Version 1 (test builds only)
 /// lacked node origins on deletions and shares, so it is refused.  Versions 2
-/// and 3 are migrated in place (see `MIGRATE_2_TO_3` and `MIGRATE_3_TO_4`).
-pub const SCHEMA_VERSION: i64 = 4;
+/// to 4 are migrated in place (see `MIGRATE_2_TO_3`, `MIGRATE_3_TO_4` and
+/// `MIGRATE_4_TO_5`).
+pub const SCHEMA_VERSION: i64 = 5;
 
 impl From<rusqlite::Error> for IndexError {
     fn from(error: rusqlite::Error) -> Self {
@@ -227,6 +228,10 @@ CREATE TABLE IF NOT EXISTS kv (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS held (
+  id TEXT PRIMARY KEY,
+  at INTEGER NOT NULL
+);
 ";
 
 /// Schema 2 to 3, in one transaction: the frozen key list entry fields
@@ -254,6 +259,16 @@ PRAGMA user_version = 3;
 const MIGRATE_3_TO_4: &str = "
 ALTER TABLE shares ADD COLUMN downloaded_at INTEGER;
 PRAGMA user_version = 4;
+";
+
+/// Schema 4 to 5, in one transaction: rows whose deletion from the Wildbloom
+/// folder is held back until the owner chooses (the mass-removal brake).  The
+/// version matters as much as the table: a schema 4 build would see a held
+/// row as a linked file that is missing and remove it everywhere, so it must
+/// refuse this index instead.
+const MIGRATE_4_TO_5: &str = "
+CREATE TABLE held (id TEXT PRIMARY KEY, at INTEGER NOT NULL);
+PRAGMA user_version = 5;
 ";
 
 const SHARE_COLUMNS: &str =
@@ -332,12 +347,15 @@ impl Index {
                 db.execute_batch(SCHEMA)?;
                 db.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
             }
-            2 | 3 => {
+            2..=4 => {
                 let migration = db.transaction()?;
-                if version == 2 {
+                if version <= 2 {
                     migration.execute_batch(MIGRATE_2_TO_3)?;
                 }
-                migration.execute_batch(MIGRATE_3_TO_4)?;
+                if version <= 3 {
+                    migration.execute_batch(MIGRATE_3_TO_4)?;
+                }
+                migration.execute_batch(MIGRATE_4_TO_5)?;
                 migration.commit()?;
                 db.execute_batch(SCHEMA)?;
             }
@@ -567,6 +585,7 @@ impl Index {
             db.execute("DELETE FROM shares WHERE file_id = ?1", [id])?;
             db.execute("DELETE FROM online_copies WHERE file_id = ?1", [id])?;
             db.execute("DELETE FROM stranded WHERE file_id = ?1", [id])?;
+            db.execute("DELETE FROM held WHERE id = ?1", [id])?;
             db.execute("DELETE FROM files WHERE id = ?1", [id])
                 .map(|_| ())
         })
@@ -798,6 +817,58 @@ impl Index {
         self.with(|db| db.execute("DELETE FROM removed", []).map(|_| ()))
     }
 
+    // ------------------------------------------------------ held removals
+
+    /// Holds back the deletion of each of `ids` from the Wildbloom folder
+    /// until the owner chooses (the mass-removal brake).  One transaction, so
+    /// a crash leaves all or none of them held.
+    pub fn hold(&self, ids: &[String], at: u64) -> Result<(), IndexError> {
+        let mut db = self
+            .db
+            .lock()
+            .map_err(|_| IndexError::Sql("lock poisoned".into()))?;
+        let batch = db.transaction()?;
+        for id in ids {
+            batch.execute(
+                "INSERT OR IGNORE INTO held (id, at) VALUES (?1, ?2)",
+                params![id, int(at)],
+            )?;
+        }
+        batch.commit()?;
+        Ok(())
+    }
+
+    /// Every held row id.
+    pub fn held(&self) -> Result<std::collections::HashSet<String>, IndexError> {
+        self.with(|db| {
+            let mut statement = db.prepare("SELECT id FROM held")?;
+            statement
+                .query_map([], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()
+        })
+    }
+
+    pub fn is_held(&self, id: &str) -> Result<bool, IndexError> {
+        self.with(|db| {
+            db.query_row("SELECT 1 FROM held WHERE id = ?1", [id], |_| Ok(()))
+                .optional()
+                .map(|v| v.is_some())
+        })
+    }
+
+    /// Ends one row's hold; the row stays.
+    pub fn release_hold(&self, id: &str) -> Result<(), IndexError> {
+        self.with(|db| {
+            db.execute("DELETE FROM held WHERE id = ?1", [id])
+                .map(|_| ())
+        })
+    }
+
+    /// Ends every hold (the folder's links were cleared).
+    pub fn clear_holds(&self) -> Result<(), IndexError> {
+        self.with(|db| db.execute("DELETE FROM held", []).map(|_| ()))
+    }
+
     // ------------------------------------------------------- watch folder
 
     /// Whether this exact version (path, size, mtime) of a watched file was
@@ -949,8 +1020,8 @@ PRAGMA user_version = 2;
         let index = Index::open(&bare).unwrap();
         assert!(index.online_copies("a").unwrap().is_empty());
 
-        // Version 1 and anything newer than 4 are refused.
-        for (name, version) in [("one", 1), ("five", 5)] {
+        // Version 1 and anything newer than 5 are refused.
+        for (name, version) in [("one", 1), ("six", 6)] {
             let other = dir.path().join(name);
             version_2_index(&other, None);
             Connection::open(other.join("drop-index.sqlite"))
@@ -1001,13 +1072,76 @@ PRAGMA user_version = 2;
         let version: i64 = db
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 4);
+        assert_eq!(version, SCHEMA_VERSION);
         drop_connection(db);
         // Reopening a migrated index changes nothing.
         let index = Index::open(&drop).unwrap();
         assert_eq!(index.shares().unwrap()[0].downloaded_at, Some(500));
         index.put_share(&share).unwrap();
         assert_eq!(index.share("a").unwrap().unwrap().downloaded_at, None);
+    }
+
+    #[test]
+    fn version_4_migrates_to_5_with_nothing_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let drop = dir.path().join("drop");
+        // A version 4 index, as 0.3.8 left it: no `held` table.
+        version_3_index(&drop);
+        let db = Connection::open(drop.join("drop-index.sqlite")).unwrap();
+        db.execute_batch(MIGRATE_3_TO_4).unwrap();
+        let tables: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'held'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 0);
+        drop_connection(db);
+        let index = Index::open(&drop).unwrap();
+        assert!(index.held().unwrap().is_empty(), "nothing is held");
+        assert_eq!(index.files().unwrap().len(), 3);
+        assert_eq!(index.shares().unwrap().len(), 1);
+        assert!(index.get_bool("watch_enabled").unwrap());
+        index.hold(&["a".into()], 7).unwrap();
+        drop_connection_of(index);
+        let db = Connection::open(drop.join("drop-index.sqlite")).unwrap();
+        let version: i64 = db
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 5);
+        drop_connection(db);
+        // Reopening keeps the hold.
+        let index = Index::open(&drop).unwrap();
+        assert!(index.is_held("a").unwrap());
+    }
+
+    #[test]
+    fn holds_round_trip_and_go_with_their_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = Index::open(&dir.path().join("drop")).unwrap();
+        for id in ["a", "b", "c"] {
+            index.insert_file(&record(id)).unwrap();
+        }
+        index.hold(&["a".into(), "b".into()], 10).unwrap();
+        // Holding again changes nothing.
+        index.hold(&["a".into()], 20).unwrap();
+        assert_eq!(
+            index.held().unwrap(),
+            ["a", "b"].map(String::from).into_iter().collect()
+        );
+        assert!(index.is_held("a").unwrap());
+        assert!(!index.is_held("c").unwrap());
+        index.release_hold("a").unwrap();
+        assert!(!index.is_held("a").unwrap());
+        assert!(index.file("a").unwrap().is_some(), "the row stays");
+        // A removed row takes its hold with it.
+        index.delete_file("b").unwrap();
+        assert!(index.held().unwrap().is_empty());
+        index.hold(&["c".into()], 30).unwrap();
+        index.clear_holds().unwrap();
+        assert!(index.held().unwrap().is_empty());
+        assert!(index.file("c").unwrap().is_some());
     }
 
     fn drop_connection_of(index: Index) {

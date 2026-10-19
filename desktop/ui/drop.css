@@ -435,6 +435,14 @@ dialog.drop-scope.flow-sheet .flow { padding: 24px; }
    primary-right order; primary-left already has the primary first. */
 .dialog-actions { display: flex; flex-wrap: wrap-reverse; gap: 8px; justify-content: flex-end; }
 html[data-button-order="primary-left"] .dialog-actions { flex-wrap: wrap; justify-content: flex-start; }
+/* Held deletions: a few names, one per line, each wrapping anywhere it must.
+   In a short window only the body scrolls; the buttons stay in view. */
+dialog.drop-scope.confirm.held { padding: 0; max-height: calc(100% - 32px); }
+dialog.drop-scope.confirm.held[open] { display: flex; flex-direction: column; gap: 16px; }
+dialog.drop-scope.held .held-body { display: grid; gap: 16px; padding: 24px 24px 0; min-height: 0; overflow-y: auto; }
+dialog.drop-scope.held .held-body:focus-visible { outline-offset: -2px; }
+dialog.drop-scope.held .dialog-actions { padding: 0 24px 24px; }
+dialog.drop-scope.held .held-names { display: grid; gap: 2px; overflow-wrap: anywhere; }
 
 /* Share sheet */
 .share-step { display: grid; gap: 8px; }

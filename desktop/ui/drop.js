@@ -931,6 +931,7 @@
         return { icon: 'share', tone: 'muted', lead: 'Sharing ended', detail: until(row.sharingEnded), spoken: `Sharing ended at ${until(row.sharingEnded)}.` };
       case 'share_owner_only': return { icon: 'alert', tone: 'warning', lead: 'Shared', detail: "only your online node's owner can delete it now", spoken: "Shared. Only your online node's owner can delete the shared copy now." };
       case 'not_kept': return item({ icon: 'alert', tone: 'warning', lead: 'Not kept', detail: notKeptReason(row) });
+      case 'held': return item({ icon: 'alert', tone: 'warning', lead: 'Deleted from your folder', detail: 'kept until you choose', spoken: 'Deleted from your Wildbloom folder. Kept until you choose.' });
       case 'unreadable': {
         const text = "Couldn't read this file. Check you can open it, then add it again.";
         return { icon: 'alert', tone: 'error', lead: text, spoken: text };
@@ -948,13 +949,14 @@
     stop: () => ({ id: 'stop', text: casing('Stop Sharing…', 'Stop sharing…') }),
     save: () => ({ id: 'save', text: casing('Save a Copy…', 'Save a copy…') }),
     remove: () => ({ id: 'remove', text: 'Remove…' }),
+    putBack: () => ({ id: 'put-back', text: casing('Put Back', 'Put back') }),
     open: () => ({ id: 'open', text: 'Open' }),
     reveal: () => ({ id: 'reveal', text: revealText() }),
   };
   function menuFor(row) {
     const items = baseMenuFor(row);
     // Linked rows have a file in the Wildbloom folder to open or show.
-    if (row.inWatchFolder && row.state !== 'not_kept' && row.state !== 'unreadable') return [ITEM.open(), ITEM.reveal(), ...items];
+    if (row.inWatchFolder && !['not_kept', 'unreadable', 'held'].includes(row.state)) return [ITEM.open(), ITEM.reveal(), ...items];
     return items;
   }
   function baseMenuFor(row) {
@@ -976,6 +978,7 @@
       case 'stop_pending': return [ITEM.save()];
       case 'unreadable': return [ITEM.remove()];
       case 'not_kept': return [ITEM.reveal()];
+      case 'held': return [ITEM.putBack(), ITEM.save(), ITEM.remove()];
       default: return [];
     }
   }
@@ -998,6 +1001,10 @@
         if (window.WildbloomShare) window.WildbloomShare.open(row, opener, action === 'share-again', { limits: state.limits });
       } else if (action === 'retry' || action === 'copy-again') await call('retry', { id });
       else if (action === 'copy-back') await call('copy_back', { id });
+      else if (action === 'put-back') {
+        const result = await call('resolve_held_removals', { ids: [id], choice: 'put_back' });
+        if (result && result.count) notice(`Putting ${row.name} back in your Wildbloom folder.`);
+      }
       else if (action === 'save') {
         // Rust opens the save dialog; the page never names a path.
         const result = await call('save_copy', { id });
@@ -1206,6 +1213,7 @@
   function resolveStatus() {
     const failed = [...rows.values()].filter((row) => FAILED.has(row.state)).length;
     const notKept = [...rows.values()].filter((row) => row.state === 'not_kept').length;
+    const held = [...rows.values()].filter((row) => row.state === 'held').length;
     const count = rows.size - notKept;
     const copying = [...rows.values()].filter((row) => BUSY.has(row.state)).length;
     const nowSeconds = Date.now() / 1000;
@@ -1215,6 +1223,7 @@
     if (state.keychain === 'unavailable') return { id: 'keychain', icon: 'alert', tone: 'error', text: "Wildbloom can't reach your keychain.", action: { label: 'Try again', run: () => refreshStatus({ recheck: 'keychain' }) } };
     if (state.watchFolder?.state === 'unavailable') return { id: 'folder-unavailable', icon: 'alert', tone: 'warning', text: "Your Wildbloom folder can't be found. Changes there are paused.", action: { label: 'Use folder again', run: async () => { await call('set_watch_folder', { enabled: true }); await refreshStatus(); } } };
     if (state.watchFolder?.state === 'too_many') return { id: 'folder-too-many', icon: 'alert', tone: 'warning', text: 'Your Wildbloom folder has more than 20,000 items. Changes there are paused.', action: null };
+    if (held > 0) return { id: 'held', icon: 'alert', tone: 'warning', text: held === 1 ? "1 file was deleted from your Wildbloom folder. It's kept until you choose." : `${held} files were deleted from your Wildbloom folder. They're kept until you choose.`, action: { label: 'Review…', run: (opener) => reviewHeld(opener) } };
     if (approval.state === 'expired') return { id: 'expired', icon: 'alert', tone: 'warning', text: 'Approval for this computer has ended. New files stay on this computer.', action: { label: 'Approve again', run: (opener) => openFlowSheet({ sequence: ['approve'], renew: true, refresh: refreshStatus, browserApproval: state.browserApproval }, opener).then(refreshAfter) } };
     if (state.online.configured && (state.online.failedChecks || 0) > 2) return { id: 'unreachable', icon: 'alert', tone: 'warning', text: "Can't reach your online node. Files will copy when it's back.", action: { label: 'Try now', run: () => refreshStatus({ recheck: 'online' }) } };
     if (state.online.full) return { id: 'full', icon: 'alert', tone: 'warning', text: 'Your online space is full. New files stay on this computer.', action: { label: 'Settings', run: openNodeSettings } };
@@ -1236,6 +1245,51 @@
   }
   const refreshAfter = () => refreshStatus();
   let statusAction = null;
+
+  /**
+   * Deletions from the Wildbloom folder that Rust held back (the mass-removal brake):
+   * Put them back, Remove them everywhere, or Decide later (Escape). Acts only on the
+   * rows the dialog lists, so a file held while it is open stays held.
+   */
+  async function reviewHeld(opener) {
+    const held = [...rows.values()].filter((row) => row.state === 'held').sort((a, b) => (a.folder || '').localeCompare(b.folder || '') || a.name.localeCompare(b.name));
+    if (!held.length) return;
+    await loadPlatform();
+    const n = held.length;
+    const one = n === 1;
+    const shown = held.slice(0, 5);
+    const choice = await new Promise((resolve) => {
+      const titleId = uid('held-title');
+      let answer = null;
+      const dialog = h('dialog', { class: `drop-scope${themeClass} confirm held`, 'aria-labelledby': titleId });
+      const button = (label, kind, key, value) => h('button', { class: `btn ${kind}`, type: 'button', 'data-key': key, onclick: () => { answer = value; dialog.close(); } }, label);
+      const back = button(one ? 'Put it back' : 'Put them back', 'primary', 'put-back', 'put_back');
+      const remove = button(one ? 'Remove it everywhere' : 'Remove them everywhere', 'secondary', 'remove', 'remove');
+      const later = button('Decide later', 'secondary', 'later', null);
+      // macOS and GNOME put the default on the right and the destructive alternative on the far left.
+      const ordered = primaryLeft() ? [back, remove, later] : [remove, later, back];
+      // Only the body scrolls in a short window, so the heading shows first and the
+      // buttons stay in view. It takes focus so the keyboard can scroll it.
+      dialog.append(
+        h('div', { class: 'held-body', tabindex: '0', 'aria-labelledby': titleId, role: 'group' },
+          h('h2', { id: titleId }, one ? '1 file was deleted from your Wildbloom folder' : `${n} files were deleted from your Wildbloom folder`),
+          h('p', {}, `That's more than Wildbloom removes without asking. Your other computers and your online node still have ${one ? 'it' : 'them'}.`),
+          h('ul', { class: 'held-names' }, shown.map((row) => h('li', {}, row.folder ? `${row.folder}/${row.name}` : row.name))),
+          n > shown.length ? h('p', { class: 'muted' }, `and ${n - shown.length} more.`) : null,
+          h('p', {}, one
+            ? `If you remove it everywhere, copies in your other Wildbloom folders go to the ${trashName()}. Its encrypted copies and key are deleted, which can't be undone.`
+            : `If you remove them everywhere, copies in your other Wildbloom folders go to the ${trashName()}. Their encrypted copies and keys are deleted, which can't be undone.`)),
+        h('div', { class: 'dialog-actions' }, ordered));
+      showDialog(dialog, opener, () => resolve(answer));
+      back.focus();
+    });
+    if (!choice) return;
+    const result = await call('resolve_held_removals', { ids: held.map((row) => row.id), choice });
+    const done = result?.count ?? 0;
+    if (!done) return;
+    const files = `${done} ${plural(done, 'file', 'files')}`;
+    notice(choice === 'put_back' ? `Putting ${files} back in your Wildbloom folder.` : `Removed ${files} from Wildbloom.`);
+  }
   function renderStatusLine() {
     if (state.firstRun) return;
     const status = resolveStatus();

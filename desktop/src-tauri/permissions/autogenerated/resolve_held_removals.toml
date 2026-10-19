@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-resolve-held-removals"
+description = "Enables the resolve_held_removals command without any pre-configured scope."
+commands.allow = ["resolve_held_removals"]
+
+[[permission]]
+identifier = "deny-resolve-held-removals"
+description = "Denies the resolve_held_removals command without any pre-configured scope."
+commands.deny = ["resolve_held_removals"]

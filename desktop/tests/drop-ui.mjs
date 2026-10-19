@@ -238,6 +238,12 @@ const STATUS_CASES = [
   ['list', 'folder-unavailable,expired,unreachable,full', "Your Wildbloom folder can't be found. Changes there are paused.", 'Use folder again'],
   ['list', 'folder-too-many,expired', 'Your Wildbloom folder has more than 20,000 items. Changes there are paused.', null],
   ['folder', '', "4 files in your Wildbloom folder can't be kept.", null],
+  ['held', '', "7 files were deleted from your Wildbloom folder. They're kept until you choose.", 'Review…'],
+  ['held-one', '', "1 file was deleted from your Wildbloom folder. It's kept until you choose.", 'Review…'],
+  ['list', 'held,expired,unreachable,full,keylist', "7 files were deleted from your Wildbloom folder. They're kept until you choose.", 'Review…'],
+  ['list', 'held,folder-too-many', 'Your Wildbloom folder has more than 20,000 items. Changes there are paused.', null],
+  ['list', 'held,folder-unavailable', "Your Wildbloom folder can't be found. Changes there are paused.", 'Use folder again'],
+  ['list', 'held,keychain', "Wildbloom can't reach your keychain.", 'Try again'],
   ['folder', 'keylist', "Wildbloom couldn't update the list it needs to restore your files. Your files are safe on this computer.", 'Try again'],
   ['good', '', 'All 5 files have 2 copies.', null],
   ['empty', '', '', null],
@@ -381,6 +387,102 @@ scenario('folder: Remove copy while the folder is on', async () => {
     await page.keyboard.press('Escape');
     await done(page);
   }
+});
+
+scenario('folder: held deletions, their rows, menu and the review dialog', async () => {
+  const body = (bin) => `If you remove them everywhere, copies in your other Wildbloom folders go to the ${bin}. Their encrypted copies and keys are deleted, which can't be undone.`;
+  const ALL = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'h7'];
+  const reviewed = (page) => calls(page, 'resolve_held_removals');
+  let page = await drop('held');
+  await ready(page);
+  // Rows: one indicator, no Share, no Open or Show in Finder; Put Back first in the menu.
+  const li = page.locator('li.row[data-id="h1"]');
+  assert.equal(await text(li.locator('.row-visual')), 'Deleted from your folder · kept until you choose');
+  assert.equal(await text(li.locator('.row-status .sr-only')), 'Deleted from your Wildbloom folder. Kept until you choose.');
+  assert.equal(await text(li.locator('.row-folder')), 'Work/2026');
+  assert.equal(await li.locator('[data-ctl="share"]').count(), 0);
+  assert.equal(await li.locator('[data-ctl="inline"]').count(), 0);
+  await li.locator('[data-ctl="more"]').click();
+  assert.deepEqual(await page.evaluate(() => window.__stub.lastMenu.items.map((item) => item.text)), ['Put Back', 'Save a Copy…', 'Remove…']);
+  // The review dialog: counts, five names in folder order, then how many more.
+  await page.locator('#status-action').click();
+  let dialog = page.locator('dialog.held[open]');
+  await dialog.waitFor();
+  assert.equal(await text(dialog.locator('h2')), '7 files were deleted from your Wildbloom folder');
+  assert.deepEqual(await dialog.locator('p').allTextContents(), [
+    "That's more than Wildbloom removes without asking. Your other computers and your online node still have them.",
+    'and 2 more.',
+    body('Trash'),
+  ]);
+  assert.deepEqual(await dialog.locator('li').allTextContents(), ['draft.txt', 'notes.txt', 'Photos/beach.jpg', 'Photos/holiday.jpg', 'Work/2026/budget.xlsx']);
+  assert.deepEqual(await dialog.locator('button').allTextContents(), ['Remove them everywhere', 'Decide later', 'Put them back']);
+  assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Put them back', 'Put them back is the default');
+  // Escape and Decide later change nothing.
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({ state: 'detached' });
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'status-action', 'focus returns to the status action');
+  await page.locator('#status-action').click();
+  await page.locator('dialog.held[open] button', { hasText: 'Decide later' }).click();
+  await page.locator('dialog.held').waitFor({ state: 'detached' });
+  assert.equal((await reviewed(page)).length, 0);
+  assert.match(await text(page.locator('#status-text')), /^7 files were deleted/);
+  // Put them back sends exactly the rows it listed.
+  await page.locator('#status-action').click();
+  await page.locator('dialog.held[open] button', { hasText: 'Put them back' }).click();
+  await page.locator('#notices p', { hasText: 'Putting 7 files back in your Wildbloom folder.' }).waitFor();
+  assert.deepEqual((await reviewed(page)).map((c) => c.args), [{ ids: ['h7', 'h6', 'h5', 'h4', 'h2', 'h1', 'h3'], choice: 'put_back' }]);
+  await page.waitForFunction(() => document.querySelector('#status-text').textContent.startsWith('All'));
+  assert.equal(await text(page.locator('#status-text')), 'All 9 files have 2 copies.');
+  await done(page);
+
+  // Remove them everywhere; a row held while the dialog was open stays held.
+  page = await drop('held');
+  await ready(page);
+  await page.locator('#status-action').click();
+  await page.locator('dialog.held[open]').waitFor();
+  await page.evaluate(() => window.__stub.pushRow({ id: 'h8', name: 'late.txt', bytes: 5, added: 1, state: 'held', progress: null }));
+  await page.locator('dialog.held[open] button', { hasText: 'Remove them everywhere' }).click();
+  await page.locator('#notices p', { hasText: 'Removed 7 files from Wildbloom.' }).waitFor();
+  const sent = (await reviewed(page)).map((c) => c.args);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].choice, 'remove');
+  assert.deepEqual([...sent[0].ids].sort(), ALL);
+  await page.waitForFunction(() => document.querySelector('#status-text').textContent.startsWith('1 file was'));
+  assert.equal(await text(page.locator('#status-text')), "1 file was deleted from your Wildbloom folder. It's kept until you choose.");
+  // Put Back from the row menu: that row only.
+  await page.locator('li.row[data-id="h8"] [data-ctl="more"]').click();
+  await menuAction(page, 'Put Back');
+  await page.locator('#notices p', { hasText: 'Putting late.txt back in your Wildbloom folder.' }).waitFor();
+  assert.deepEqual((await reviewed(page)).at(-1).args, { ids: ['h8'], choice: 'put_back' });
+  await done(page);
+
+  // One file reads in the singular, with no "more" line.
+  page = await drop('held-one');
+  await ready(page);
+  await page.locator('#status-action').click();
+  dialog = page.locator('dialog.held[open]');
+  await dialog.waitFor();
+  assert.equal(await text(dialog.locator('h2')), '1 file was deleted from your Wildbloom folder');
+  assert.deepEqual(await dialog.locator('p').allTextContents(), [
+    "That's more than Wildbloom removes without asking. Your other computers and your online node still have it.",
+    "If you remove it everywhere, copies in your other Wildbloom folders go to the Trash. Its encrypted copies and key are deleted, which can't be undone.",
+  ]);
+  assert.deepEqual(await dialog.locator('button').allTextContents(), ['Remove it everywhere', 'Decide later', 'Put it back']);
+  await page.keyboard.press('Escape');
+  await done(page);
+
+  // Windows: primary first, Recycle Bin, sentence-case menu.
+  page = await drop('held', { os: 'windows' });
+  await ready(page);
+  await page.locator('li.row[data-id="h1"] [data-ctl="more"]').click();
+  assert.deepEqual(await page.evaluate(() => window.__stub.lastMenu.items.map((item) => item.text)), ['Put back', 'Save a copy…', 'Remove…']);
+  await page.locator('#status-action').click();
+  dialog = page.locator('dialog.held[open]');
+  await dialog.waitFor();
+  assert.deepEqual(await dialog.locator('button').allTextContents(), ['Put them back', 'Remove them everywhere', 'Decide later']);
+  assert.equal(await dialog.locator('p').last().textContent(), body('Recycle Bin'));
+  await page.keyboard.press('Escape');
+  await done(page);
 });
 
 scenario('status line: actions call the right commands', async () => {
@@ -1339,6 +1441,7 @@ const STATES = [
   'first-run-keychain&os=mac', 'first-run-keychain&os=windows', 'first-run-keychain&os=linux',
   'good&status=downloads', 'good&status=shared', 'good&status=node', 'good&status=keychain', 'good&status=expired', 'good&status=unreachable', 'good&status=full', 'good&status=ends', 'good&status=recovery', 'list&status=folder',
   'folder', 'folder&status=folder-unavailable', 'folder&status=folder-too-many', 'folder&os=windows', 'confirm-folder-on',
+  'held', 'confirm-held', 'confirm-held&os=windows', 'confirm-held&os=linux&desktop=kde',
   'share-s5&os=windows', 'share-s5&os=linux&desktop=kde',
 ];
 const SIZES = [[400, 600], [340, 420], [760, 600]];
