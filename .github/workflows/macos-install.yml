@@ -6,6 +6,7 @@ on:
       - 'scripts/accept-desktop-macos*'
       - 'scripts/test-accept-desktop-macos.py'
       - 'scripts/*release-macos-preview.py'
+      - 'scripts/ci-apple-lookups-over-tcp.sh'
       - '.github/workflows/macos-install.yml'
   push:
     branches: [main]
@@ -13,6 +14,7 @@ on:
       - 'scripts/accept-desktop-macos*'
       - 'scripts/test-accept-desktop-macos.py'
       - 'scripts/*release-macos-preview.py'
+      - 'scripts/ci-apple-lookups-over-tcp.sh'
       - '.github/workflows/macos-install.yml'
   workflow_dispatch:
     inputs:
@@ -85,6 +87,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - name: Send Apple ticket lookups over TCP
+        run: scripts/ci-apple-lookups-over-tcp.sh
       - name: Verify refusal of existing operator state and tampered inputs
         run: |
           python3 scripts/test-accept-desktop-macos.py

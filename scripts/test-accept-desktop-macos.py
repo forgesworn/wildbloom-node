@@ -75,5 +75,26 @@ class RefusalTests(unittest.TestCase):
         self.assertFalse(self.profile.exists())
 
 
+class StaplerOutputTests(unittest.TestCase):
+    """A failed ticket check shows stapler's error lines and nothing else."""
+
+    def test_a_failure_shows_only_stapler_error_lines(self):
+        script = ("print('Processing: sample.dmg'); print('abcdef.onion'); "
+                  "print('error is Error Domain=NSURLErrorDomain Code=-1005'); "
+                  "print('The validate action failed! Error 68.'); raise SystemExit(68)")
+        with patch("builtins.print") as shown, self.assertRaisesRegex(RuntimeError, r"exit 68"):
+            acceptance.run(sys.executable, "-c", script, show=acceptance.stapler_error)
+        self.assertEqual([call.args[0] for call in shown.call_args_list],
+                         ["error is Error Domain=NSURLErrorDomain Code=-1005",
+                          "The validate action failed! Error 68."])
+
+    def test_success_and_unfiltered_failures_show_nothing(self):
+        with patch("builtins.print") as shown:
+            acceptance.run(sys.executable, "-c", "print('error is fine')", show=acceptance.stapler_error)
+            with self.assertRaises(RuntimeError):
+                acceptance.run(sys.executable, "-c", "print('error is hidden'); raise SystemExit(1)")
+        shown.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -26,11 +26,22 @@ def require(condition, message):
         raise RuntimeError(message)
 
 
-def run(*args, timeout=60):
-    # Captured output can contain ephemeral onion addresses. Never echo it.
+def run(*args, timeout=60, show=None):
+    # Captured output can contain ephemeral onion addresses. Never echo it,
+    # except, on failure, the lines a caller's `show` filter accepts.
     result = subprocess.run([str(a) for a in args], capture_output=True, timeout=timeout)
+    if result.returncode != 0 and show is not None:
+        for line in (result.stdout + result.stderr).decode(errors="replace").splitlines():
+            if show(line):
+                print(line[:500], flush=True)
     require(result.returncode == 0, f"{Path(args[0]).name} failed (exit {result.returncode})")
     return result.stdout.decode() + result.stderr.decode()
+
+
+def stapler_error(line):
+    """stapler's own failure lines: they describe Apple's ticket lookup and
+    never contain an onion address."""
+    return line.startswith("error is ") or line.startswith("The validate action")
 
 
 def digest(path):
@@ -167,7 +178,7 @@ def main():
         attached = False
         try:
             if not adhoc:
-                run("xcrun", "stapler", "validate", dmg)
+                run("xcrun", "stapler", "validate", dmg, show=stapler_error)
                 run("spctl", "--assess", "--type", "open", "--context", "context:primary-signature", dmg)
             run("hdiutil", "attach", "-readonly", "-nobrowse", "-mountpoint", mount, dmg)
             attached = True
@@ -177,7 +188,7 @@ def main():
             run("codesign", "--verify", "--deep", "--strict", source)
             if not adhoc:
                 run("spctl", "--assess", "--type", "execute", source)
-                run("xcrun", "stapler", "validate", source)
+                run("xcrun", "stapler", "validate", source, show=stapler_error)
             binary = source / "Contents/MacOS/wildbloom-desktop"
             require(platform.machine() in run("lipo", "-archs", binary).split(), "DMG is not native to this host")
             if installed.exists():
