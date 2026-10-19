@@ -207,6 +207,10 @@ mod tests {
                 drop_max_bytes: 1,
                 share_max_bytes: 1,
             },
+            sharing: SharingSettings {
+                after_download: "delete",
+                expiry_seconds: 86_400,
+            },
             browser_approval: false,
         }
     }
@@ -221,6 +225,7 @@ mod tests {
             progress: None,
             shared_until: None,
             sharing_ended: None,
+            downloaded_at: None,
             not_kept: None,
             folder: None,
             in_watch_folder: false,

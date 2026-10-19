@@ -26,7 +26,7 @@ use super::types::*;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use foregather_kit::handoff::PublicRoom;
-use foregather_kit::live::{PairingGate, PairingSecret, Role};
+use foregather_kit::live::{Channel, PairingGate, PairingSecret, Role};
 use foregather_kit::transfer::Transfer;
 use futures_util::{SinkExt as _, StreamExt as _};
 use nostr::prelude::Keys;
@@ -429,6 +429,154 @@ impl Recipient {
     }
 }
 
+impl Recipient {
+    /// One read of the inviter's `kind` message: its HTTP status.
+    async fn status(&self, kind: &str) -> u16 {
+        self.http
+            .get(format!(
+                "{}live-sessions/{}/messages/inviter/{kind}",
+                self.api, self.locator
+            ))
+            .bearer_auth(&self.capability)
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .as_u16()
+    }
+}
+
+/// What the recipient's page holds once it has sent the receipt.
+struct Received {
+    recipient: Recipient,
+    channel: Channel,
+    transfer: Transfer,
+    descriptor: ShareDescriptor,
+    /// The first `sent` state the owner's sheet got.
+    sent: ShareState,
+}
+
+impl Received {
+    /// The page's one reply after the receipt, at packet sequence 1.
+    async fn reply(&mut self, message: &[u8]) {
+        let packet = self
+            .channel
+            .seal(&self.transfer.reply(message).unwrap(), super::engine::now())
+            .unwrap();
+        self.recipient.put("packet-1", packet).await;
+    }
+}
+
+/// The recipient's side of one share through the relay, as the page does it:
+/// parse the link, claim, pair with the four words, match the three check
+/// words (the owner confirms them), take the descriptor and send the receipt.
+async fn receive_share(engine: &Engine, host: &TestHost, id: &str, relay_api: &str) -> Received {
+    let ready = until("share link", 60, || {
+        host.shares
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|s| s.state == "ready")
+            .cloned()
+    })
+    .await;
+    let link = ready.link.clone().unwrap();
+    let words = ready.words.clone().unwrap();
+    assert_eq!(words.len(), 4);
+    assert!(link.starts_with("http://127.0.0.1:5472/get/#"));
+    let now = super::engine::now();
+    let room = PublicRoom::parse_link(
+        &link,
+        "http://127.0.0.1:5472/get/",
+        true,
+        PAIRING_NAMESPACE,
+        PAIRING_PURPOSE,
+        now,
+    )
+    .unwrap();
+    let recipient = Recipient::claim(relay_api, &room.session.locator).await;
+    let secret = PairingSecret::parse(&words.join(" ")).unwrap();
+    let mut gate = PairingGate::new(room.session.clone(), secret, 1, now).unwrap();
+    let exchange = gate.start(Role::Recipient, now, &mut OsRng).unwrap();
+    recipient
+        .put("hello", serde_json::to_string(&exchange.hello()).unwrap())
+        .await;
+    let inviter_hello: String = serde_json::from_str(&recipient.get("hello").await).unwrap();
+    let pending = exchange.finish(&inviter_hello, now).unwrap();
+    recipient
+        .put(
+            "proof",
+            serde_json::to_string(&pending.confirmation().unwrap()).unwrap(),
+        )
+        .await;
+    let inviter_proof: String = serde_json::from_str(&recipient.get("proof").await).unwrap();
+    let mut channel = pending.confirm(&inviter_proof, now).unwrap();
+    let their_words: Vec<String> = channel
+        .verification_words(3, now)
+        .unwrap()
+        .split(' ')
+        .map(str::to_owned)
+        .collect();
+    let check_state = until("check words", 30, || {
+        host.shares
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|s| s.state == "check")
+            .cloned()
+    })
+    .await;
+    assert_eq!(check_state.check_words.clone().unwrap(), their_words);
+    assert!(
+        host.shares
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|s| s.state == "opened")
+    );
+    let next = engine.share_verify(id, true).unwrap().unwrap();
+    assert_eq!(next.state, "sending");
+    let packet = recipient.get("packet-0").await;
+    let clear = channel.open(&packet, super::engine::now()).unwrap();
+    let transfer = Transfer::parse(&clear).unwrap();
+    let descriptor = ShareDescriptor::parse(transfer.payload()).unwrap();
+    let receipt = channel
+        .seal(&transfer.receipt(), super::engine::now())
+        .unwrap();
+    recipient.put("packet-0", receipt).await;
+    let sent = until("sent", 30, || {
+        host.shares
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|s| s.state == "sent")
+            .cloned()
+    })
+    .await;
+    Received {
+        recipient,
+        channel,
+        transfer,
+        descriptor,
+        sent,
+    }
+}
+
+/// The first `downloaded` state the owner's sheet got.
+async fn downloaded_state(host: &TestHost) -> ShareState {
+    until("downloaded", 30, || {
+        host.shares
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|s| s.state == "downloaded")
+            .cloned()
+    })
+    .await
+}
+
+const DOWNLOADED: &[u8] = br#"{"v":1,"event":"downloaded"}"#;
+
 fn rand_bytes() -> [u8; 32] {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes).unwrap();
@@ -708,93 +856,33 @@ async fn drop_end_to_end() {
     .await;
 
     // ---------------------------------------------------------------- share
+    // Sent while "keep" and a one hour expiry are set: both are read when the
+    // file is sent.
+    engine.set_sharing("keep", Some(3_600)).unwrap();
+    assert_eq!(engine.status().sharing.after_download, "keep");
     let first = engine.share_start(&id, false).unwrap();
     assert_eq!(first.state, "preparing");
-    let ready = until("share link", 60, || {
-        host.shares
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|s| s.state == "ready")
-            .cloned()
-    })
-    .await;
-    let link = ready.link.clone().unwrap();
-    let words = ready.words.clone().unwrap();
-    assert_eq!(words.len(), 4);
-    assert!(link.starts_with("http://127.0.0.1:5472/get/#"));
-    report("share link and four words ready");
-    // The recipient: parse the link, claim, pair with the words.
-    let now = super::engine::now();
-    let room = PublicRoom::parse_link(
-        &link,
-        "http://127.0.0.1:5472/get/",
-        true,
-        PAIRING_NAMESPACE,
-        PAIRING_PURPOSE,
-        now,
-    )
-    .unwrap();
-    let recipient = Recipient::claim(&relay_api, &room.session.locator).await;
-    let secret = PairingSecret::parse(&words.join(" ")).unwrap();
-    let mut gate = PairingGate::new(room.session.clone(), secret, 1, now).unwrap();
-    let exchange = gate.start(Role::Recipient, now, &mut OsRng).unwrap();
-    recipient
-        .put("hello", serde_json::to_string(&exchange.hello()).unwrap())
-        .await;
-    let inviter_hello: String = serde_json::from_str(&recipient.get("hello").await).unwrap();
-    let pending = exchange.finish(&inviter_hello, now).unwrap();
-    recipient
-        .put(
-            "proof",
-            serde_json::to_string(&pending.confirmation().unwrap()).unwrap(),
-        )
-        .await;
-    let inviter_proof: String = serde_json::from_str(&recipient.get("proof").await).unwrap();
-    let mut channel = pending.confirm(&inviter_proof, now).unwrap();
-    let their_words: Vec<String> = channel
-        .verification_words(3, now)
-        .unwrap()
-        .split(' ')
-        .map(str::to_owned)
-        .collect();
-    let check_state = until("check words", 30, || {
-        host.shares
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|s| s.state == "check")
-            .cloned()
-    })
-    .await;
-    assert_eq!(check_state.check_words.clone().unwrap(), their_words);
+    let mut received = receive_share(&engine, &host, &id, &relay_api).await;
+    report("recipient paired with the link and four words, check words matched");
+    let sent = received.sent.clone();
+    let delete_at = sent.delete_at.unwrap();
     assert!(
-        host.shares
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|s| s.state == "opened")
+        delete_at > super::engine::now() + 3_500 && delete_at <= super::engine::now() + 3_600,
+        "a one hour expiry"
     );
-    let next = engine.share_verify(&id, true).unwrap().unwrap();
-    assert_eq!(next.state, "sending");
-    let packet = recipient.get("packet-0").await;
-    let clear = channel.open(&packet, super::engine::now()).unwrap();
-    let transfer = Transfer::parse(&clear).unwrap();
-    let descriptor = ShareDescriptor::parse(transfer.payload()).unwrap();
-    let receipt = channel
-        .seal(&transfer.receipt(), super::engine::now())
-        .unwrap();
-    recipient.put("packet-0", receipt).await;
-    let sent = until("sent", 30, || {
-        host.shares
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|s| s.state == "sent")
-            .cloned()
-    })
-    .await;
-    assert!(sent.delete_at.unwrap() > super::engine::now() + 86_000);
+    assert_eq!(
+        received.descriptor.expires(),
+        delete_at,
+        "the link's expiry"
+    );
+    assert_eq!(
+        (sent.awaiting_download, sent.after_download),
+        (Some(true), Some("keep"))
+    );
+    assert!(!engine.share_open(), "listening is not an open sheet");
+    // A change now does not move this share.
+    engine.set_sharing("delete", Some(86_400)).unwrap();
+    let descriptor = received.descriptor.clone();
     assert_eq!(descriptor.name(), "holiday photos.bin");
     assert_eq!(descriptor.bytes(), plain.len() as u64);
     assert_ne!(descriptor.sha256(), sha, "a separate share copy");
@@ -817,7 +905,37 @@ async fn drop_end_to_end() {
     assert_eq!(metadata.name, "holiday photos.bin");
     assert_eq!(&*opened, &plain, "recipient bytes equal the source");
     assert_eq!(row(&engine, &id).unwrap().state, "shared");
-    report("recipient paired, received the receipt-confirmed descriptor and decrypted the file");
+    report("recipient received the receipt-confirmed descriptor and decrypted the file");
+    // The page confirms the download: with "keep" the copy stays until its
+    // expiry, and the relay session is deleted.
+    let shared_sha = descriptor.sha256().to_owned();
+    let shared_size = descriptor.size();
+    received.reply(DOWNLOADED).await;
+    let downloaded = downloaded_state(&host).await;
+    assert_eq!(downloaded.copy, Some("kept"));
+    assert_eq!(downloaded.delete_at, Some(delete_at));
+    let downloaded_at = downloaded.downloaded_at.unwrap();
+    assert!(downloaded_at.abs_diff(super::engine::now()) < 60);
+    let shared_row = row(&engine, &id).unwrap();
+    assert_eq!(
+        (
+            shared_row.state,
+            shared_row.shared_until,
+            shared_row.downloaded_at
+        ),
+        ("shared", Some(delete_at), Some(downloaded_at))
+    );
+    assert_eq!(
+        client::head(&http, &online, &shared_sha).await.unwrap(),
+        Some(shared_size),
+        "kept"
+    );
+    assert_ne!(
+        received.recipient.status("hello").await,
+        200,
+        "relay session deleted"
+    );
+    report("the confirmed download kept the shared copy until its expiry");
 
     // ---------------------------------------------------- stop sharing (33)
     engine.stop_sharing(&id).await.unwrap();
@@ -834,6 +952,11 @@ async fn drop_end_to_end() {
         "owner copy kept"
     );
     assert_eq!(row(&engine, &id).unwrap().state, "sharing_ended");
+    assert_eq!(
+        row(&engine, &id).unwrap().downloaded_at,
+        Some(downloaded_at),
+        "the download time stays on the ended share"
+    );
     assert_eq!(file_key_entries(&store), 1, "share key removed");
     report("stop sharing deleted the share blob and kept the owner copy");
 
@@ -905,6 +1028,104 @@ async fn drop_end_to_end() {
     assert!(engine.index.share(&id).unwrap().is_none());
     assert_eq!(file_key_entries(&store), 1);
     report("wrong words ended the link; closing the sheet deleted the unsent copy");
+
+    // ----------------------------------------------- download confirmation
+    // "delete" (the default): the confirmed download deletes the copy at once.
+    host.shares.lock().unwrap().clear();
+    engine.share_start(&id, false).unwrap();
+    let mut received = receive_share(&engine, &host, &id, &relay_api).await;
+    assert_eq!(
+        (
+            received.sent.awaiting_download,
+            received.sent.after_download
+        ),
+        (Some(true), Some("delete"))
+    );
+    assert!(received.sent.delete_at.unwrap() > super::engine::now() + 86_000);
+    let shared_sha = received.descriptor.sha256().to_owned();
+    assert_eq!(
+        client::head(&http, &online, &shared_sha).await.unwrap(),
+        Some(received.descriptor.size())
+    );
+    received.reply(DOWNLOADED).await;
+    let downloaded = downloaded_state(&host).await;
+    assert_eq!(
+        (downloaded.copy, downloaded.delete_at),
+        (Some("deleted"), None)
+    );
+    assert_eq!(
+        client::head(&http, &online, &shared_sha).await.unwrap(),
+        None,
+        "shared copy deleted"
+    );
+    assert_eq!(
+        client::head(&http, &online, &sha).await.unwrap(),
+        record.size,
+        "owner copy kept"
+    );
+    let ended_share = engine.index.share(&id).unwrap().unwrap();
+    assert_eq!(
+        (ended_share.state.as_str(), ended_share.downloaded_at),
+        ("ended", downloaded.downloaded_at)
+    );
+    let ended_row = row(&engine, &id).unwrap();
+    assert_eq!(
+        (ended_row.state, ended_row.downloaded_at),
+        ("sharing_ended", downloaded.downloaded_at)
+    );
+    assert_eq!(file_key_entries(&store), 1, "share key removed");
+    assert_ne!(
+        received.recipient.status("hello").await,
+        200,
+        "relay session deleted"
+    );
+    report("a confirmed download deleted the shared copy at once");
+
+    // Anything but the exact confirmation is none: the copy stays and the
+    // sheet hears that no confirmation can come now.
+    host.shares.lock().unwrap().clear();
+    engine.share_start(&id, false).unwrap();
+    let mut received = receive_share(&engine, &host, &id, &relay_api).await;
+    received.reply(br#"{"v":2,"event":"downloaded"}"#).await;
+    let settled = until("sent, no longer awaiting", 30, || {
+        host.shares
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|s| s.state == "sent" && s.awaiting_download == Some(false))
+            .cloned()
+    })
+    .await;
+    assert_eq!(settled.delete_at, received.sent.delete_at);
+    assert_eq!(settled.after_download, Some("delete"));
+    assert!(
+        host.shares
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|s| s.state != "downloaded")
+    );
+    let unconfirmed = engine.index.share(&id).unwrap().unwrap();
+    assert_eq!(
+        (unconfirmed.state.as_str(), unconfirmed.downloaded_at),
+        ("sent", None)
+    );
+    assert_eq!(
+        client::head(&http, &online, received.descriptor.sha256())
+            .await
+            .unwrap(),
+        Some(received.descriptor.size())
+    );
+    assert_eq!(row(&engine, &id).unwrap().downloaded_at, None);
+    engine.stop_sharing(&id).await.unwrap();
+    assert_eq!(
+        client::head(&http, &online, received.descriptor.sha256())
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(file_key_entries(&store), 1);
+    report("a reply other than the confirmation changed nothing");
 
     // ------------------------------------------------- watched folder (32)
     engine.set_watch_folder(true).await.unwrap();

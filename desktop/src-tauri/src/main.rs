@@ -1371,6 +1371,7 @@ fn main() {
             drop::commands::share_verify,
             drop::commands::share_cancel,
             drop::commands::stop_sharing,
+            drop::commands::set_sharing,
             drop::commands::open_drop_flow
         ])
         .on_window_event(|window, event| match event {

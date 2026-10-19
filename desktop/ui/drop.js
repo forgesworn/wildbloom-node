@@ -91,6 +91,8 @@
     return /^(today|tomorrow|yesterday)$/.test(word) ? `${time} ${word}` : `${time} on ${word}`;
   }
   const fullDate = (seconds) => longDate.format(new Date(seconds * 1000));
+  /** "10:42" for sentences that say when something happened today. */
+  const timeOf = (seconds) => timeFormat.format(new Date(seconds * 1000));
   const shortNpub = (npub) => (npub && npub.length > 16 ? `${npub.slice(0, 7)}…${npub.slice(-4)}` : npub || '');
   function middleTruncate(name, max = 64) {
     if (name.length <= max) return name;
@@ -802,7 +804,7 @@
   }
 
   window.WildbloomDrop = {
-    h, call, listen, delay, uid, plural, icon, iconSlot, formatBytes, until, stamp, fullDate, shortNpub, hostOf,
+    h, call, listen, delay, uid, plural, icon, iconSlot, formatBytes, until, timeOf, stamp, fullDate, shortNpub, hostOf,
     buttonRow, confirmDialog, confirmFolderOn, openFlowSheet, writeClipboard, readClipboard, openNodeSettings, popupMenu,
     platform, loadPlatform, middleTruncate, casing,
   };
@@ -822,7 +824,7 @@
     notices: $('notices'), find: $('find'), findInput: $('find-input'),
     listRegion: $('list-region'), files: $('files'), filesHeading: $('files-heading'), noMatch: $('no-match'),
     overlay: $('drag-overlay'), dragMessage: $('drag-message'), announcer: $('drop-announcer'),
-    footerOnline: $('footer-online'), footerSettings: $('footer-settings'),
+    footerSettings: $('footer-settings'),
   };
 
   let state = {
@@ -854,10 +856,12 @@
     announcer.timer = null;
     const done = announcer.pending.filter((item) => item.kind === 'done').map((item) => item.name);
     const failed = announcer.pending.filter((item) => item.kind === 'failed').map((item) => item.name);
+    const downloaded = announcer.pending.filter((item) => item.kind === 'downloaded').map((item) => item.name);
     announcer.pending = [];
     const parts = [];
     if (done.length) parts.push(done.length === 1 ? `${done[0]} now has 2 copies.` : `${done.length} files now have 2 copies.`);
     if (failed.length) parts.push(failed.length === 1 ? `${failed[0]} couldn't be copied online.` : `${failed.length} files couldn't be copied online.`);
+    if (downloaded.length) parts.push(downloaded.length === 1 ? `${downloaded[0]} was downloaded.` : `${downloaded.length} files were downloaded.`);
     if (!parts.length) return;
     announcer.last = Date.now();
     say(parts.join(' '));
@@ -888,30 +892,50 @@
     }
   }
 
+  /**
+   * The one line under a file name. A row that matches the status line is quiet
+   * (size and added time); any other row gets an indicator: icon, lead, detail.
+   * `spoken` is the sentence a screen reader gets instead of the visual line.
+   */
   function describe(row) {
     const size = formatBytes(row.bytes);
-    const added = row.added ? stamp(row.added) : '';
     const percent = Number.isFinite(row.progress) ? `${Math.round(row.progress)}%` : null;
-    const meta = (text, cls) => ({ text, cls });
+    const joined = (lead, detail) => (detail ? `${lead}, ${detail}.` : `${lead}.`);
+    const item = (props) => ({ ...props, spoken: props.spoken || joined(props.lead, props.detail) });
+    const downloaded = row.downloadedAt ? `Downloaded at ${until(row.downloadedAt)}.` : '';
     switch (row.state) {
-      case 'encrypting': return { icon: 'refresh', spin: true, tone: 'accent', lead: 'Encrypting', rest: percent ? [meta(percent)] : [], bar: true, bar_label: `Encrypting ${row.name}` };
-      case 'queued': return { icon: 'ring', tone: 'muted', lead: '1 copy', rest: [meta('copying online next')] };
-      case 'copying': return { icon: 'up', tone: 'accent', lead: 'Copying online', rest: percent ? [meta(percent)] : [], bar: true, bar_label: `Copying ${row.name} online` };
-      case 'two_copies': return { icon: 'check', tone: 'success', lead: '2 copies', rest: [meta(size, 'col-size'), meta(added)] };
-      case 'no_online': return { icon: 'ring', tone: 'muted', lead: '1 copy', rest: [meta('on this computer')] };
-      case 'waiting': return { icon: 'pending', tone: 'muted', lead: '1 copy', rest: [meta('waiting for your online node')] };
-      case 'failed': return { icon: 'alert', tone: 'warning', lead: '1 copy', rest: [meta('online copy failed')] };
-      case 'missing_online': return { icon: 'alert', tone: 'warning', lead: '1 copy', rest: [meta('online copy missing')] };
-      case 'online_full': return { icon: 'alert', tone: 'warning', lead: '1 copy', rest: [meta('online space full')] };
-      case 'missing_local': return { icon: 'alert', tone: 'warning', lead: '1 copy', rest: [meta('online only')] };
-      case 'restoring': return { icon: 'down', tone: 'accent', lead: 'Restoring', rest: percent ? [meta(percent)] : [], bar: true, bar_label: `Restoring ${row.name}` };
-      case 'shared': return { icon: 'check', extra: 'share', tone: 'success', lead: '2 copies', rest: [meta(`shared until ${until(row.sharedUntil)}`)] };
-      case 'stop_pending': return { icon: 'pending', tone: 'muted', lead: '2 copies', rest: [meta('removing shared copy when online')] };
-      case 'sharing_ended': return { icon: 'check', tone: 'success', lead: '2 copies', rest: [meta(`sharing ended ${until(row.sharingEnded)}`)] };
-      case 'share_owner_only': return { icon: 'alert', tone: 'warning', lead: '2 copies', rest: [meta('only your online node’s owner can remove the shared copy now')] };
-      case 'not_kept': return { icon: 'alert', tone: 'warning', lead: 'Not kept', rest: [meta(notKeptReason(row))] };
-      case 'unreadable': return { icon: 'alert', tone: 'error', lead: "Couldn't read this file. Check you can open it, then add it again.", rest: [] };
-      default: return { icon: 'ring', tone: 'muted', lead: String(row.state || ''), rest: [] };
+      case 'encrypting': return item({ icon: 'refresh', spin: true, tone: 'accent', lead: 'Encrypting', detail: percent, bar: true, bar_label: `Encrypting ${row.name}` });
+      case 'queued': return item({ icon: 'ring', tone: 'muted', lead: '1 copy', detail: 'copying online next' });
+      case 'copying': return item({ icon: 'up', tone: 'accent', lead: 'Copying online', detail: percent, bar: true, bar_label: `Copying ${row.name} online` });
+      case 'two_copies': return { quiet: true, spoken: row.added ? `${size}, added ${until(row.added)}.` : `${size}.` };
+      case 'no_online':
+        if (!state.online.configured) return { quiet: true, spoken: row.added ? `${size}, added ${until(row.added)}.` : `${size}.` };
+        return item({ icon: 'ring', tone: 'muted', lead: '1 copy', detail: 'on this computer' });
+      case 'waiting': return item({ icon: 'pending', tone: 'muted', lead: '1 copy', detail: 'waiting for your online node' });
+      case 'failed': return item({ icon: 'alert', tone: 'warning', lead: '1 copy', detail: 'online copy failed' });
+      case 'missing_online': return item({ icon: 'alert', tone: 'warning', lead: '1 copy', detail: 'online copy missing' });
+      case 'online_full': return item({ icon: 'alert', tone: 'warning', lead: '1 copy', detail: 'online space full' });
+      case 'missing_local': return item({ icon: 'alert', tone: 'warning', lead: '1 copy', detail: 'online only' });
+      case 'restoring': return item({ icon: 'down', tone: 'accent', lead: 'Restoring', detail: percent, bar: true, bar_label: `Restoring ${row.name}` });
+      case 'shared':
+        if (row.downloadedAt) {
+          const kept = until(row.sharedUntil);
+          return { icon: 'check', tone: 'success', lead: 'Downloaded', detail: `kept until ${kept}`, spoken: `${downloaded} Shared copy kept until ${kept}.` };
+        }
+        return { icon: 'share', tone: 'accent', lead: 'Shared', detail: `until ${until(row.sharedUntil)}`, spoken: `Shared until ${until(row.sharedUntil)}.` };
+      case 'stop_pending':
+        if (row.downloadedAt) return { icon: 'pending', tone: 'muted', lead: 'Downloaded', detail: 'deleting the shared copy when online', spoken: `${downloaded} The shared copy will be deleted when your online node is back.` };
+        return { icon: 'pending', tone: 'muted', lead: 'Sharing stopped', detail: 'deleting the shared copy when online', spoken: 'Sharing stopped. The shared copy will be deleted when your online node is back.' };
+      case 'sharing_ended':
+        if (row.downloadedAt) return { icon: 'check', tone: 'success', lead: 'Downloaded', detail: until(row.downloadedAt), spoken: `${downloaded} Shared copy deleted.` };
+        return { icon: 'share', tone: 'muted', lead: 'Sharing ended', detail: until(row.sharingEnded), spoken: `Sharing ended at ${until(row.sharingEnded)}.` };
+      case 'share_owner_only': return { icon: 'alert', tone: 'warning', lead: 'Shared', detail: "only your online node's owner can delete it now", spoken: "Shared. Only your online node's owner can delete the shared copy now." };
+      case 'not_kept': return item({ icon: 'alert', tone: 'warning', lead: 'Not kept', detail: notKeptReason(row) });
+      case 'unreadable': {
+        const text = "Couldn't read this file. Check you can open it, then add it again.";
+        return { icon: 'alert', tone: 'error', lead: text, spoken: text };
+      }
+      default: return item({ icon: 'ring', tone: 'muted', lead: String(row.state || ''), detail: '' });
     }
   }
 
@@ -955,7 +979,7 @@
       default: return [];
     }
   }
-  const canShare = (row) => ['queued', 'copying', 'two_copies', 'sharing_ended', 'share_owner_only', 'shared'].includes(row.state) || row.state === 'no_online';
+  const canShare = (row) => state.online.configured && ['queued', 'copying', 'two_copies', 'sharing_ended', 'share_owner_only', 'shared'].includes(row.state);
   function inlineAction(row) {
     switch (row.state) {
       case 'failed': return { label: 'Retry', aria: `Retry copying ${row.name}`, run: () => call('retry', { id: row.id }) };
@@ -1015,17 +1039,10 @@
     const actions = h('div', { class: 'row-actions' });
     const menu = menuFor(row);
     if (canShare(row)) {
-      const noOnline = row.state === 'no_online';
-      const describedBy = noOnline ? uid('why') : null;
       actions.append(h('button', {
         class: 'btn quiet', type: 'button', 'data-ctl': 'share', 'aria-label': `Share ${row.name}`,
-        'aria-disabled': noOnline ? 'true' : null, 'aria-describedby': describedBy,
-        onclick: (event) => {
-          if (noOnline) { notice('Add your online node to share files.'); return; }
-          runRowAction(row.id, row.state === 'shared' ? 'share-again' : 'share', event.currentTarget);
-        },
+        onclick: (event) => runRowAction(row.id, row.state === 'shared' ? 'share-again' : 'share', event.currentTarget),
       }, 'Share'));
-      if (noOnline) actions.append(h('span', { id: describedBy, class: 'sr-only' }, 'Add your online node to share files.'));
     }
     const inline = inlineAction(row);
     if (inline) {
@@ -1037,17 +1054,17 @@
         onclick: (event) => openRowMenu(row.id, event.currentTarget),
       }, icon('more')));
     }
-    const slot = iconSlot(d.icon, d.tone, d.spin ? 'spin' : '');
-    if (animate) slot.classList.add('fade');
-    if (d.extra === 'share') {
-      slot.classList.add('multi');
-      slot.append(icon('share'));
+    const visualParts = [];
+    if (d.quiet) {
+      visualParts.push(h('span', { class: 'plain' }, formatBytes(row.bytes)));
+      if (row.added) visualParts.push(h('span', { class: 'sep' }, ' · '), h('span', { class: 'plain' }, stamp(row.added)));
+    } else {
+      const slot = iconSlot(d.icon, d.tone, d.spin ? 'spin' : '');
+      if (animate) slot.classList.add('fade');
+      visualParts.push(slot, h('span', { class: `lead tone-${d.tone}` }, d.lead));
+      if (d.detail) visualParts.push(h('span', { class: 'sep' }, ' · '), h('span', { class: 'plain' }, d.detail));
     }
-    const status = h('p', { class: 'row-status' }, slot, h('span', { class: `lead tone-${d.tone}` }, d.lead));
-    for (const part of d.rest) {
-      if (!part.text) continue;
-      status.append(h('span', { class: 'sep', 'aria-hidden': 'true' }, ' · '), h('span', { class: `plain ${part.cls || ''}` }, part.text));
-    }
+    const status = h('p', { class: 'row-status' }, h('span', { class: 'row-visual', 'aria-hidden': 'true' }, visualParts), h('span', { class: 'sr-only' }, d.spoken));
     const title = h('div', { class: 'row-title' }, name);
     if (row.folder) title.append(h('p', { class: 'row-folder' }, ...folderParts(row.folder)));
     const li = h('li', { class: 'row', 'data-id': row.id, 'data-state': row.state }, title, actions, status);
@@ -1070,6 +1087,8 @@
     if (before) {
       if (!TWO_COPIES.has(before.state) && TWO_COPIES.has(row.state)) queueAnnouncement('done', row.name);
       if (!FAILED.has(before.state) && FAILED.has(row.state)) queueAnnouncement('failed', row.name);
+      // The sheet announces a download itself while it is open for this file.
+      if (!before.downloadedAt && row.downloadedAt && !(window.WildbloomShare && window.WildbloomShare.isOpenFor(row.id))) queueAnnouncement('downloaded', row.name);
     }
     const existing = rowEls.get(row.id);
     const next = buildRow(row, Boolean(before) && before.state !== row.state);
@@ -1162,7 +1181,6 @@
     applyFilter();
     renderStatusLine();
     renderZone();
-    renderFooter();
     fitNames();
   }
   function applyFilter() {
@@ -1198,7 +1216,7 @@
     if (state.watchFolder?.state === 'unavailable') return { id: 'folder-unavailable', icon: 'alert', tone: 'warning', text: "Your Wildbloom folder can't be found. Changes there are paused.", action: { label: 'Use folder again', run: async () => { await call('set_watch_folder', { enabled: true }); await refreshStatus(); } } };
     if (state.watchFolder?.state === 'too_many') return { id: 'folder-too-many', icon: 'alert', tone: 'warning', text: 'Your Wildbloom folder has more than 20,000 items. Changes there are paused.', action: null };
     if (approval.state === 'expired') return { id: 'expired', icon: 'alert', tone: 'warning', text: 'Approval for this computer has ended. New files stay on this computer.', action: { label: 'Approve again', run: (opener) => openFlowSheet({ sequence: ['approve'], renew: true, refresh: refreshStatus, browserApproval: state.browserApproval }, opener).then(refreshAfter) } };
-    if (state.online.configured && (state.online.failedChecks || 0) > 2) return { id: 'unreachable', icon: 'alert', tone: 'warning', text: "Can't reach your online node. Files stay on this computer and copy when it's back.", action: { label: 'Try now', run: () => refreshStatus({ recheck: 'online' }) } };
+    if (state.online.configured && (state.online.failedChecks || 0) > 2) return { id: 'unreachable', icon: 'alert', tone: 'warning', text: "Can't reach your online node. Files will copy when it's back.", action: { label: 'Try now', run: () => refreshStatus({ recheck: 'online' }) } };
     if (state.online.full) return { id: 'full', icon: 'alert', tone: 'warning', text: 'Your online space is full. New files stay on this computer.', action: { label: 'Settings', run: openNodeSettings } };
     if (failed > 0) return { id: 'failed', icon: 'alert', tone: 'warning', text: `${failed} ${plural(failed, 'file has', 'files have')} only 1 copy.`, action: { label: 'Retry all', run: () => call('retry', { id: null }) } };
     if (state.recovery && state.recovery.keyList === 'failed') return { id: 'keylist', icon: 'alert', tone: 'warning', text: "Wildbloom couldn't update the list it needs to restore your files. Your files are safe on this computer.", action: { label: 'Try again', run: () => refreshStatus({ recheck: 'keylist' }) } };
@@ -1207,8 +1225,14 @@
     if (!state.online.configured) return { id: 'no-online', icon: 'ring', tone: 'muted', text: 'Files have 1 copy, on this computer.', action: { label: 'Add online node', run: (opener) => openFlowSheet({ sequence: ['node', 'approve'], refresh: refreshStatus, browserApproval: state.browserApproval }, opener).then(refreshAfter) } };
     if (approval.state === 'active' && approval.until && approval.until - nowSeconds < 30 * 86400) return { id: 'ends', icon: 'ring', tone: 'warning', text: `Approval for this computer ends on ${fullDate(approval.until)}.`, action: { label: 'Renew', run: (opener) => openFlowSheet({ sequence: ['approve'], renew: true, refresh: refreshStatus, browserApproval: state.browserApproval }, opener).then(refreshAfter) } };
     if (state.recovery && state.recovery.confirmed === false) return { id: 'recovery', icon: 'alert', tone: 'warning', text: "Your recovery key isn't saved yet.", action: { label: 'Save it', run: (opener) => openFlowSheet({ sequence: ['recovery'], resave: false, refresh: refreshStatus }, opener).then(refreshAfter) } };
-    if (count >= 1) return { id: 'good', icon: 'check', tone: 'success', text: count === 1 ? 'Your file has 2 copies.' : `All ${count} files have 2 copies.`, action: null };
-    return { id: 'empty', icon: 'ring', tone: 'muted', text: 'No files yet', action: null };
+    if (count >= 1) {
+      // Quiet rows rely on this line being true: it says "all" only when every row is.
+      const twoCopies = [...rows.values()].filter((row) => row.state !== 'not_kept' && TWO_COPIES.has(row.state)).length;
+      if (twoCopies === count) return { id: 'good', icon: 'check', tone: 'success', text: count === 1 ? 'Your file has 2 copies.' : `All ${count} files have 2 copies.`, action: null };
+      return { id: 'partial', icon: 'ring', tone: 'muted', text: `${twoCopies} of ${count} ${plural(count, 'file has', 'files have')} 2 copies.`, action: null };
+    }
+    // Nothing to say: the empty zone speaks. The live region stays so the first file is announced.
+    return { id: 'empty', icon: null, tone: 'muted', text: '', action: null };
   }
   const refreshAfter = () => refreshStatus();
   let statusAction = null;
@@ -1216,7 +1240,7 @@
     if (state.firstRun) return;
     const status = resolveStatus();
     el.statusLine.dataset.status = status.id;
-    el.statusIcon.replaceChildren(icon(status.icon, status.icon === 'refresh' ? 'spin' : ''));
+    el.statusIcon.replaceChildren(...(status.icon ? [icon(status.icon, status.icon === 'refresh' ? 'spin' : '')] : []));
     el.statusIcon.className = `icon-slot tone-${status.tone}`;
     if (el.statusText.textContent !== status.text) el.statusText.textContent = status.text;
     statusAction = status.action;
@@ -1229,10 +1253,6 @@
     el.zone.classList.toggle('empty', empty);
     const folder = state.watchFolder || {};
     el.folderToggle.textContent = folder.enabled ? 'Open your Wildbloom folder' : 'Turn on your Wildbloom folder';
-  }
-  function renderFooter() {
-    const online = state.online;
-    el.footerOnline.textContent = online.configured ? `Online: ${formatBytes(online.usedBytes)} of ${formatBytes(online.limitBytes)} used` : 'Online: not set up';
   }
 
   function notice(text) {
@@ -1325,7 +1345,6 @@
     }
     renderStatusLine();
     renderZone();
-    renderFooter();
     applyFilter();
   }
 

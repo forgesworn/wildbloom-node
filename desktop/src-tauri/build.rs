@@ -1,7 +1,8 @@
 fn main() {
     // Every app command is listed, so each window's capability must allow
-    // the commands it may call: the node window cannot reach sharing or the
-    // recovery key, and the Drop window cannot reach node settings or pools.
+    // the commands it may call: the node window cannot share files (only set
+    // the sharing settings) or reach the recovery key, and the Drop window
+    // cannot reach node settings, sharing settings or pools.
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "node_status",
@@ -43,6 +44,7 @@ fn main() {
             "share_verify",
             "share_cancel",
             "stop_sharing",
+            "set_sharing",
             "open_file",
             "reveal_file",
         ]),

@@ -102,6 +102,8 @@ pub struct ShareRecord {
     pub sent_at: Option<u64>,
     pub delete_at: Option<u64>,
     pub ended_at: Option<u64>,
+    /// When the recipient's page confirmed the download, if it did.
+    pub downloaded_at: Option<u64>,
 }
 
 /// A deletion still owed to a node.  `node` is `local` or the online node's
@@ -134,9 +136,9 @@ pub enum IndexError {
 }
 
 /// The schema this build reads and writes.  Version 1 (test builds only)
-/// lacked node origins on deletions and shares, so it is refused.  Version 2
-/// is migrated in place (see `MIGRATE_2_TO_3`).
-pub const SCHEMA_VERSION: i64 = 3;
+/// lacked node origins on deletions and shares, so it is refused.  Versions 2
+/// and 3 are migrated in place (see `MIGRATE_2_TO_3` and `MIGRATE_3_TO_4`).
+pub const SCHEMA_VERSION: i64 = 4;
 
 impl From<rusqlite::Error> for IndexError {
     fn from(error: rusqlite::Error) -> Self {
@@ -188,7 +190,8 @@ CREATE TABLE IF NOT EXISTS shares (
   state TEXT NOT NULL,
   sent_at INTEGER,
   delete_at INTEGER,
-  ended_at INTEGER
+  ended_at INTEGER,
+  downloaded_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS deletes (
   node TEXT NOT NULL,
@@ -246,6 +249,16 @@ INSERT OR IGNORE INTO online_copies (file_id, origin)
 PRAGMA user_version = 3;
 ";
 
+/// Schema 3 to 4, in one transaction: when a shared copy's recipient
+/// confirmed the download.  Existing shares have no confirmation.
+const MIGRATE_3_TO_4: &str = "
+ALTER TABLE shares ADD COLUMN downloaded_at INTEGER;
+PRAGMA user_version = 4;
+";
+
+const SHARE_COLUMNS: &str =
+    "file_id, share_id, origin, sha256, size, state, sent_at, delete_at, ended_at, downloaded_at";
+
 const FILE_COLUMNS: &str = "id, name, media_type, bytes, added, plain_sha256, sha256, size, local, online, attempts, next_attempt, watch_path, watch_size, watch_mtime, path, prev, origin, entry_plain, note";
 
 fn file_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<FileRecord> {
@@ -284,6 +297,7 @@ fn share_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ShareRecord> {
         sent_at: row.get::<_, Option<i64>>(6)?.map(|v| v as u64),
         delete_at: row.get::<_, Option<i64>>(7)?.map(|v| v as u64),
         ended_at: row.get::<_, Option<i64>>(8)?.map(|v| v as u64),
+        downloaded_at: row.get::<_, Option<i64>>(9)?.map(|v| v as u64),
     })
 }
 
@@ -318,9 +332,12 @@ impl Index {
                 db.execute_batch(SCHEMA)?;
                 db.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
             }
-            2 => {
+            2 | 3 => {
                 let migration = db.transaction()?;
-                migration.execute_batch(MIGRATE_2_TO_3)?;
+                if version == 2 {
+                    migration.execute_batch(MIGRATE_2_TO_3)?;
+                }
+                migration.execute_batch(MIGRATE_3_TO_4)?;
                 migration.commit()?;
                 db.execute_batch(SCHEMA)?;
             }
@@ -581,7 +598,7 @@ impl Index {
     pub fn share(&self, file_id: &str) -> Result<Option<ShareRecord>, IndexError> {
         self.with(|db| {
             db.query_row(
-                "SELECT file_id, share_id, origin, sha256, size, state, sent_at, delete_at, ended_at FROM shares WHERE file_id = ?1",
+                &format!("SELECT {SHARE_COLUMNS} FROM shares WHERE file_id = ?1"),
                 [file_id],
                 share_from_row,
             )
@@ -591,9 +608,7 @@ impl Index {
 
     pub fn shares(&self) -> Result<Vec<ShareRecord>, IndexError> {
         self.with(|db| {
-            let mut statement = db.prepare(
-                "SELECT file_id, share_id, origin, sha256, size, state, sent_at, delete_at, ended_at FROM shares",
-            )?;
+            let mut statement = db.prepare(&format!("SELECT {SHARE_COLUMNS} FROM shares"))?;
             statement
                 .query_map([], share_from_row)?
                 .collect::<rusqlite::Result<Vec<_>>>()
@@ -603,9 +618,9 @@ impl Index {
     pub fn put_share(&self, share: &ShareRecord) -> Result<(), IndexError> {
         self.with(|db| {
             db.execute(
-                "INSERT INTO shares (file_id, share_id, origin, sha256, size, state, sent_at, delete_at, ended_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                &format!("INSERT INTO shares ({SHARE_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                  ON CONFLICT(file_id) DO UPDATE SET share_id = excluded.share_id, origin = excluded.origin, sha256 = excluded.sha256, size = excluded.size, state = excluded.state,
-                 sent_at = excluded.sent_at, delete_at = excluded.delete_at, ended_at = excluded.ended_at",
+                 sent_at = excluded.sent_at, delete_at = excluded.delete_at, ended_at = excluded.ended_at, downloaded_at = excluded.downloaded_at"),
                 params![
                     share.file_id,
                     share.share_id,
@@ -616,6 +631,7 @@ impl Index {
                     share.sent_at.map(int),
                     share.delete_at.map(int),
                     share.ended_at.map(int),
+                    share.downloaded_at.map(int),
                 ],
             )
             .map(|_| ())
@@ -889,7 +905,7 @@ PRAGMA user_version = 2;
     }
 
     #[test]
-    fn version_2_migrates_to_3() {
+    fn version_2_migrates_to_the_current_schema() {
         let dir = tempfile::tempdir().unwrap();
         let drop = dir.path().join("drop");
         let node = "https://storage.example/";
@@ -900,7 +916,7 @@ PRAGMA user_version = 2;
         let version: i64 = db
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version, SCHEMA_VERSION);
         drop_connection(db);
         let index = Index::open(&drop).unwrap();
         for id in ["a", "r", "q"] {
@@ -933,8 +949,8 @@ PRAGMA user_version = 2;
         let index = Index::open(&bare).unwrap();
         assert!(index.online_copies("a").unwrap().is_empty());
 
-        // Version 1 and anything newer than 3 are refused.
-        for (name, version) in [("one", 1), ("four", 4)] {
+        // Version 1 and anything newer than 4 are refused.
+        for (name, version) in [("one", 1), ("five", 5)] {
             let other = dir.path().join(name);
             version_2_index(&other, None);
             Connection::open(other.join("drop-index.sqlite"))
@@ -943,6 +959,55 @@ PRAGMA user_version = 2;
                 .unwrap();
             assert!(matches!(Index::open(&other), Err(IndexError::Version(v)) if v == version));
         }
+    }
+
+    /// A version 3 index (as the previous build left it) with a sent share
+    /// from before downloads were confirmed.
+    fn version_3_index(dir: &Path) {
+        version_2_index(dir, Some("https://storage.example/"));
+        let db = Connection::open(dir.join("drop-index.sqlite")).unwrap();
+        db.execute_batch(MIGRATE_2_TO_3).unwrap();
+        db.execute(
+            "INSERT INTO shares (file_id, share_id, origin, sha256, size, state, sent_at, delete_at, ended_at)
+             VALUES ('a', ?1, 'https://storage.example/', ?2, 70000, 'sent', 10, 86410, NULL)",
+            params!["dd".repeat(16), "cc".repeat(32)],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn version_3_migrates_to_4_without_download_times() {
+        let dir = tempfile::tempdir().unwrap();
+        let drop = dir.path().join("drop");
+        version_3_index(&drop);
+        let index = Index::open(&drop).unwrap();
+        let share = index.share("a").unwrap().unwrap();
+        assert_eq!(share.state, share::SENT);
+        assert_eq!((share.sent_at, share.delete_at), (Some(10), Some(86_410)));
+        assert_eq!(share.downloaded_at, None, "no old share was confirmed");
+        // The files and settings are untouched.
+        assert_eq!(index.files().unwrap().len(), 3);
+        assert!(index.get_bool("watch_enabled").unwrap());
+        // The new column round-trips, and a replacing record clears it.
+        index
+            .put_share(&ShareRecord {
+                downloaded_at: Some(500),
+                ..share.clone()
+            })
+            .unwrap();
+        assert_eq!(index.share("a").unwrap().unwrap().downloaded_at, Some(500));
+        drop_connection_of(index);
+        let db = Connection::open(drop.join("drop-index.sqlite")).unwrap();
+        let version: i64 = db
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 4);
+        drop_connection(db);
+        // Reopening a migrated index changes nothing.
+        let index = Index::open(&drop).unwrap();
+        assert_eq!(index.shares().unwrap()[0].downloaded_at, Some(500));
+        index.put_share(&share).unwrap();
+        assert_eq!(index.share("a").unwrap().unwrap().downloaded_at, None);
     }
 
     fn drop_connection_of(index: Index) {
@@ -1029,8 +1094,10 @@ PRAGMA user_version = 2;
                 sent_at: Some(1),
                 delete_at: Some(2),
                 ended_at: None,
+                downloaded_at: Some(3),
             })
             .unwrap();
+        assert_eq!(index.share("a").unwrap().unwrap().downloaded_at, Some(3));
         assert_eq!(index.online_used_bytes().unwrap(), 135_608);
         let node = "https://storage.example/";
         index

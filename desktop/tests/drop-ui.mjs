@@ -33,8 +33,8 @@ const results = [];
 const AXE_TAGS = ['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa'];
 const NPUB_SHORT = 'npub1q8…7xk2';
 
-async function open(url, { os = 'mac', desktop = '', scheme = 'light', width = 400, height = 600, reduced = false, clock = 'fixed', contrast, forced, font } = {}) {
-  const context = await browser.newContext({ viewport: { width, height }, colorScheme: scheme, reducedMotion: reduced ? 'reduce' : 'no-preference', forcedColors: forced ? 'active' : 'none', contrast: contrast || 'no-preference', timezoneId: 'Europe/London', locale: 'en-GB' });
+async function open(url, { os = 'mac', desktop = '', scheme = 'light', width = 400, height = 600, reduced = false, clock = 'fixed', contrast, forced, font, touch } = {}) {
+  const context = await browser.newContext({ hasTouch: Boolean(touch), viewport: { width, height }, colorScheme: scheme, reducedMotion: reduced ? 'reduce' : 'no-preference', forcedColors: forced ? 'active' : 'none', contrast: contrast || 'no-preference', timezoneId: 'Europe/London', locale: 'en-GB' });
   const page = await context.newPage();
   const label = url.replace(/^.*\/(ui|tests)\//, '');
   page.on('pageerror', (error) => problems.push(`${label}: pageerror ${error.message}`));
@@ -60,7 +60,7 @@ async function open(url, { os = 'mac', desktop = '', scheme = 'light', width = 4
 }
 const drop = (state, options = {}, extra = '') => open(`${base}/ui/drop.html?state=${state}${extra}`, options);
 async function ready(page) {
-  await page.waitForFunction(() => window.__stub && window.__stub.calls.some((c) => c.command === 'drop_status') && (document.querySelector('#status-text')?.textContent || document.querySelector('#view-first .flow')));
+  await page.waitForFunction(() => window.__stub && window.__stub.calls.some((c) => c.command === 'drop_status') && (document.querySelector('#status-line')?.dataset.status || document.querySelector('#view-first .flow')));
   await page.waitForTimeout(80);
 }
 async function done(page) {
@@ -116,22 +116,22 @@ scenario('static: CSP unchanged, textContent only, no network or crypto in JS, n
 /* ---------- drop window: rows, status line, zone ---------- */
 
 const EXPECTED_ROWS = {
-  f1: { status: `2 copies · 2.4 MB · Today ${clockTime(nowSeconds - 3600)}`, share: true, menu: ['Share…', 'Save a Copy…', 'Remove…'] },
+  f1: { status: `2.4 MB · Today ${clockTime(nowSeconds - 3600)}`, spoken: `2.4 MB, added ${clockTime(nowSeconds - 3600)} today.`, share: true, menu: ['Share…', 'Save a Copy…', 'Remove…'] },
   f2: { status: 'Copying online · 45%', share: true, bar: 'Copying tax-return-2026.pdf online', menu: ['Share…', 'Save a Copy…', 'Remove…'] },
   f3: { status: '1 copy · online copy failed', inline: 'Retry', menu: ['Retry', 'Save a Copy…', 'Remove…'] },
-  f4: { status: 'Encrypting · 20%', bar: 'Encrypting contract-draft.docx', menu: ['Remove…'] },
+  f4: { status: 'Encrypting · 20%', spoken: 'Encrypting, 20%.', bar: 'Encrypting contract-draft.docx', menu: ['Remove…'] },
   f5: { status: '1 copy · copying online next', share: true, menu: ['Share…', 'Save a Copy…', 'Remove…'] },
-  f6: { status: '1 copy · on this computer', share: 'disabled', menu: ['Save a Copy…', 'Remove…'] },
+  f6: { status: '1 copy · on this computer', spoken: '1 copy, on this computer.', menu: ['Save a Copy…', 'Remove…'] },
   f7: { status: '1 copy · waiting for your online node', menu: ['Save a Copy…', 'Remove…'] },
   f8: { status: '1 copy · online copy missing', inline: 'Copy again', menu: ['Copy Again', 'Save a Copy…', 'Remove…'] },
   f9: { status: '1 copy · online space full', menu: ['Save a Copy…', 'Remove…'] },
-  f10: { status: '1 copy · online only', inline: 'Copy back', menu: ['Copy Back', 'Save a Copy…', 'Remove…'] },
+  f10: { status: '1 copy · online only', spoken: '1 copy, online only.', inline: 'Copy back', menu: ['Copy Back', 'Save a Copy…', 'Remove…'] },
   f11: { status: 'Restoring · 62%', bar: 'Restoring photos-2019.tar', menu: null },
-  f12: { status: `2 copies · shared until ${clockTime(nowSeconds + 20 * 3600)} tomorrow`, share: true, menu: ['Share Again…', 'Stop Sharing…', 'Save a Copy…', 'Remove…'] },
-  f13: { status: '2 copies · removing shared copy when online', menu: ['Save a Copy…'] },
-  f14: { status: `2 copies · sharing ended ${clockTime(nowSeconds - 1800)} today`, share: true, menu: ['Share…', 'Save a Copy…', 'Remove…'] },
-  f15: { status: "Couldn't read this file. Check you can open it, then add it again.", inline: 'Remove', menu: null },
-  f18: { status: '2 copies · only your online node’s owner can remove the shared copy now', share: true, menu: ['Share…', 'Save a Copy…', 'Remove…'] },
+  f12: { status: `Shared · until ${clockTime(nowSeconds + 20 * 3600)} tomorrow`, spoken: `Shared until ${clockTime(nowSeconds + 20 * 3600)} tomorrow.`, share: true, menu: ['Share Again…', 'Stop Sharing…', 'Save a Copy…', 'Remove…'] },
+  f13: { status: 'Sharing stopped · deleting the shared copy when online', spoken: 'Sharing stopped. The shared copy will be deleted when your online node is back.', menu: ['Save a Copy…'] },
+  f14: { status: `Sharing ended · ${clockTime(nowSeconds - 1800)} today`, spoken: `Sharing ended at ${clockTime(nowSeconds - 1800)} today.`, share: true, menu: ['Share…', 'Save a Copy…', 'Remove…'] },
+  f15: { status: "Couldn't read this file. Check you can open it, then add it again.", spoken: "Couldn't read this file. Check you can open it, then add it again.", inline: 'Remove', menu: null },
+  f18: { status: "Shared · only your online node's owner can delete it now", spoken: "Shared. Only your online node's owner can delete the shared copy now.", share: true, menu: ['Share…', 'Save a Copy…', 'Remove…'] },
 };
 
 scenario('rows: long names fit two lines with wide sans metrics too', async () => {
@@ -158,15 +158,11 @@ scenario('rows: every state shows the exact copy, actions and menu items (macOS 
   await ready(page);
   for (const [id, expected] of Object.entries(EXPECTED_ROWS)) {
     const li = page.locator(`li.row[data-id="${id}"]`);
-    assert.equal(await text(li.locator('.row-status')), expected.status, `${id} status`);
+    assert.equal(await text(li.locator('.row-visual')), expected.status, `${id} status`);
+    if (expected.spoken) assert.equal(await text(li.locator('.row-status .sr-only')), expected.spoken, `${id} spoken`);
+    assert.equal(await li.locator('.row-visual').getAttribute('aria-hidden'), 'true');
     const share = li.locator('[data-ctl="share"]');
-    if (expected.share === 'disabled') {
-      assert.equal(await share.getAttribute('aria-disabled'), 'true');
-      const describedBy = await share.getAttribute('aria-describedby');
-      assert.equal(await text(page.locator(`#${describedBy}`)), 'Add your online node to share files.');
-    } else {
-      assert.equal(await share.count(), expected.share ? 1 : 0, `${id} share button`);
-    }
+    assert.equal(await share.count(), expected.share ? 1 : 0, `${id} share button`);
     if (expected.share === true) assert.match(await share.getAttribute('aria-label'), /^Share /);
     if (expected.inline) assert.equal(await text(li.locator('[data-ctl="inline"]')), expected.inline, `${id} inline action`);
     else assert.equal(await li.locator('[data-ctl="inline"]').count(), 0);
@@ -227,7 +223,7 @@ const STATUS_CASES = [
   ['list', 'node,keychain,expired,unreachable,full', 'Wildbloom Node has stopped.', 'Open node settings'],
   ['list', 'keychain,expired,unreachable,full', "Wildbloom can't reach your keychain.", 'Try again'],
   ['list', 'expired,unreachable,full', 'Approval for this computer has ended. New files stay on this computer.', 'Approve again'],
-  ['list', 'unreachable,full', "Can't reach your online node. Files stay on this computer and copy when it's back.", 'Try now'],
+  ['list', 'unreachable,full', "Can't reach your online node. Files will copy when it's back.", 'Try now'],
   ['list', 'full', 'Your online space is full. New files stay on this computer.', 'Settings'],
   ['list', '', '1 file has only 1 copy.', 'Retry all'],
   ['all-states', '', '2 files have only 1 copy.', 'Retry all'],
@@ -244,7 +240,7 @@ const STATUS_CASES = [
   ['folder', '', "4 files in your Wildbloom folder can't be kept.", null],
   ['folder', 'keylist', "Wildbloom couldn't update the list it needs to restore your files. Your files are safe on this computer.", 'Try again'],
   ['good', '', 'All 5 files have 2 copies.', null],
-  ['empty', '', 'No files yet', null],
+  ['empty', '', '', null],
   ['empty', 'no-online', 'Files have 1 copy, on this computer.', 'Add online node'],
 ];
 scenario('status line: priority order, copy and actions (section 6.1)', async () => {
@@ -280,17 +276,17 @@ scenario('folder: not_kept and linked rows, copy, menus, status counts', async (
   let page = await drop('folder');
   await ready(page);
   const expected = {
-    f30: { status: `2 copies · 2.4 MB · Today ${clockTime(nowSeconds - 3000 - 30 * 600)}`, folder: 'Taxes/2026', menu: ['Open', 'Show in Finder', 'Share…', 'Save a Copy…', 'Remove…'] },
-    f31: { status: `2 copies · 2.4 MB · Today ${clockTime(nowSeconds - 3000 - 31 * 600)}`, folder: null, menu: ['Open', 'Show in Finder', 'Share…', 'Save a Copy…', 'Remove…'] },
+    f30: { status: `2.4 MB · Today ${clockTime(nowSeconds - 3000 - 30 * 600)}`, folder: 'Taxes/2026', menu: ['Open', 'Show in Finder', 'Share…', 'Save a Copy…', 'Remove…'] },
+    f31: { status: `2.4 MB · Today ${clockTime(nowSeconds - 3000 - 31 * 600)}`, folder: null, menu: ['Open', 'Show in Finder', 'Share…', 'Save a Copy…', 'Remove…'] },
     f32: { status: 'Not kept · over 1 GB', folder: 'Videos', menu: ['Show in Finder'] },
     f33: { status: 'Not kept · rename it to keep it', folder: null, menu: ['Show in Finder'] },
     f34: { status: 'Not kept · its folder path is too long', folder: 'Projects/Research/Archive/Interviews/Transcripts', menu: ['Show in Finder'] },
     f35: { status: "Not kept · it's too many folders deep", folder: 'a/b/c/d/e/f/g/h/i/j', menu: ['Show in Finder'] },
-    f36: { status: `2 copies · 2.4 MB · Today ${clockTime(nowSeconds - 3000 - 36 * 600)}`, folder: null, menu: ['Share…', 'Save a Copy…', 'Remove…'] },
+    f36: { status: `2.4 MB · Today ${clockTime(nowSeconds - 3000 - 36 * 600)}`, folder: null, menu: ['Share…', 'Save a Copy…', 'Remove…'] },
   };
   for (const [id, want] of Object.entries(expected)) {
     const li = page.locator(`li.row[data-id="${id}"]`);
-    assert.equal(await text(li.locator('.row-status')), want.status, `${id} status`);
+    assert.equal(await text(li.locator('.row-visual')), want.status, `${id} status`);
     if (want.folder) {
       assert.equal(await text(li.locator('.row-folder')), want.folder, `${id} folder`);
       // It wraps only after a slash, never inside a folder name.
@@ -425,8 +421,9 @@ scenario('zone and footer: empty, with files, no online node, folder toggle', as
   assert.equal(await text(page.locator('#zone-title')), 'Drop files here');
   assert.equal(await text(page.locator('#zone-body')), 'Wildbloom encrypts each file, keeps it on this computer and copies it to your online node.');
   assert.equal(await text(page.locator('#add-files')), 'Add files…');
+  assert.equal(await page.locator('#zone #add-files').count(), 0, 'the zone holds no button for adding');
   assert.equal(await text(page.locator('#folder-toggle')), 'Turn on your Wildbloom folder');
-  assert.equal(await text(page.locator('#footer-online')), 'Online: 0 B of 5 GB used');
+  assert.equal(await page.locator('#footer-online').count(), 0, 'the usage line is gone from the footer');
   assert.equal(await page.locator('#zone').evaluate((n) => n.classList.contains('empty')), true);
   await page.locator('#folder-toggle').click();
   await page.locator('dialog[open] button', { hasText: 'Turn on' }).click();
@@ -439,12 +436,8 @@ scenario('zone and footer: empty, with files, no online node, folder toggle', as
   await done(page);
   page = await drop('list');
   await ready(page);
-  assert.equal(await text(page.locator('#footer-online')), 'Online: 1.2 GB of 5 GB used');
   assert.equal(await page.locator('#zone-body').isHidden(), true);
-  await done(page);
-  page = await drop('no-online');
-  await ready(page);
-  assert.equal(await text(page.locator('#footer-online')), 'Online: not set up');
+  assert.equal(await page.locator('#zone').evaluate((n) => getComputedStyle(n).display), 'none');
   await done(page);
 });
 
@@ -505,7 +498,7 @@ scenario('drag: hover, folder, too big, leave, drop, refusals and duplicate flas
   await drop_(['/tmp/new-file.txt']);
   await page.locator('li.row h3', { hasText: 'new-file.txt' }).waitFor();
   assert.equal(await page.locator('#notices').evaluate((n) => n.children.length), 0, 'notices clear on the next drop');
-  assert.equal(await text(rowByName(page, 'new-file.txt').locator('.row-status')), 'Encrypting · 0%');
+  assert.equal(await text(rowByName(page, 'new-file.txt').locator('.row-visual')), 'Encrypting · 0%');
   assert.deepEqual((await calls(page, 'add_paths')).at(-1).args, { paths: ['/tmp/new-file.txt'] });
   await done(page);
 });
@@ -579,7 +572,7 @@ scenario('notice: keeps running event, row icon cross-fade only on state change'
   await ready(page);
   await page.evaluate(() => window.__stub.emit('drop://notice', { kind: 'keeps_running' }));
   assert.equal(await text(page.locator('#notices')), 'Wildbloom keeps running. Open it again from your apps.');
-  await page.evaluate(() => window.__stub.pushRow({ ...window.__stub.files.find((row) => row.id === 'f3'), state: 'two_copies' }));
+  await page.evaluate(() => window.__stub.pushRow({ ...window.__stub.files.find((row) => row.id === 'f3'), state: 'queued' }));
   assert.equal(await page.locator('li.row[data-id="f3"] .icon-slot').evaluate((n) => n.classList.contains('fade')), true);
   await page.evaluate(() => window.__stub.pushRow({ ...window.__stub.files.find((row) => row.id === 'f2'), progress: 60 }));
   assert.equal(await page.locator('li.row[data-id="f2"] .icon-slot').evaluate((n) => n.classList.contains('fade')), false);
@@ -592,15 +585,14 @@ scenario('live rows: progress updates in place, removal moves focus, status even
   const bar = page.locator('li.row[data-id="f2"] progress');
   await bar.evaluate((node) => { node.dataset.same = 'yes'; });
   await page.evaluate(() => window.__stub.pushRow({ ...window.__stub.files.find((row) => row.id === 'f2'), progress: 80 }));
-  assert.equal(await text(page.locator('li.row[data-id="f2"] .row-status')), 'Copying online · 80%');
+  assert.equal(await text(page.locator('li.row[data-id="f2"] .row-visual')), 'Copying online · 80%');
   assert.equal(await bar.getAttribute('data-same'), 'yes', 'the progress element is reused');
   assert.equal(await bar.evaluate((n) => n.value), 80);
   await page.locator('li.row[data-id="f1"] [data-ctl="share"]').focus();
   await page.evaluate(() => window.__stub.emit('drop://file', { id: 'f1', removed: true }));
   assert.equal(await page.locator('li.row[data-id="f1"]').count(), 0);
   assert.equal(await page.evaluate(() => document.activeElement.closest('li.row')?.getAttribute('data-id')), 'f2', 'focus moves to a neighbouring row');
-  await page.evaluate(() => { window.__stub.state.online.usedBytes = 2_500_000_000; window.__stub.flush(); });
-  await page.waitForFunction(() => document.querySelector('#footer-online').textContent === 'Online: 2.5 GB of 5 GB used');
+  
   await done(page);
 });
 
@@ -615,7 +607,7 @@ scenario('keyboard: tab order, roving rows with arrows, Home and End', async () 
     await page.keyboard.press('Tab');
     stops.push(await page.evaluate(() => { const a = document.activeElement; return a.getAttribute('aria-label') || a.textContent.trim(); }));
   }
-  assert.deepEqual(stops, ['Retry all', 'Add files…', 'Share holiday.jpg', 'More actions for holiday.jpg', 'Share tax-return-2026.pdf', 'More actions for tax-return-2026.pdf', 'Retry copying notes.txt', 'More actions for notes.txt', 'Share archive.zip', 'More actions for archive.zip', 'Share quote.pdf', 'More actions for quote.pdf', 'Settings']);
+  assert.deepEqual(stops, ['Retry all', 'Share holiday.jpg', 'More actions for holiday.jpg', 'Share tax-return-2026.pdf', 'More actions for tax-return-2026.pdf', 'Retry copying notes.txt', 'More actions for notes.txt', 'Share archive.zip', 'More actions for archive.zip', 'Share quote.pdf', 'More actions for quote.pdf', 'Add files…', 'Settings']);
   assert.equal(await page.locator('[tabindex]:not([tabindex="-1"])').count(), 0, 'no positive tabindex');
   await page.locator('li.row[data-id="f1"] [data-ctl="share"]').focus();
   await page.keyboard.press('ArrowDown');
@@ -799,17 +791,17 @@ scenario('share sheet: S3 to S7 happy path, copy buttons, focus, Escape, Done', 
   await emitShare(page, { state: 'check', link: LINK, words: WORDS, checkWords: ['apple', 'river', 'stone'], expiresAt });
   assert.match(await visual(sheet), /3 Read these words to them/);
   assert.match(await visual(sheet), /Ask if they see the same 3 words\./);
-  assert.equal(await sheet.locator('ol.words').nth(1).getAttribute('aria-label'), 'Check words to read out: apple, river, stone');
+  assert.equal(await sheet.locator('ol.words').nth(0).getAttribute('aria-label'), 'Check words to read out: apple, river, stone', 'steps 1 and 2 are done, so the check words are the only list');
   assert.deepEqual(await sheet.locator('.dialog-actions button').allTextContents(), ["They don't match", 'They match, send file'], 'macOS order: primary on the right');
   await sheet.locator('button', { hasText: 'They match, send file' }).click();
   assert.deepEqual((await calls(page, 'share_verify')).at(-1).args, { id: 'f1', matches: true });
   await page.waitForFunction(() => document.querySelector('.share-slot').textContent.includes('Sending'));
   assert.equal(await visual(sheet.locator('.share-slot')), 'Sending…');
   await emitShare(page, { state: 'sent', deleteAt: nowSeconds + 86400 });
-  assert.equal(await text(sheet.locator('h2')), 'Sent');
+  assert.equal(await text(sheet.locator('h2')), 'Share holiday.jpg', 'the heading keeps the file name');
   assert.equal(await visual(sheet.locator('.share-slot')), 'They can download holiday.jpg now.');
   assert.match(await visual(sheet), new RegExp(`Wildbloom deletes the shared copy at ${clockTime(nowSeconds + 86400)} tomorrow, or sooner if you stop sharing\\. This computer needs to be on to delete it\\.`));
-  assert.match(await visual(sheet), /Stopping can't take back a copy they've already downloaded\./);
+  assert.doesNotMatch(await visual(sheet), /Stopping can't take back/);
   assert.deepEqual(await sheet.locator('.dialog-actions button').allTextContents(), ['Stop sharing…', 'Done']);
   await page.locator('dialog.sheet button', { hasText: 'Done' }).click();
   await sheet.waitFor({ state: 'detached' });
@@ -1190,7 +1182,7 @@ scenario('settings: section order, values, actions and sheets', async () => {
   assert.equal(await text(section.locator('#drop-device-npub')), NPUB_SHORT);
   assert.equal(await text(section.locator('#drop-approval-text')), `Approved by ${NPUB_SHORT} until ${new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/London' }).format(new Date((nowSeconds + 300 * 86400) * 1000))}`);
   assert.equal(await text(section.locator('#drop-renew')), 'Renew approval…');
-  assert.equal(await text(section.locator('label.check')), 'Keep copies of everything in my Wildbloom folder');
+  assert.equal(await text(section.locator('label.check').first()), 'Keep copies of everything in my Wildbloom folder');
   assert.equal(await text(section.locator('#drop-folder-hint')), '~/Wildbloom.');
   assert.match(await text(section.locator('#drop-recovery-text')), /^Saved \d+ \w+ 2026$/);
   assert.match(await text(section.locator('.drop-note')), /^Files are encrypted on this computer before they're copied\. This is new software and hasn't been independently audited yet\.$/);
@@ -1341,11 +1333,11 @@ scenario('contrast: field border tokens and the node window inputs (C1)', async 
 const STATES = [
   'empty', 'list', 'all-states', 'good', 'many', 'no-online',
   'drag-hover', 'drag-folder', 'drag-big', 'notice-folder',
-  'share-s1', 'share-s2', 'share-s3', 'share-s4', 'share-s5', 'share-s6', 'share-s7', 'share-s8', 'share-s9', 'share-s9b', 'share-s10', 'share-s11', 'share-s12', 'share-s13',
+  'share-s1', 'share-s2', 'share-s3', 'share-s4', 'share-s5', 'share-s6', 'share-s7', 'share-s8', 'share-s9', 'share-s9b', 'share-s10', 'share-s11', 'share-s12', 'share-s13', 'share-s14', 'share-s15', 'share-s16', 'share-s17', 'share-s18',
   'confirm-remove', 'confirm-stop',
   'first-run-1', 'first-run-1-error', 'first-run-2', 'first-run-2-waiting', 'first-run-2-error', 'first-run-3', 'first-run-3-used', 'first-run-restore',
   'first-run-keychain&os=mac', 'first-run-keychain&os=windows', 'first-run-keychain&os=linux',
-  'good&status=node', 'good&status=keychain', 'good&status=expired', 'good&status=unreachable', 'good&status=full', 'good&status=ends', 'good&status=recovery', 'list&status=folder',
+  'good&status=downloads', 'good&status=shared', 'good&status=node', 'good&status=keychain', 'good&status=expired', 'good&status=unreachable', 'good&status=full', 'good&status=ends', 'good&status=recovery', 'list&status=folder',
   'folder', 'folder&status=folder-unavailable', 'folder&status=folder-too-many', 'folder&os=windows', 'confirm-folder-on',
   'share-s5&os=windows', 'share-s5&os=linux&desktop=kde',
 ];
@@ -1410,20 +1402,16 @@ scenario('settings page: axe on the new section and forced colours', async () =>
   await done(page);
 });
 
-scenario('layout: height under 520 collapses the zone to a bar; wide layout uses columns', async () => {
+scenario('layout: no zone band with files; wide layout uses columns', async () => {
   let page = await drop('list', { width: 340, height: 420 });
   await ready(page);
-  const zone = await page.locator('#zone').boundingBox();
-  assert.ok(zone.height <= 48, `zone is a bar (${zone.height})`);
-  assert.ok(zone.height >= 44, `zone is at least 44 px (${zone.height})`);
+  assert.equal(await page.locator('#zone').evaluate((n) => getComputedStyle(n).display), 'none');
   assert.equal(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight + 1), true);
-  assert.equal(await page.locator('#zone-title').isHidden(), true);
   await done(page);
   page = await drop('list', { width: 760, height: 600 });
   await ready(page);
   const rects = await page.evaluate(() => { const li = document.querySelector('li.row[data-id="f1"]'); return [li.querySelector('h3'), li.querySelector('.row-status'), li.querySelector('[data-ctl="share"]')].map((n) => n.getBoundingClientRect().top); });
   assert.ok(Math.abs(rects[0] - rects[1]) < 12 && Math.abs(rects[1] - rects[2]) < 16, `columns share a line ${rects}`);
-  assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('li.row[data-id="f1"] .sep')).display), 'none');
   await done(page);
 });
 
@@ -1435,6 +1423,332 @@ scenario('forced colours and high contrast render without errors', async () => {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await done(page);
   }
+});
+
+/* ---------- the calmer Drop window (design-drop-declutter.md, section 12) ---------- */
+
+const box = (page, selector) => page.locator(selector).first().boundingBox();
+const near = (a, b, tolerance, message) => assert.ok(Math.abs(a - b) <= tolerance, `${message}: ${a} vs ${b}`);
+
+scenario('declutter 2 and 3: no zone band, Add files in the footer, header plus footer stay slim', async () => {
+  for (const scheme of ['light', 'dark']) {
+    for (const [width, height] of [[400, 600], [340, 420]]) {
+      const page = await drop('list', { scheme, width, height });
+      await ready(page);
+      assert.equal(await page.locator('#zone').evaluate((n) => getComputedStyle(n).display), 'none', `${scheme} ${width}`);
+      assert.equal(await page.locator('#drop-footer #add-files').count(), 1);
+      assert.equal(await page.locator('#footer-online').count(), 0);
+      const header = await box(page, '#drop-header');
+      const footer = await box(page, '#drop-footer');
+      assert.ok(header.height + footer.height <= 110, `${scheme} ${width}x${height}: header ${header.height} plus footer ${footer.height}`);
+      await done(page);
+    }
+  }
+});
+
+scenario('declutter 4: healthy rows are quiet, with a spoken sentence', async () => {
+  const page = await drop('good');
+  await ready(page);
+  assert.equal(await page.locator('li[data-state="two_copies"]').count(), 5);
+  for (const li of await page.locator('li[data-state="two_copies"]').all()) {
+    assert.equal(await li.locator('.row-status .lead').count(), 0);
+    assert.equal(await li.locator('.row-status .icon-slot').count(), 0);
+  }
+  const f1 = page.locator('li[data-id="f1"]');
+  assert.equal(await visual(f1.locator('.row-visual')), `2.4 MB · Today ${clockTime(nowSeconds - 3600)}`);
+  assert.equal(await text(f1.locator('.row-status .sr-only')), `2.4 MB, added ${clockTime(nowSeconds - 3600)} today.`);
+  await done(page);
+});
+
+scenario('declutter 5 to 8: Share shows on hover and focus, never moves anything, stays in the menu', async () => {
+  let page = await drop('good');
+  await ready(page);
+  const share = page.locator('li[data-id="f1"] [data-ctl="share"]');
+  const more = page.locator('li[data-id="f1"] [data-ctl="more"]');
+  const opacity = () => share.evaluate((n) => getComputedStyle(n).opacity);
+  await page.mouse.move(2, 2);
+  await page.waitForTimeout(250);
+  assert.equal(await opacity(), '0', 'hidden before hover');
+  const before = await more.boundingBox();
+  const shareBefore = await share.boundingBox();
+  await page.hover('li[data-id="f1"] h3');
+  await page.waitForTimeout(250);
+  assert.equal(await opacity(), '1', 'shown on hover');
+  const after = await more.boundingBox();
+  for (const key of ['x', 'y', 'width', 'height']) near(before[key], after[key], 0.5, `the more button ${key}`);
+  const shareAfter = await share.boundingBox();
+  for (const key of ['x', 'y', 'width', 'height']) near(shareBefore[key], shareAfter[key], 0.5, `Share ${key}`);
+  assert.equal(await page.locator('li[data-id="f1"] [data-ctl="share"]').count(), 1);
+  await page.mouse.move(2, 2);
+  await page.waitForTimeout(250);
+  await page.evaluate(() => document.body.focus());
+  await page.keyboard.press('Tab');
+  assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), 'Share holiday.jpg');
+  await page.waitForTimeout(250);
+  assert.equal(await opacity(), '1', 'shown on keyboard focus');
+  assert.equal(await share.evaluate((n) => getComputedStyle(n).outlineWidth), '3px');
+  assert.notEqual(await share.evaluate((n) => getComputedStyle(n).outlineStyle), 'none');
+  await more.click();
+  assert.equal(await page.evaluate(() => window.__stub.lastMenu.items[0].text), 'Share…');
+  await done(page);
+  // Touch: Share is always there. Chrome headless only reports a coarse pointer for some touch setups.
+  page = await drop('good', { touch: true });
+  await ready(page);
+  if (await page.evaluate(() => matchMedia('(any-pointer: coarse)').matches)) {
+    assert.equal(await page.locator('li[data-id="f1"] [data-ctl="share"]').evaluate((n) => getComputedStyle(n).opacity), '1', 'visible on touch without hover');
+  } else console.log('     (touch reveal not verified: this browser reports no coarse pointer)');
+  await done(page);
+});
+
+scenario('declutter 9 and 10: no online node, and an unreachable one, say it once and fit at 340', async () => {
+  let page = await drop('no-online', { width: 340, height: 420 });
+  await ready(page);
+  assert.equal(await page.locator('[data-ctl="share"]').count(), 0);
+  assert.equal(await visual(page.locator('li[data-id="f1"] .row-visual')), `2.4 MB · Today ${clockTime(nowSeconds - 3600)}`);
+  assert.equal(await text(page.locator('#status-action')), 'Add online node');
+  assert.ok((await box(page, '#status-action')).height <= 34, 'Add online node is one line');
+  await done(page);
+  page = await drop('good', { width: 340, height: 420 }, '&status=unreachable');
+  await ready(page);
+  assert.equal(await text(page.locator('#status-text')), "Can't reach your online node. Files will copy when it's back.");
+  assert.ok((await box(page, '#status-action')).height <= 34, 'Try now is one line');
+  await done(page);
+});
+
+scenario('declutter 11: the empty window is one calm zone', async () => {
+  for (const [width, height] of [[400, 600], [340, 420]]) {
+    const page = await drop('empty', { width, height });
+    await ready(page);
+    assert.equal(await page.locator('#status-line').count(), 1);
+    assert.equal(await text(page.locator('#status-line')), '');
+    assert.equal(await page.locator('#status-line').getAttribute('role'), 'status');
+    assert.ok((await box(page, '#drop-header')).height <= 8, 'the header collapses');
+    const zone = page.locator('#zone.empty');
+    assert.match(await text(zone), /Drop files here/);
+    assert.match(await text(zone), /Turn on your Wildbloom folder/);
+    assert.equal(await zone.getByRole('button', { name: 'Add files…' }).count(), 0);
+    const footer = page.locator('#drop-footer');
+    assert.equal(await footer.getByRole('button', { name: 'Add files…' }).count(), 1);
+    assert.equal(await footer.getByRole('button', { name: 'Settings' }).count(), 1);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight + 1), true, `no scroll at ${width}x${height}`);
+    await done(page);
+  }
+});
+
+scenario('declutter 12: the status line is honest', async () => {
+  const page = await drop('good');
+  await ready(page);
+  assert.equal(await text(page.locator('#status-text')), 'All 5 files have 2 copies.');
+  await page.evaluate(() => window.__stub.pushRow({ ...window.__stub.files.find((row) => row.id === 'f1'), state: 'missing_local' }));
+  await page.waitForFunction(() => document.querySelector('#status-text').textContent.startsWith('4 of 5'));
+  assert.equal(await text(page.locator('#status-text')), '4 of 5 files have 2 copies.');
+  assert.equal(await page.locator('#status-action').isHidden(), true);
+  await page.evaluate(() => window.__stub.pushRow({ ...window.__stub.files.find((row) => row.id === 'f1'), state: 'two_copies' }));
+  await page.waitForFunction(() => document.querySelector('#status-text').textContent.startsWith('All'));
+  await done(page);
+});
+
+scenario('declutter 13: wide rows share their columns', async () => {
+  for (const [state, extra] of [['folder', ''], ['good', '&status=shared']]) {
+    const page = await drop(state, { width: 760, height: 600 }, extra);
+    await ready(page);
+    const edges = await page.evaluate(() => [...document.querySelectorAll('li.row')].map((li) => ({ left: li.querySelector('.row-status').getBoundingClientRect().left, right: li.querySelector('[data-ctl="more"]')?.getBoundingClientRect().right ?? null })));
+    for (const edge of edges) near(edge.left, edges[0].left, 1, `${state} meta left`);
+    const rights = edges.filter((edge) => edge.right !== null);
+    for (const edge of rights) near(edge.right, rights[0].right, 1, `${state} more right`);
+    if (state === 'folder') {
+      const lines = await page.evaluate(() => { const h3 = [...document.querySelectorAll('li.row h3')].find((n) => n.getAttribute('title') === 'notes-with-a-very-long-name.txt'); return Math.round(h3.getBoundingClientRect().height / parseFloat(getComputedStyle(h3).lineHeight)); });
+      assert.ok(lines <= 2, `long name takes ${lines} lines`);
+    }
+    await done(page);
+  }
+});
+
+scenario('declutter 14 and 15: downloaded rows and their menus', async () => {
+  const page = await drop('good', {}, '&status=downloads');
+  await ready(page);
+  const until = clockTime(nowSeconds + 20 * 3600);
+  const cases = {
+    f40: [`Downloaded · kept until ${until} tomorrow`, `Downloaded at ${clockTime(nowSeconds - 1080)} today. Shared copy kept until ${until} tomorrow.`, ['Share Again…', 'Stop Sharing…', 'Save a Copy…', 'Remove…']],
+    f41: [`Downloaded · ${clockTime(nowSeconds - 1080)} today`, `Downloaded at ${clockTime(nowSeconds - 1080)} today. Shared copy deleted.`, ['Share…', 'Save a Copy…', 'Remove…']],
+    f42: ['Downloaded · deleting the shared copy when online', `Downloaded at ${clockTime(nowSeconds - 1080)} today. The shared copy will be deleted when your online node is back.`, ['Save a Copy…']],
+  };
+  assert.equal(clockTime(nowSeconds - 1080), '10:42');
+  for (const [id, [visualText, spoken, menu]] of Object.entries(cases)) {
+    const li = page.locator(`li.row[data-id="${id}"]`);
+    assert.equal(await text(li.locator('.row-visual')), visualText, id);
+    assert.equal(await text(li.locator('.row-status .sr-only')), spoken, id);
+    await page.evaluate(() => { window.__stub.lastMenu = null; });
+    await li.locator('[data-ctl="more"]').click();
+    assert.deepEqual(await page.evaluate(() => window.__stub.lastMenu.items.map((item) => item.text)), menu, `${id} menu`);
+  }
+  assert.equal(await page.locator('li.row[data-id="f40"] .icon-slot').evaluate((n) => n.className.includes('tone-success')), true, 'a download is a success tone');
+  await done(page);
+  const shared = await drop('good', {}, '&status=shared');
+  await ready(shared);
+  assert.equal(await text(shared.locator('li.row[data-id="f12"] .row-visual')), `Shared · until ${until} tomorrow`);
+  assert.equal(await shared.locator('li.row[data-id="f12"] .icon-slot svg').count(), 1, 'one icon, not two');
+  await done(shared);
+});
+
+scenario('declutter 16: a download that arrives with no sheet open is announced', async () => {
+  const page = await drop('good');
+  await ready(page);
+  await page.evaluate(() => {
+    window.__said = [];
+    new MutationObserver(() => { const value = document.getElementById('drop-announcer').textContent; if (value) window.__said.push(value); }).observe(document.getElementById('drop-announcer'), { childList: true, characterData: true, subtree: true });
+  });
+  const now = nowSeconds;
+  await page.evaluate((at) => window.__stub.pushRow({ ...window.__stub.files.find((row) => row.id === 'f1'), state: 'sharing_ended', sharingEnded: at, downloadedAt: at }), now);
+  await page.waitForFunction(() => window.__said.includes('holiday.jpg was downloaded.'), null, { timeout: 2500 });
+  await done(page);
+});
+
+const HEADING_STATES = ['share-s3', 'share-s5', 'share-s7', 'share-s14', 'share-s15', 'share-s16', 'share-s17', 'share-s18'];
+scenario('declutter 17: the sheet heading is constant and the status follows it', async () => {
+  for (const state of HEADING_STATES) {
+    const page = await harness(state, { width: 400, height: 600, scheme: 'light' });
+    assert.equal(await text(page.locator('dialog h2')), 'Share holiday.jpg', state);
+    assert.equal(await page.evaluate(() => document.querySelector('dialog h2').nextElementSibling.classList.contains('share-slot')), true, `${state}: the status slot follows the heading`);
+    await page.context().close();
+  }
+});
+
+scenario('declutter 18 and 19: the check state fits at 340x420, finished steps shrink, the countdown is inline', async () => {
+  let page = await harness('share-s5', { width: 340, height: 420, scheme: 'light' });
+  const match = page.locator('dialog button', { hasText: 'They match, send file' });
+  const rect = await match.boundingBox();
+  assert.ok(rect.y >= 0 && rect.y + rect.height <= 420, `the primary button is on screen (${rect.y}, ${rect.height})`);
+  assert.equal(await page.locator('dialog .share-step').count(), 3);
+  for (const index of [0, 1]) {
+    const step = page.locator('dialog .share-step').nth(index);
+    assert.equal(await step.locator('.step-body').count(), 0);
+    assert.equal(await step.locator('.step-title .sr-only').textContent(), ', done');
+  }
+  await page.context().close();
+  page = await harness('share-s3', { width: 400, height: 600, scheme: 'light' });
+  const time = await box(page, '[data-time]');
+  const status = await box(page, '.share-status .share-text');
+  const line = await box(page, '.share-status');
+  near(time.y, status.y, 4, 'the countdown top');
+  near(time.x + time.width, line.x + line.width, 1, 'the countdown sits on the right edge');
+  await page.context().close();
+});
+
+scenario('declutter 20 and 21: sent and downloaded copy', async () => {
+  const body = (page) => text(page.locator('dialog .share-body'));
+  const status = (page) => text(page.locator('dialog .share-status'));
+  const buttons = (page) => page.locator('dialog.sheet .dialog-actions button').allTextContents();
+  const keep = `Wildbloom deletes the shared copy at ${clockTime(nowSeconds + 86400)} tomorrow, or sooner if you stop sharing. This computer needs to be on to delete it.`;
+  const cases = {
+    'share-s14': ['Sent. Waiting for them to download it.', `Wildbloom deletes the shared copy once they've downloaded it, or by ${clockTime(nowSeconds + 86400)} tomorrow. This computer needs to be on to delete it.`, ['Stop sharing…', 'Done']],
+    'share-s15': ['Sent. Waiting for them to download it.', keep, ['Stop sharing…', 'Done']],
+    'share-s7': ['They can download holiday.jpg now.', keep, ['Stop sharing…', 'Done']],
+    'share-s16': ['Downloaded at 11:00.', 'The shared copy is deleted, so the link no longer works.', ['Done']],
+    'share-s17': ['Downloaded at 11:00.', 'Wildbloom deletes the shared copy when it can reach your online node. This computer needs to be on to delete it.', ['Done']],
+    'share-s18': ['Downloaded at 11:00.', keep, ['Stop sharing…', 'Done']],
+  };
+  for (const [state, [statusText, bodyText, buttonTexts]] of Object.entries(cases)) {
+    const page = await harness(state, { width: 400, height: 600, scheme: 'light' });
+    assert.match(await status(page), new RegExp(`^${statusText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`), state);
+    assert.equal(await body(page), bodyText, state);
+    assert.deepEqual(await buttons(page), buttonTexts, state);
+    assert.doesNotMatch(await text(page.locator('dialog')), /Stopping can't take back/, state);
+    if (!state.endsWith('s7') || true) assert.equal(await page.locator('dialog [data-time]').count(), 0, `${state} has no countdown`);
+    await page.context().close();
+  }
+});
+
+scenario('declutter 22 and 23: no layout shift when the download arrives, and closing sends no cancel', async () => {
+  // Whatever the font: wide sans metrics wrap the text differently, and the box must still not change.
+  const variants = [];
+  for (const os of ['mac', 'windows']) for (const font of [undefined, 'wide']) for (const width of [340, 400, 760]) variants.push({ os, font, width });
+  for (const { os, font, width } of variants) {
+    const page = await drop('good', { os, font, width, height: 600 });
+    await ready(page);
+    await openShare(page, { state: 'sent', deleteAt: nowSeconds + 86400, awaitingDownload: true, afterDownload: 'delete' });
+    await page.waitForTimeout(400); // the sheet's own entrance animation has to finish before measuring
+    const slot = page.locator('dialog .share-slot');
+    await slot.evaluate((n) => { n.dataset.same = 'yes'; });
+    await page.locator('dialog [data-key="stop"]').focus();
+    const before = await box(page, 'dialog [data-key="done"]');
+    await emitShare(page, { state: 'downloaded', downloadedAt: nowSeconds, copy: 'deleted' });
+    const after = await box(page, 'dialog [data-key="done"]');
+    for (const key of ['x', 'y', 'width', 'height']) near(before[key], after[key], 0.5, `${os} ${font || 'system'} ${width} Done ${key}`);
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('data-key')), 'done', 'focus moves to Done');
+    assert.equal(await slot.getAttribute('data-same'), 'yes', 'the status slot is updated in place');
+    assert.equal(await slot.getAttribute('role'), 'status');
+    await page.keyboard.press('Escape');
+    await page.locator('dialog.sheet').waitFor({ state: 'detached' });
+    assert.equal((await calls(page, 'share_cancel')).length, 0, `${os} Escape from downloaded sends no cancel`);
+    await done(page);
+  }
+  const page = await harness('share-s16', { width: 400, height: 600, scheme: 'light' });
+  await page.locator('dialog button', { hasText: 'Done' }).click();
+  await page.locator('dialog.sheet').waitFor({ state: 'detached' });
+  assert.equal((await calls(page, 'share_cancel')).length, 0);
+  await page.context().close();
+});
+
+scenario('declutter 24 to 26: sharing settings', async () => {
+  const page = await settingsPage({ scheme: 'dark' });
+  const titles = await page.locator('#drop-settings .drop-setting-title').allTextContents();
+  assert.deepEqual(titles, ['Online node', 'This computer', 'Wildbloom folder', 'Sharing', 'Recovery key']);
+  const group = page.getByRole('group', { name: "When they've downloaded it" });
+  assert.equal(await group.count(), 1);
+  assert.equal(await group.getByRole('radio', { name: 'Delete the shared copy' }).isChecked(), true);
+  assert.equal(await group.getByRole('radio', { name: 'Keep it until it expires' }).isChecked(), false);
+  const select = page.getByRole('combobox', { name: 'Shared copies expire after' });
+  assert.equal(await select.inputValue(), '86400');
+  assert.deepEqual(await select.locator('option').allTextContents(), ['1 hour', '24 hours', '7 days']);
+  assert.equal(await page.locator('#settings-form #drop-settings').count(), 0);
+  assert.match(await text(page.locator('#drop-sharing-hint')), /^Wildbloom can only tell they've downloaded a file within 10 minutes of making its link\. If it can't tell, the shared copy stays until it expires\. Changes apply to files you share from now on\.$/);
+  assert.equal(await page.locator('#drop-after-download').getAttribute('aria-describedby'), 'drop-sharing-hint');
+  assert.equal(await select.getAttribute('aria-describedby'), 'drop-sharing-hint');
+  await group.getByRole('radio', { name: 'Keep it until it expires' }).check();
+  await page.waitForFunction(() => window.__stub.calls.some((c) => c.command === 'set_sharing'));
+  assert.deepEqual((await calls(page, 'set_sharing')).map((c) => c.args), [{ afterDownload: 'keep', expirySeconds: 86400 }]);
+  await select.selectOption('604800');
+  await page.waitForFunction(() => window.__stub.calls.filter((c) => c.command === 'set_sharing').length === 2);
+  assert.deepEqual((await calls(page, 'set_sharing')).at(-1).args, { afterDownload: 'keep', expirySeconds: 604800 });
+  await page.evaluate(() => { window.__stub.handlers.set_sharing = () => { throw { code: 'unknown' }; }; });
+  await select.selectOption('3600');
+  await page.locator('#drop-settings-error:not([hidden])').waitFor();
+  assert.equal(await text(page.locator('#drop-settings-error')), "Couldn't change the sharing settings.");
+  assert.equal(await select.inputValue(), '604800', 'the control goes back');
+  const result = await new AxeBuilder({ page }).include('#drop-settings').withTags(AXE_TAGS).analyze();
+  assert.deepEqual(result.violations.map((v) => ({ id: v.id, nodes: v.nodes.map((n) => n.target) })), []);
+  for (const width of [820, 420, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `overflow at ${width}`);
+  }
+  await done(page);
+});
+
+scenario('declutter 27: tab order through the list is status, rows, Add files, Settings', async () => {
+  const page = await drop('list');
+  await ready(page);
+  await page.evaluate(() => document.body.focus());
+  const stops = [];
+  for (let i = 0; i < 13; i++) {
+    await page.keyboard.press('Tab');
+    stops.push(await page.evaluate(() => ({ id: document.activeElement.id, ctl: document.activeElement.getAttribute('data-ctl'), visible: document.activeElement.getClientRects().length > 0 })));
+  }
+  assert.equal(stops[0].id, 'status-action');
+  assert.equal(stops.at(-2).id, 'add-files');
+  assert.equal(stops.at(-1).id, 'footer-settings');
+  assert.ok(stops.slice(1, -2).every((stop) => stop.ctl), 'only row controls between');
+  assert.ok(stops.every((stop) => stop.visible), 'no stop on a hidden element');
+  await done(page);
+});
+
+scenario('declutter 29: Share is visible on hover under forced colours', async () => {
+  const page = await drop('good', { forced: true });
+  await ready(page);
+  await page.hover('li[data-id="f1"] h3');
+  await page.waitForTimeout(250);
+  assert.equal(await page.locator('li[data-id="f1"] [data-ctl="share"]').evaluate((n) => getComputedStyle(n).opacity), '1');
+  await done(page);
 });
 
 /* ---------- run ---------- */

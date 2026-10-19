@@ -45,6 +45,21 @@
           <div class="actions"><button id="drop-folder-show" class="secondary" type="button">Show folder</button></div>
         </div>
         <div class="drop-setting">
+          <p class="drop-setting-title" id="drop-sharing-title">Sharing</p>
+          <fieldset id="drop-after-download" aria-describedby="drop-sharing-hint">
+            <legend>When they've downloaded it</legend>
+            <label class="check"><input type="radio" name="drop-after-download" value="delete" /><span>Delete the shared copy</span></label>
+            <label class="check"><input type="radio" name="drop-after-download" value="keep" /><span>Keep it until it expires</span></label>
+          </fieldset>
+          <label class="field-label" for="drop-expiry">Shared copies expire after</label>
+          <select id="drop-expiry" aria-describedby="drop-sharing-hint">
+            <option value="3600">1 hour</option>
+            <option value="86400" selected>24 hours</option>
+            <option value="604800">7 days</option>
+          </select>
+          <p class="hint" id="drop-sharing-hint">Wildbloom can only tell they've downloaded a file within 10 minutes of making its link. If it can't tell, the shared copy stays until it expires. Changes apply to files you share from now on.</p>
+        </div>
+        <div class="drop-setting">
           <p class="drop-setting-title" id="drop-recovery-title">Recovery key</p>
           <p class="drop-setting-value" id="drop-recovery-text"></p>
           <div class="actions"><button id="drop-recovery" class="secondary" type="button">Save recovery key again…</button></div>

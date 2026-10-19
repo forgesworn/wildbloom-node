@@ -36,14 +36,13 @@
                 <p id="zone-body" class="zone-body">Wildbloom encrypts each file, keeps it on this computer and copies it to your online node.</p>
               </div>
               <div class="zone-actions">
-                <button id="add-files" class="btn primary" type="button">Add files…</button>
                 <button id="folder-toggle" class="btn quiet" type="button">Turn on your Wildbloom folder</button>
               </div>
             </div>
             <div id="notices" class="notices" role="status"></div>
             <div id="find" class="find" hidden>
               <label for="find-input">Find a file</label>
-              <input id="find-input" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
+              <input id="find-input" class="field" type="search" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
             </div>
           </div>
           <div id="list-region" class="col list-region">
@@ -61,7 +60,7 @@
 
       <footer id="drop-footer">
         <div class="col footer-bar">
-          <span id="footer-online" class="muted"></span>
+          <button id="add-files" class="btn primary" type="button">Add files…</button>
           <button id="footer-settings" class="btn quiet" type="button">Settings</button>
         </div>
       </footer>
