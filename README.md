@@ -218,6 +218,7 @@ Useful controls:
 --pairing-issuer               issue one-use Foregather live grants to devices
 --pairing-relay-url <URL>      Foregather API base for --pairing-issuer
 --pairing-operator-token-file <PATH>  private file holding its operator token
+--request-grants               let granted devices issue one-file upload grants; needs --device-grants
 --service-profile <PATH>       opt-in public service listing (docs/SERVICE-DISCOVERY.md)
 --checkout-profile <PATH>      opt-in paid checkout, needs --no-tor (docs/CHECKOUT.md)
 --max-concurrent-writes <N>    concurrent upload/mirror limit, default 4
