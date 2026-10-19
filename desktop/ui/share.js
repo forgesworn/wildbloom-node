@@ -76,11 +76,14 @@
     setTimeout(() => { session.live.textContent = message; }, 30);
   }
 
-  function statusLine(session, tone, iconName, text, withTime) {
+  function statusLine(session, tone, iconName, text, withTime, ghosts) {
     // The countdown sits on the status line, on its own side, and is not read out (the 2 and 1 minute announcements are).
     const line = h('p', { class: 'share-status' }, iconSlot(iconName, tone, iconName === 'refresh' ? 'spin' : ''), h('span', { class: 'share-text' }, text),
       withTime ? h('span', { class: 'share-time', 'aria-hidden': 'true', 'data-time': true }, '') : null);
-    session.statusSlot.replaceChildren(line);
+    if (!ghosts) { session.statusSlot.replaceChildren(line); return; }
+    // The other states' lines sit unseen in the same grid cell, so the box is as tall as the tallest whatever the font.
+    session.statusSlot.replaceChildren(h('div', { class: 'share-stack' }, line,
+      ghosts.map((ghost) => h('p', { class: 'share-ghost', 'aria-hidden': 'true' }, h('span', { class: 'ghost-icon' }), h('span', { class: 'share-text' }, ghost)))));
   }
 
   function button(label, kind, key, onclick, primary) {
@@ -214,25 +217,42 @@
         const downloaded = p.state === 'downloaded';
         const awaiting = !downloaded && p.awaitingDownload === true;
         const deleteAt = p.deleteAt ? until(p.deleteAt) : null;
+        // The deletion time is only sent in some states; remember it so the unseen texts are as long as the real ones.
+        if (p.deleteAt) session.deleteAt = p.deleteAt;
+        const when = session.deleteAt ? until(session.deleteAt) : null;
         const keepText = deleteAt
           ? `Wildbloom deletes the shared copy at ${deleteAt}, or sooner if you stop sharing. This computer needs to be on to delete it.`
           : 'Wildbloom deletes the shared copy after 24 hours, or sooner if you stop sharing. This computer needs to be on to delete it.';
         const needsOn = 'This computer needs to be on to delete it.';
+        const deleteWith = (at) => `Wildbloom deletes the shared copy once they've downloaded it, or ${at ? `by ${at}` : 'when it expires'}. ${needsOn}`;
+        const keepWith = (at) => (at ? `Wildbloom deletes the shared copy at ${at}, or sooner if you stop sharing. ${needsOn}` : keepText);
+        const deleteText = deleteWith(deleteAt);
+        const deletedText = 'The shared copy is deleted, so the link no longer works.';
+        const deletingText = `Wildbloom deletes the shared copy when it can reach your online node. ${needsOn}`;
+        const lines = {
+          waiting: 'Sent. Waiting for them to download it.',
+          ready: `They can download ${row.name} now.`,
+          downloaded: `Downloaded at ${timeOf(p.downloadedAt || Date.now() / 1000)}.`,
+        };
+        let statusArgs;
         let body;
         let stoppable = true;
         if (downloaded) {
-          statusLine(session, 'success', 'check', `Downloaded at ${timeOf(p.downloadedAt)}.`);
-          if (p.copy === 'deleted') { body = 'The shared copy is deleted, so the link no longer works.'; stoppable = false; }
-          else if (p.copy === 'deleting') { body = `Wildbloom deletes the shared copy when it can reach your online node. ${needsOn}`; stoppable = false; }
+          statusArgs = ['success', 'check', lines.downloaded];
+          if (p.copy === 'deleted') { body = deletedText; stoppable = false; }
+          else if (p.copy === 'deleting') { body = deletingText; stoppable = false; }
           else body = keepText;
         } else if (awaiting) {
-          statusLine(session, 'muted', 'pending', 'Sent. Waiting for them to download it.');
-          body = p.afterDownload === 'keep' ? keepText : `Wildbloom deletes the shared copy once they've downloaded it, or ${deleteAt ? `by ${deleteAt}` : 'when it expires'}. ${needsOn}`;
+          statusArgs = ['muted', 'pending', lines.waiting];
+          body = p.afterDownload === 'keep' ? keepText : deleteText;
         } else {
-          statusLine(session, 'success', 'check', `They can download ${row.name} now.`);
+          statusArgs = ['success', 'check', lines.ready];
           body = keepText;
         }
-        topNodes = [h('p', { class: 'share-body' }, body)];
+        statusLine(session, ...statusArgs, false, Object.values(lines));
+        // Every state's text is laid out in one cell, so Done never moves when a download arrives.
+        topNodes = [h('div', { class: 'share-stack' }, h('p', { class: 'share-body' }, body),
+          [deleteWith(when), keepWith(when), deletedText, deletingText].map((ghost) => h('p', { class: 'share-ghost-body', 'aria-hidden': 'true' }, ghost)))];
         const done = button('Done', 'primary', 'done', () => requestClose(session), true);
         const stop = button('Stop sharing…', 'secondary', 'stop', async (event) => {
           const yes = await confirmDialog({

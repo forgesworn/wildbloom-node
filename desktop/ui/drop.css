@@ -455,8 +455,13 @@ html[data-button-order="primary-left"] .dialog-actions { flex-wrap: wrap; justif
 .share-status .icon-slot { margin-top: 3px; }
 .share-status .share-text { min-width: 0; }
 .drop-scope .share-status .share-time { margin: 2px 0 0; margin-inline-start: auto; padding: 0; color: var(--muted); font-size: 0.875rem; font-weight: 400; font-variant-numeric: tabular-nums; white-space: nowrap; }
-/* Three lines, so Done keeps its place when the text changes on a download. */
-.share-body { min-height: calc(3 * 1.4em); }
+/* Each state's text shares one grid cell; the unseen ones only reserve the height. */
+.share-stack { display: grid; }
+.share-stack > * { grid-area: 1 / 1; }
+.share-ghost, .share-ghost-body { visibility: hidden; pointer-events: none; }
+.share-ghost { display: flex; align-items: flex-start; gap: 8px; font-weight: 600; }
+.share-ghost .ghost-icon { flex: none; width: 16px; }
+.share-ghost .share-text { min-width: 0; }
 .share-hint { color: var(--muted); font-size: 0.875rem; }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1660,17 +1660,21 @@ scenario('declutter 20 and 21: sent and downloaded copy', async () => {
 });
 
 scenario('declutter 22 and 23: no layout shift when the download arrives, and closing sends no cancel', async () => {
-  for (const os of ['mac', 'windows']) {
-    const page = await drop('good', { os });
+  // Whatever the font: wide sans metrics wrap the text differently, and the box must still not change.
+  const variants = [];
+  for (const os of ['mac', 'windows']) for (const font of [undefined, 'wide']) for (const width of [340, 400, 760]) variants.push({ os, font, width });
+  for (const { os, font, width } of variants) {
+    const page = await drop('good', { os, font, width, height: 600 });
     await ready(page);
     await openShare(page, { state: 'sent', deleteAt: nowSeconds + 86400, awaitingDownload: true, afterDownload: 'delete' });
+    await page.waitForTimeout(400); // the sheet's own entrance animation has to finish before measuring
     const slot = page.locator('dialog .share-slot');
     await slot.evaluate((n) => { n.dataset.same = 'yes'; });
     await page.locator('dialog [data-key="stop"]').focus();
     const before = await box(page, 'dialog [data-key="done"]');
     await emitShare(page, { state: 'downloaded', downloadedAt: nowSeconds, copy: 'deleted' });
     const after = await box(page, 'dialog [data-key="done"]');
-    for (const key of ['x', 'y', 'width', 'height']) near(before[key], after[key], 0.5, `${os} Done ${key}`);
+    for (const key of ['x', 'y', 'width', 'height']) near(before[key], after[key], 0.5, `${os} ${font || 'system'} ${width} Done ${key}`);
     assert.equal(await page.evaluate(() => document.activeElement.getAttribute('data-key')), 'done', 'focus moves to Done');
     assert.equal(await slot.getAttribute('data-same'), 'yes', 'the status slot is updated in place');
     assert.equal(await slot.getAttribute('role'), 'status');
