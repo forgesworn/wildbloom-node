@@ -29,7 +29,9 @@ if ! sudo pfctl -s info 2>/dev/null | grep -q 'Status: Enabled'; then
   echo "the packet filter did not enable" >&2
   exit 1
 fi
-if ! sudo pfctl -s rules 2>/dev/null | grep -qF "${rule/port 443/port = 443}"; then
+# Compare with the rule as pf itself prints it (it adds `inet`, `port =`).
+expected=$(printf '%s\n' "$rule" | pfctl -nvf - 2>/dev/null | grep '^block')
+if [ -z "$expected" ] || ! sudo pfctl -s rules 2>/dev/null | grep -qxF "$expected"; then
   echo "the UDP 443 rule is not loaded" >&2
   exit 1
 fi
