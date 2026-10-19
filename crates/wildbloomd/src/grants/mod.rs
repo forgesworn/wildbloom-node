@@ -1229,6 +1229,34 @@ async fn get_grant(
     }
 }
 
+/// What the core router's CORS layer adds to an actual (non-preflight)
+/// response.  shelter-kit's `router` wraps its routes in tower-http's
+/// `CorsLayer` with any origin and this expose list; with a wildcard origin and
+/// fixed method and header lists it sends no `Vary`.  The
+/// gate sits outside that layer, so a response it answers itself would reach a
+/// browser without them and read as a network error; it adds the same headers.
+/// A test pins them to the core's.  Preflight `OPTIONS` requests are reads and
+/// pass the gate untouched, so the core still answers them.
+const CORE_CORS_EXPOSE: &str = "content-length,content-range,content-type,etag,accept-ranges,content-disposition,x-content-type-options,x-reason";
+
+fn with_core_cors(mut response: Response) -> Response {
+    let headers = response.headers_mut();
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        HeaderValue::from_static("*"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_EXPOSE_HEADERS,
+        HeaderValue::from_static(CORE_CORS_EXPOSE),
+    );
+    response
+}
+
+/// A refusal the gate answers itself, with the core's CORS headers.
+fn gate_refusal(error: ApiError) -> Response {
+    with_core_cors(error.into_response())
+}
+
 /// Requests the gate lets through for an ended key: reads only.  `HEAD
 /// /upload` is BUD-06 write preflight, so it is not a read.
 fn is_read(method: &Method, path: &str) -> bool {
@@ -1288,6 +1316,7 @@ fn bounded_body(body: Body) -> Body {
 /// * A delegated key whose grant has ended can only read.
 /// * An active delegated key's writes are counted in flight and bounded, and
 ///   its deletes also release owner claims a move created.
+/// * Every response the gate answers itself carries the core's CORS headers.
 pub async fn gate(State(grants): State<Grants>, request: Request, next: Next) -> Response {
     if is_read(request.method(), request.uri().path()) {
         return next.run(request).await;
@@ -1306,7 +1335,7 @@ pub async fn gate(State(grants): State<Grants>, request: Request, next: Next) ->
         if request.method() == Method::PUT && (path == "/upload" || path == "/mirror") {
             // The event's `x` tags cover every hash the core could claim.
             if let Err(error) = grants.mark_owner_writes(&signer, hashes).await {
-                return error.into_response();
+                return gate_refusal(error);
             }
         }
         return next.run(request).await;
@@ -1320,7 +1349,7 @@ pub async fn gate(State(grants): State<Grants>, request: Request, next: Next) ->
         return next.run(request).await;
     }
     let Some(_flight) = grants.begin_write(&signer) else {
-        return ApiError::forbidden("the delegated storage grant has ended").into_response();
+        return gate_refusal(ApiError::forbidden("the delegated storage grant has ended"));
     };
     let is_delete = request.method() == Method::DELETE;
     let path = request.uri().path().to_owned();
@@ -1335,7 +1364,7 @@ pub async fn gate(State(grants): State<Grants>, request: Request, next: Next) ->
             .await
     {
         grants.inner.wake.notify_one();
-        return response;
+        return with_core_cors(response);
     }
     let (parts, body) = request.into_parts();
     let response = next

@@ -733,14 +733,14 @@ async fn end(
 /// body pacing.  `PUT /mirror` and everything else are refused.
 pub(super) async fn gate(grants: &Grants, signer: &str, request: Request, next: Next) -> Response {
     let Some(_flight) = grants.begin_request_write(signer) else {
-        return ApiError::forbidden(code::REQUEST_ENDED).into_response();
+        return super::gate_refusal(ApiError::forbidden(code::REQUEST_ENDED));
     };
     let method = request.method();
     let path = request.uri().path();
     let allowed = (path == "/upload" && (method == Method::PUT || method == Method::HEAD))
         || (method == Method::DELETE && super::blob_hash(path).is_some());
     if !allowed {
-        return ApiError::forbidden(code::UPLOAD_ONLY).into_response();
+        return super::gate_refusal(ApiError::forbidden(code::UPLOAD_ONLY));
     }
     let (parts, body) = request.into_parts();
     next.run(Request::from_parts(parts, super::bounded_body(body)))

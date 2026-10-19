@@ -317,7 +317,10 @@ A request grant ends at `until`, on `DELETE`, or when its device's grant ends.
 From that moment the gate refuses the key's uploads, preflights and deletes
 with `403 {"error":"request_ended"}`; reads still pass.  Every error also
 carries its code in the `X-Reason` header, which is all a refused
-`HEAD /upload` has, as a `HEAD` response has no body.  A revoked device's
+`HEAD /upload` has, as a `HEAD` response has no body.  The gate's refusals
+carry the same CORS headers as the core's responses (any origin, `X-Reason`
+exposed), so a browser can read them; CORS preflight is answered by the core
+as before.  A revoked device's
 request grants stay ended even if the same device is granted again.  The
 maintenance sweep (shortly after a `DELETE` or revocation, at start-up and
 every minute) then waits briefly for the key's in-flight writes, deletes every

@@ -798,6 +798,138 @@ async fn the_pairing_issuer_refuses_a_request_key() {
     assert_eq!(error(&body), "not_a_device");
 }
 
+fn put_upload(signer: &Keys, bytes: &[u8]) -> Request<Body> {
+    let hash = sha(bytes);
+    Request::builder()
+        .method(Method::PUT)
+        .uri("/upload")
+        .header(header::CONTENT_LENGTH, bytes.len())
+        .header("x-sha-256", &hash)
+        .header(header::AUTHORIZATION, bud11(signer, "upload", Some(&hash)))
+        .body(Body::from(bytes.to_vec()))
+        .unwrap()
+}
+
+/// Send as a browser on the `/send` page would, with an `Origin`.
+async fn from_page(node: &Node, mut request: Request<Body>) -> axum::response::Response {
+    request.headers_mut().insert(
+        header::ORIGIN,
+        header::HeaderValue::from_static("https://send.example"),
+    );
+    node.app.clone().oneshot(request).await.unwrap()
+}
+
+fn header_value(response: &axum::response::Response, name: header::HeaderName) -> Option<String> {
+    response
+        .headers()
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+}
+
+/// The CORS headers of an actual (non-preflight) response.
+fn cors_of(response: &axum::response::Response) -> (Option<String>, Option<String>, Vec<String>) {
+    (
+        header_value(response, header::ACCESS_CONTROL_ALLOW_ORIGIN),
+        header_value(response, header::ACCESS_CONTROL_EXPOSE_HEADERS),
+        response
+            .headers()
+            .get_all(header::VARY)
+            .iter()
+            .filter_map(|value| value.to_str().ok().map(str::to_owned))
+            .collect(),
+    )
+}
+
+#[tokio::test]
+async fn gate_refusals_carry_the_core_cors_headers_and_preflight_is_unchanged() {
+    let (_dir, node) = request_node().await;
+    grant_device(&node, &device_grant(MIB)).await;
+    let short = Grant {
+        device: 20,
+        recovery: 21,
+        bytes: MIB,
+        until_in: 100,
+    };
+    grant_device(&node, &short).await;
+    let key = request_key(1);
+    assert_eq!(
+        issue(&node, &keys(10), &key, 65_536, 100).await.0,
+        StatusCode::CREATED
+    );
+
+    // A refusal the core makes itself, for comparison.
+    let core = from_page(&node, put_upload(&request_key(99), b"stranger")).await;
+    assert_eq!(core.status(), StatusCode::UNAUTHORIZED);
+    let expected = cors_of(&core);
+    assert_eq!(expected.0.as_deref(), Some("*"));
+    assert!(
+        expected
+            .1
+            .as_deref()
+            .is_some_and(|names| names.split(',').any(|name| name == "x-reason"))
+    );
+
+    let check = |response: axum::response::Response, reason: &str| {
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{reason}");
+        assert_eq!(cors_of(&response), expected, "{reason}");
+        assert_eq!(
+            header_value(&response, header::HeaderName::from_static("x-reason")).as_deref(),
+            Some(reason)
+        );
+    };
+    check(
+        from_page(&node, mirror(&key, b"elsewhere")).await,
+        "upload_only",
+    );
+    node.advance(200);
+    check(
+        from_page(&node, put_upload(&key, b"late")).await,
+        "request_ended",
+    );
+    // A refused preflight has no body: the browser reads the code from X-Reason.
+    check(
+        from_page(&node, preflight(&key, b"late")).await,
+        "request_ended",
+    );
+    // The delegated-key refusal is answered by the gate too.
+    check(
+        from_page(&node, put_upload(&keys(20), b"late device file")).await,
+        "the delegated storage grant has ended",
+    );
+
+    // CORS preflight is a read: it passes the gate and the core answers it.
+    let options = Request::builder()
+        .method(Method::OPTIONS)
+        .uri("/upload")
+        .header(header::ORIGIN, "https://send.example")
+        .header(header::ACCESS_CONTROL_REQUEST_METHOD, "PUT")
+        .header(
+            header::ACCESS_CONTROL_REQUEST_HEADERS,
+            "authorization,content-type,x-sha-256",
+        )
+        .body(Body::empty())
+        .unwrap();
+    let response = node.app.clone().oneshot(options).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        header_value(&response, header::ACCESS_CONTROL_ALLOW_ORIGIN).as_deref(),
+        Some("*")
+    );
+    let methods = header_value(&response, header::ACCESS_CONTROL_ALLOW_METHODS).unwrap();
+    assert!(
+        methods.split(',').any(|method| method == "PUT"),
+        "{methods}"
+    );
+    let headers = header_value(&response, header::ACCESS_CONTROL_ALLOW_HEADERS).unwrap();
+    for name in ["authorization", "content-type", "x-sha-256"] {
+        assert!(
+            headers.split(',').any(|allowed| allowed == name),
+            "{headers}"
+        );
+    }
+}
+
 // Shared vectors.
 
 #[derive(Deserialize)]
