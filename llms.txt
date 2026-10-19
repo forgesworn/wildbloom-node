@@ -92,9 +92,6 @@ Key CLI flags (each also has a `WILDBLOOM_*` environment variable; see
   `--pairing-issuer`.
 - `--pairing-operator-token-file <PATH>`: private file holding the pairing
   operator token.
-- `--request-grants`: let granted devices issue request grants on
-  `/request/v1/upload-grants` (one file, at most 24 hours); needs
-  `--device-grants`.
 - `--max-concurrent-writes <N>`: concurrent upload and mirror streams, default 4.
 - `--repair-interval <SECONDS>`: integrity scan and repair interval, default
   3600; 0 disables repair.

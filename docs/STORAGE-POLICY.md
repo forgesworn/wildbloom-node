@@ -231,40 +231,6 @@ Until then, two facts are load-bearing: friend claims are not evicted, and the
 `owner`-tier move uses a mirror-style claim so it never lifts an operator
 tombstone.
 
-## Request grants
-
-[Request grants](PROTOCOL.md#request-grants) let a granted device give a fresh
-key the right to upload one file's bytes for at most 24 hours, so a person the
-owner asks can send a file to the owner's Drop.  They are composed like
-delegated claims, with one deliberate difference at the end:
-
-- While a request grant is active, its key is a core friend grant whose
-  ceiling is the grant's `bytes`, with the far-future core expiry.  The
-  ceiling, streaming bounds and deduplication charging are core-enforced.  The
-  request blob is held under that key, so it is temporary capacity the
-  operator provides, bounded by about 258 MiB times 3 open requests per device.
-  A device is refused a request grant when its own ceiling, less what it holds
-  and its open request grants, could not keep the file once Drop adds it.
-- A request grant ends at `until`, on `DELETE` by its device, or when that
-  device's grant ends.  The gate refuses the key's writes at once.
-- **Its claims are deleted, not moved.**  The sweep deletes every claim the
-  ended key holds (except any under a separate paid allowance, which issuance
-  refuses anyway) and only then drops the key from the core's trusted set.  A
-  blob another key also claims keeps those claims and its bytes.  This departs
-  from owner-delegated claims on purpose: a request blob is a stranger's
-  transient bytes the owner never took in, and should not stay at owner
-  retention.  Drop normally deletes it itself as soon as it has added the file.
-- Issuance refuses a key that holds any claim or paid allowance, so the
-  deletion can only ever remove what the request grant let in.
-
-Records are kept in `request-grants.sqlite3` beside `device-grants.sqlite3` and
-honoured whenever it exists, even with `--request-grants` turned off.  Back it
-up with the store: if it is lost, the next start knows nothing of those keys,
-their claims stay demoted to evictable `guest` and are not deleted.  Rolling
-back to a binary without request grants demotes live request claims to `guest`
-in the same way; when a binary with them starts again, the sweep still deletes
-every claim of an ended request key, whatever its tier.
-
 ## Shared-core boundary
 
 The reusable Rust core owns:
