@@ -1,0 +1,563 @@
+{
+  "profile": "wildbloom-direct/1",
+  "syntheticOnly": true,
+  "generatedBy": "Python json with sorted keys, compact separators and literal non-ASCII; hashlib SHA-256; FSWNENC2 length rule",
+  "exchangeProfile": "foregather-exchange/1",
+  "session": {
+    "namespace": "wildbloom.drop",
+    "purpose": "send"
+  },
+  "iceAllowlist": [
+    "stun:turn.example.net:3478",
+    "turn:turn.example.net:3478?transport=udp",
+    "turn:turn.example.net:3478?transport=tcp",
+    "turns:turn.example.net:5349?transport=tcp"
+  ],
+  "limits": {
+    "messageBytes": 16379,
+    "messagesPerSide": 8,
+    "restarts": 5,
+    "sdpBytes": 8000,
+    "iceServers": 4,
+    "urlsPerServer": 4,
+    "urlBytes": 256,
+    "credentialBytes": 256,
+    "maxPlaintextBytes": 250000000,
+    "frameBytes": 65536,
+    "minFrameBytes": 16384,
+    "unacknowledgedBytes": 8388608,
+    "ackEveryBytes": 1048576
+  },
+  "messages": [
+    {
+      "name": "invite",
+      "from": "drop",
+      "index": 0,
+      "text": "{\"dir\":\"to-drop\",\"event\":\"invite\",\"hide\":true,\"ice\":[{\"credential\":\"c3ludGhldGljLWNyZWRlbnRpYWw=\",\"urls\":[\"stun:turn.example.net:3478\",\"turn:turn.example.net:3478?transport=udp\",\"turns:turn.example.net:5349?transport=tcp\"],\"username\":\"1800003600:dGVzdC1sYWJlbA\"}],\"id\":\"AAECAwQFBgcICQoLDA0ODw\",\"max\":250000000,\"v\":1}",
+      "sha256": "e706007e06fb6f4b053968d54383c793d62973720539e59c3bdbeca0d5e62922"
+    },
+    {
+      "name": "manifest",
+      "from": "page",
+      "index": 0,
+      "text": "{\"event\":\"manifest\",\"name\":\"Café holiday.mp4\",\"size\":120000000,\"type\":\"video/mp4\",\"v\":1}",
+      "sha256": "83501c90e1f48e30b89ffa3557c0d8e12d2c785850227321b48e801c2169fad1"
+    },
+    {
+      "name": "accept",
+      "from": "drop",
+      "index": 1,
+      "text": "{\"event\":\"accept\",\"sdp\":\"v=0\\r\\no=- 1111111111111111111 2 IN IP4 127.0.0.1\\r\\ns=-\\r\\nt=0 0\\r\\na=group:BUNDLE 0\\r\\na=msid-semantic: WMS\\r\\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\\r\\nc=IN IP4 0.0.0.0\\r\\na=candidate:1 1 udp 41885439 198.51.100.20 50000 typ relay raddr 0.0.0.0 rport 0 generation 0\\r\\na=end-of-candidates\\r\\na=ice-ufrag:dr0p\\r\\na=ice-pwd:synthetic-drop-ice-pwd-01\\r\\na=fingerprint:sha-256 10:11:12:13:14:15:16:17:18:19:1A:1B:1C:1D:1E:1F:20:21:22:23:24:25:26:27:28:29:2A:2B:2C:2D:2E:2F\\r\\na=setup:actpass\\r\\na=mid:0\\r\\na=sctp-port:5000\\r\\na=max-message-size:262144\\r\\n\",\"v\":1}",
+      "sha256": "fc913069f36197feb6bbae933c8875958a3580098d7a3b37b95fab080aa7682c"
+    },
+    {
+      "name": "answer",
+      "from": "page",
+      "index": 1,
+      "text": "{\"event\":\"answer\",\"key\":\"wbk1_ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8\",\"sdp\":\"v=0\\r\\no=- 2222222222222222222 2 IN IP4 127.0.0.1\\r\\ns=-\\r\\nt=0 0\\r\\na=group:BUNDLE 0\\r\\na=msid-semantic: WMS\\r\\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\\r\\nc=IN IP4 0.0.0.0\\r\\na=candidate:2 1 udp 2122260223 4b6f0a11-2b1d-4c35-9e7c-7d0f3e1a6c35.local 54321 typ host generation 0\\r\\na=candidate:3 1 udp 1686052607 203.0.113.7 54321 typ srflx raddr 0.0.0.0 rport 0 generation 0\\r\\na=candidate:4 1 udp 41885439 198.51.100.20 50002 typ relay raddr 203.0.113.7 rport 54321 generation 0\\r\\na=end-of-candidates\\r\\na=ice-ufrag:pAg3\\r\\na=ice-pwd:synthetic-page-ice-pwd-01\\r\\na=fingerprint:sha-256 40:41:42:43:44:45:46:47:48:49:4A:4B:4C:4D:4E:4F:50:51:52:53:54:55:56:57:58:59:5A:5B:5C:5D:5E:5F\\r\\na=setup:active\\r\\na=mid:0\\r\\na=sctp-port:5000\\r\\na=max-message-size:262144\\r\\n\",\"v\":1}",
+      "sha256": "16d14117c99d761f2e995fabfb10065e47de6614be0e443a5e47446028d3a1fa"
+    },
+    {
+      "name": "restart",
+      "from": "drop",
+      "index": 2,
+      "text": "{\"event\":\"restart\",\"sdp\":\"v=0\\r\\no=- 1111111111111111111 2 IN IP4 127.0.0.1\\r\\ns=-\\r\\nt=0 0\\r\\na=group:BUNDLE 0\\r\\na=msid-semantic: WMS\\r\\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\\r\\nc=IN IP4 0.0.0.0\\r\\na=candidate:1 1 udp 41885439 198.51.100.20 50004 typ relay raddr 0.0.0.0 rport 0 generation 0\\r\\na=end-of-candidates\\r\\na=ice-ufrag:dr1p\\r\\na=ice-pwd:synthetic-drop-ice-pwd-02\\r\\na=fingerprint:sha-256 10:11:12:13:14:15:16:17:18:19:1A:1B:1C:1D:1E:1F:20:21:22:23:24:25:26:27:28:29:2A:2B:2C:2D:2E:2F\\r\\na=setup:actpass\\r\\na=mid:0\\r\\na=sctp-port:5000\\r\\na=max-message-size:262144\\r\\n\",\"v\":1}",
+      "sha256": "96ff93b216d8ba09fb7ff97ac7dcf0075b5b73a44abaafdc3acbfe1d452a098b"
+    },
+    {
+      "name": "restart-answer",
+      "from": "page",
+      "index": 2,
+      "text": "{\"event\":\"restart-answer\",\"sdp\":\"v=0\\r\\no=- 2222222222222222222 2 IN IP4 127.0.0.1\\r\\ns=-\\r\\nt=0 0\\r\\na=group:BUNDLE 0\\r\\na=msid-semantic: WMS\\r\\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\\r\\nc=IN IP4 0.0.0.0\\r\\na=candidate:4 1 udp 41885439 198.51.100.20 50006 typ relay raddr 203.0.113.7 rport 54321 generation 0\\r\\na=end-of-candidates\\r\\na=ice-ufrag:pAg4\\r\\na=ice-pwd:synthetic-page-ice-pwd-02\\r\\na=fingerprint:sha-256 40:41:42:43:44:45:46:47:48:49:4A:4B:4C:4D:4E:4F:50:51:52:53:54:55:56:57:58:59:5A:5B:5C:5D:5E:5F\\r\\na=setup:active\\r\\na=mid:0\\r\\na=sctp-port:5000\\r\\na=max-message-size:262144\\r\\n\",\"v\":1}",
+      "sha256": "182f2ef206d2ef067ac71ba00247ea50ec77be8c022ba5921a5bb5ded29af042"
+    },
+    {
+      "name": "decline instead of accept",
+      "from": "drop",
+      "index": 1,
+      "text": "{\"event\":\"decline\",\"v\":1}",
+      "sha256": "ee60223a53fb18dff46b98538e2a38466eb3365881b7d55b435e5e2adee6d9a7"
+    },
+    {
+      "name": "page stops instead of a manifest",
+      "from": "page",
+      "index": 0,
+      "text": "{\"event\":\"stop\",\"reason\":\"unsupported\",\"v\":1}",
+      "sha256": "9b629c098546b5b6cbdced8c4d1c643c6410c6548e14d7f7201c7c336cc90c75"
+    },
+    {
+      "name": "page stops during the transfer",
+      "from": "page",
+      "index": 3,
+      "text": "{\"event\":\"stop\",\"reason\":\"cancelled\",\"v\":1}",
+      "sha256": "1541fe2c2d5e82460c0d6e1d1844791daefbfc78468bddcaf51941e52a8b64f1"
+    },
+    {
+      "name": "drop stops after a failure",
+      "from": "drop",
+      "index": 3,
+      "text": "{\"event\":\"stop\",\"reason\":\"failed\",\"v\":1}",
+      "sha256": "8e820ef6720dd59e9af399b986be7036cbb0b1d1f3745249d012a91fc0183b21"
+    },
+    {
+      "name": "invite, address not hidden, two servers",
+      "from": "drop",
+      "index": 0,
+      "text": "{\"dir\":\"to-drop\",\"event\":\"invite\",\"hide\":false,\"ice\":[{\"credential\":\"c3ludGhldGljLWNyZWRlbnRpYWw=\",\"urls\":[\"stun:turn.example.net:3478\",\"turn:turn.example.net:3478?transport=udp\",\"turns:turn.example.net:5349?transport=tcp\"],\"username\":\"1800003600:dGVzdC1sYWJlbA\"},{\"credential\":\"b3RoZXItY3JlZGVudGlhbA==\",\"urls\":[\"turn:turn.example.net:3478?transport=tcp\"],\"username\":\"1800003600:b3RoZXI\"}],\"id\":\"AAECAwQFBgcICQoLDA0ODw\",\"max\":1,\"v\":1}",
+      "sha256": "e898696e4753df739cffbfaa581b5fa07f2dff44be7847e3cb6526042047139f"
+    },
+    {
+      "name": "empty file",
+      "from": "page",
+      "index": 0,
+      "text": "{\"event\":\"manifest\",\"name\":\"empty.txt\",\"size\":0,\"type\":\"text/plain\",\"v\":1}",
+      "sha256": "a0ad6ab477eea4dd28cdfdbfa7c1ee921f1d5b2166f471835b42bc0e9fc01e24"
+    }
+  ],
+  "refusals": [
+    {
+      "name": "members out of order",
+      "from": "drop",
+      "index": 0,
+      "text": "{\"event\":\"invite\",\"dir\":\"to-drop\",\"hide\":true,\"ice\":[{\"credential\":\"c3ludGhldGljLWNyZWRlbnRpYWw=\",\"urls\":[\"stun:turn.example.net:3478\",\"turn:turn.example.net:3478?transport=udp\",\"turns:turn.example.net:5349?transport=tcp\"],\"username\":\"1800003600:dGVzdC1sYWJlbA\"}],\"id\":\"AAECAwQFBgcICQoLDA0ODw\",\"max\":250000000,\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "whitespace",
+      "from": "drop",
+      "index": 0,
+      "text": "{\"dir\": \"to-drop\",\"event\":\"invite\",\"hide\":true,\"ice\":[{\"credential\":\"c3ludGhldGljLWNyZWRlbnRpYWw=\",\"urls\":[\"stun:turn.example.net:3478\",\"turn:turn.example.net:3478?transport=udp\",\"turns:turn.example.net:5349?transport=tcp\"],\"username\":\"1800003600:dGVzdC1sYWJlbA\"}],\"id\":\"AAECAwQFBgcICQoLDA0ODw\",\"max\":250000000,\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "unknown member",
+      "from": "drop",
+      "index": 0,
+      "text": "{\"dir\":\"to-drop\",\"event\":\"invite\",\"hide\":true,\"ice\":[{\"credential\":\"c3ludGhldGljLWNyZWRlbnRpYWw=\",\"urls\":[\"stun:turn.example.net:3478\",\"turn:turn.example.net:3478?transport=udp\",\"turns:turn.example.net:5349?transport=tcp\"],\"username\":\"1800003600:dGVzdC1sYWJlbA\"}],\"id\":\"AAECAwQFBgcICQoLDA0ODw\",\"max\":250000000,\"note\":\"x\",\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "missing member",
+      "from": "drop",
+      "index": 0,
+      "text": "{\"dir\":\"to-drop\",\"event\":\"invite\",\"ice\":[{\"credential\":\"c3ludGhldGljLWNyZWRlbnRpYWw=\",\"urls\":[\"stun:turn.example.net:3478\",\"turn:turn.example.net:3478?transport=udp\",\"turns:turn.example.net:5349?transport=tcp\"],\"username\":\"1800003600:dGVzdC1sYWJlbA\"}],\"id\":\"AAECAwQFBgcICQoLDA0ODw\",\"max\":250000000,\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "duplicate member",
+      "from": "drop",
+      "index": 0,
+      "text": "{\"dir\":\"to-drop\",\"event\":\"invite\",\"hide\":true,\"ice\":[{\"credential\":\"c3ludGhldGljLWNyZWRlbnRpYWw=\",\"urls\":[\"stun:turn.example.net:3478\",\"turn:turn.example.net:3478?transport=udp\",\"turns:turn.example.net:5349?transport=tcp\"],\"username\":\"1800003600:dGVzdC1sYWJlbA\"}],\"id\":\"AAECAwQFBgcICQoLDA0ODw\",\"max\":250000000,\"v\":1,\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "newer version",
+      "from": "drop",
+      "index": 0,
+      "text": "{\"dir\":\"to-drop\",\"event\":\"invite\",\"hide\":true,\"ice\":[{\"credential\":\"c3ludGhldGljLWNyZWRlbnRpYWw=\",\"urls\":[\"stun:turn.example.net:3478\",\"turn:turn.example.net:3478?transport=udp\",\"turns:turn.example.net:5349?transport=tcp\"],\"username\":\"1800003600:dGVzdC1sYWJlbA\"}],\"id\":\"AAECAwQFBgcICQoLDA0ODw\",\"max\":250000000,\"v\":2}",
+      "stopReason": "unsupported"
+    },
+    {
+      "name": "version as a decimal",
+      "from": "drop",
+      "index": 0,
+      "text": "{\"dir\":\"to-drop\",\"event\":\"invite\",\"hide\":true,\"ice\":[{\"credential\":\"c3ludGhldGljLWNyZWRlbnRpYWw=\",\"urls\":[\"stun:turn.example.net:3478\",\"turn:turn.example.net:3478?transport=udp\",\"turns:turn.example.net:5349?transport=tcp\"],\"username\":\"1800003600:dGVzdC1sYWJlbA\"}],\"id\":\"AAECAwQFBgcICQoLDA0ODw\",\"max\":250000000,\"v\":1.0}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "direction this page does not implement",
+      "from": "drop",
+      "index": 0,
+      "text": "{\"dir\":\"from-drop\",\"event\":\"invite\",\"hide\":true,\"ice\":[{\"credential\":\"c3ludGhldGljLWNyZWRlbnRpYWw=\",\"urls\":[\"stun:turn.example.net:3478\",\"turn:turn.example.net:3478?transport=udp\",\"turns:turn.example.net:5349?transport=tcp\"],\"username\":\"1800003600:dGVzdC1sYWJlbA\"}],\"id\":\"AAECAwQFBgcICQoLDA0ODw\",\"max\":250000000,\"v\":1}",
+      "stopReason": "unsupported"
+    },
+    {
+      "name": "unknown direction",
+      "from": "drop",
+      "index": 0,
+      "text": "{\"dir\":\"sideways\",\"event\":\"invite\",\"hide\":true,\"ice\":[{\"credential\":\"c3ludGhldGljLWNyZWRlbnRpYWw=\",\"urls\":[\"stun:turn.example.net:3478\",\"turn:turn.example.net:3478?transport=udp\",\"turns:turn.example.net:5349?transport=tcp\"],\"username\":\"1800003600:dGVzdC1sYWJlbA\"}],\"id\":\"AAECAwQFBgcICQoLDA0ODw\",\"max\":250000000,\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "ICE server not on the allowlist",
+      "from": "drop",
+      "index": 0,
+      "text": "{\"dir\":\"to-drop\",\"event\":\"invite\",\"hide\":true,\"ice\":[{\"credential\":\"c3ludGhldGljLWNyZWRlbnRpYWw=\",\"urls\":[\"stun:turn.example.net:3478\",\"turn:turn.example.org:3478?transport=udp\",\"turns:turn.example.net:5349?transport=tcp\"],\"username\":\"1800003600:dGVzdC1sYWJlbA\"}],\"id\":\"AAECAwQFBgcICQoLDA0ODw\",\"max\":250000000,\"v\":1}",
+      "stopReason": "unsupported"
+    },
+    {
+      "name": "ICE URL differing only in case",
+      "from": "drop",
+      "index": 0,
+      "text": "{\"dir\":\"to-drop\",\"event\":\"invite\",\"hide\":true,\"ice\":[{\"credential\":\"c3ludGhldGljLWNyZWRlbnRpYWw=\",\"urls\":[\"stun:turn.example.net:3478\",\"turn:turn.example.net:3478?transport=udp\",\"turns:TURN.example.net:5349?transport=tcp\"],\"username\":\"1800003600:dGVzdC1sYWJlbA\"}],\"id\":\"AAECAwQFBgcICQoLDA0ODw\",\"max\":250000000,\"v\":1}",
+      "stopReason": "unsupported"
+    },
+    {
+      "name": "no TURN URL",
+      "from": "drop",
+      "index": 0,
+      "text": "{\"dir\":\"to-drop\",\"event\":\"invite\",\"hide\":true,\"ice\":[{\"credential\":\"c3ludGhldGljLWNyZWRlbnRpYWw=\",\"urls\":[\"stun:turn.example.net:3478\"],\"username\":\"1800003600:dGVzdC1sYWJlbA\"}],\"id\":\"AAECAwQFBgcICQoLDA0ODw\",\"max\":250000000,\"v\":1}",
+      "stopReason": "unsupported"
+    },
+    {
+      "name": "no ICE servers",
+      "from": "drop",
+      "index": 0,
+      "text": "{\"dir\":\"to-drop\",\"event\":\"invite\",\"hide\":true,\"ice\":[],\"id\":\"AAECAwQFBgcICQoLDA0ODw\",\"max\":250000000,\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "empty credential",
+      "from": "drop",
+      "index": 0,
+      "text": "{\"dir\":\"to-drop\",\"event\":\"invite\",\"hide\":true,\"ice\":[{\"credential\":\"\",\"urls\":[\"stun:turn.example.net:3478\",\"turn:turn.example.net:3478?transport=udp\",\"turns:turn.example.net:5349?transport=tcp\"],\"username\":\"1800003600:dGVzdC1sYWJlbA\"}],\"id\":\"AAECAwQFBgcICQoLDA0ODw\",\"max\":250000000,\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "identifier of 15 bytes",
+      "from": "drop",
+      "index": 0,
+      "text": "{\"dir\":\"to-drop\",\"event\":\"invite\",\"hide\":true,\"ice\":[{\"credential\":\"c3ludGhldGljLWNyZWRlbnRpYWw=\",\"urls\":[\"stun:turn.example.net:3478\",\"turn:turn.example.net:3478?transport=udp\",\"turns:turn.example.net:5349?transport=tcp\"],\"username\":\"1800003600:dGVzdC1sYWJlbA\"}],\"id\":\"AAECAwQFBgcICQoLDA0O\",\"max\":250000000,\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "identifier not canonical base64url",
+      "from": "drop",
+      "index": 0,
+      "text": "{\"dir\":\"to-drop\",\"event\":\"invite\",\"hide\":true,\"ice\":[{\"credential\":\"c3ludGhldGljLWNyZWRlbnRpYWw=\",\"urls\":[\"stun:turn.example.net:3478\",\"turn:turn.example.net:3478?transport=udp\",\"turns:turn.example.net:5349?transport=tcp\"],\"username\":\"1800003600:dGVzdC1sYWJlbA\"}],\"id\":\"AAECAwQFBgcICQoLDA0ODx\",\"max\":250000000,\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "maximum above 250,000,000",
+      "from": "drop",
+      "index": 0,
+      "text": "{\"dir\":\"to-drop\",\"event\":\"invite\",\"hide\":true,\"ice\":[{\"credential\":\"c3ludGhldGljLWNyZWRlbnRpYWw=\",\"urls\":[\"stun:turn.example.net:3478\",\"turn:turn.example.net:3478?transport=udp\",\"turns:turn.example.net:5349?transport=tcp\"],\"username\":\"1800003600:dGVzdC1sYWJlbA\"}],\"id\":\"AAECAwQFBgcICQoLDA0ODw\",\"max\":250000001,\"v\":1}",
+      "stopReason": "unsupported"
+    },
+    {
+      "name": "maximum of zero",
+      "from": "drop",
+      "index": 0,
+      "text": "{\"dir\":\"to-drop\",\"event\":\"invite\",\"hide\":true,\"ice\":[{\"credential\":\"c3ludGhldGljLWNyZWRlbnRpYWw=\",\"urls\":[\"stun:turn.example.net:3478\",\"turn:turn.example.net:3478?transport=udp\",\"turns:turn.example.net:5349?transport=tcp\"],\"username\":\"1800003600:dGVzdC1sYWJlbA\"}],\"id\":\"AAECAwQFBgcICQoLDA0ODw\",\"max\":0,\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "maximum in exponent form",
+      "from": "drop",
+      "index": 0,
+      "text": "{\"dir\":\"to-drop\",\"event\":\"invite\",\"hide\":true,\"ice\":[{\"credential\":\"c3ludGhldGljLWNyZWRlbnRpYWw=\",\"urls\":[\"stun:turn.example.net:3478\",\"turn:turn.example.net:3478?transport=udp\",\"turns:turn.example.net:5349?transport=tcp\"],\"username\":\"1800003600:dGVzdC1sYWJlbA\"}],\"id\":\"AAECAwQFBgcICQoLDA0ODw\",\"max\":2.5e8,\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "size above the maximum",
+      "from": "page",
+      "index": 0,
+      "text": "{\"event\":\"manifest\",\"name\":\"Café holiday.mp4\",\"size\":250000001,\"type\":\"video/mp4\",\"v\":1}",
+      "stopReason": "unsupported"
+    },
+    {
+      "name": "negative size",
+      "from": "page",
+      "index": 0,
+      "text": "{\"event\":\"manifest\",\"name\":\"Café holiday.mp4\",\"size\":-1,\"type\":\"video/mp4\",\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "size beyond the safe integer range",
+      "from": "page",
+      "index": 0,
+      "text": "{\"event\":\"manifest\",\"name\":\"Café holiday.mp4\",\"size\":9007199254740993,\"type\":\"video/mp4\",\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "name with a path",
+      "from": "page",
+      "index": 0,
+      "text": "{\"event\":\"manifest\",\"name\":\"../holiday.mp4\",\"size\":120000000,\"type\":\"video/mp4\",\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "name with a control character",
+      "from": "page",
+      "index": 0,
+      "text": "{\"event\":\"manifest\",\"name\":\"holiday\\u0007.mp4\",\"size\":120000000,\"type\":\"video/mp4\",\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "name with an escaped non-ASCII character",
+      "from": "page",
+      "index": 0,
+      "text": "{\"event\":\"manifest\",\"name\":\"Caf\\u00e9 holiday.mp4\",\"size\":120000000,\"type\":\"video/mp4\",\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "name not in NFC",
+      "from": "page",
+      "index": 0,
+      "text": "{\"event\":\"manifest\",\"name\":\"Café holiday.mp4\",\"size\":120000000,\"type\":\"video/mp4\",\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "name with a lone surrogate",
+      "from": "page",
+      "index": 0,
+      "text": "{\"event\":\"manifest\",\"name\":\"Caf\\ud800 holiday.mp4\",\"size\":120000000,\"type\":\"video/mp4\",\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "media type not lower case",
+      "from": "page",
+      "index": 0,
+      "text": "{\"event\":\"manifest\",\"name\":\"Café holiday.mp4\",\"size\":120000000,\"type\":\"Video/MP4\",\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "empty media type",
+      "from": "page",
+      "index": 0,
+      "text": "{\"event\":\"manifest\",\"name\":\"Café holiday.mp4\",\"size\":120000000,\"type\":\"\",\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "SDP offering audio",
+      "from": "drop",
+      "index": 1,
+      "text": "{\"event\":\"accept\",\"sdp\":\"v=0\\r\\no=- 1111111111111111111 2 IN IP4 127.0.0.1\\r\\ns=-\\r\\nt=0 0\\r\\na=group:BUNDLE 0\\r\\na=msid-semantic: WMS\\r\\nm=audio 9 UDP/TLS/RTP/SAVPF 111\\r\\nc=IN IP4 0.0.0.0\\r\\na=candidate:1 1 udp 41885439 198.51.100.20 50000 typ relay raddr 0.0.0.0 rport 0 generation 0\\r\\na=end-of-candidates\\r\\na=ice-ufrag:dr0p\\r\\na=ice-pwd:synthetic-drop-ice-pwd-01\\r\\na=fingerprint:sha-256 10:11:12:13:14:15:16:17:18:19:1A:1B:1C:1D:1E:1F:20:21:22:23:24:25:26:27:28:29:2A:2B:2C:2D:2E:2F\\r\\na=setup:actpass\\r\\na=mid:0\\r\\na=sctp-port:5000\\r\\na=max-message-size:262144\\r\\n\",\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "SDP with a second media section",
+      "from": "drop",
+      "index": 1,
+      "text": "{\"event\":\"accept\",\"sdp\":\"v=0\\r\\no=- 1111111111111111111 2 IN IP4 127.0.0.1\\r\\ns=-\\r\\nt=0 0\\r\\na=group:BUNDLE 0\\r\\na=msid-semantic: WMS\\r\\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\\r\\nc=IN IP4 0.0.0.0\\r\\na=candidate:1 1 udp 41885439 198.51.100.20 50000 typ relay raddr 0.0.0.0 rport 0 generation 0\\r\\na=end-of-candidates\\r\\na=ice-ufrag:dr0p\\r\\na=ice-pwd:synthetic-drop-ice-pwd-01\\r\\na=fingerprint:sha-256 10:11:12:13:14:15:16:17:18:19:1A:1B:1C:1D:1E:1F:20:21:22:23:24:25:26:27:28:29:2A:2B:2C:2D:2E:2F\\r\\na=setup:actpass\\r\\na=mid:0\\r\\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\\r\\na=sctp-port:5000\\r\\na=max-message-size:262144\\r\\n\",\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "SDP without a SHA-256 fingerprint",
+      "from": "drop",
+      "index": 1,
+      "text": "{\"event\":\"accept\",\"sdp\":\"v=0\\r\\no=- 1111111111111111111 2 IN IP4 127.0.0.1\\r\\ns=-\\r\\nt=0 0\\r\\na=group:BUNDLE 0\\r\\na=msid-semantic: WMS\\r\\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\\r\\nc=IN IP4 0.0.0.0\\r\\na=candidate:1 1 udp 41885439 198.51.100.20 50000 typ relay raddr 0.0.0.0 rport 0 generation 0\\r\\na=end-of-candidates\\r\\na=ice-ufrag:dr0p\\r\\na=ice-pwd:synthetic-drop-ice-pwd-01\\r\\na=fingerprint:sha-1 10:11:12:13:14:15:16:17:18:19:1A:1B:1C:1D:1E:1F:20:21:22:23:24:25:26:27:28:29:2A:2B:2C:2D:2E:2F\\r\\na=setup:actpass\\r\\na=mid:0\\r\\na=sctp-port:5000\\r\\na=max-message-size:262144\\r\\n\",\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "SDP over 8,000 bytes",
+      "from": "drop",
+      "index": 1,
+      "text": "{\"event\":\"accept\",\"sdp\":\"v=0\\r\\no=- 1111111111111111111 2 IN IP4 127.0.0.1\\r\\ns=-\\r\\nt=0 0\\r\\na=group:BUNDLE 0\\r\\na=msid-semantic: WMS\\r\\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\\r\\nc=IN IP4 0.0.0.0\\r\\na=candidate:1 1 udp 41885439 198.51.100.20 50000 typ relay raddr 0.0.0.0 rport 0 generation 0\\r\\na=end-of-candidates\\r\\na=ice-ufrag:dr0p\\r\\na=ice-pwd:synthetic-drop-ice-pwd-01\\r\\na=fingerprint:sha-256 10:11:12:13:14:15:16:17:18:19:1A:1B:1C:1D:1E:1F:20:21:22:23:24:25:26:27:28:29:2A:2B:2C:2D:2E:2F\\r\\na=setup:actpass\\r\\na=mid:0\\r\\na=sctp-port:5000\\r\\na=max-message-size:262144\\r\\na=x-pad:pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\\r\\n\",\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "SDP with bare line feeds",
+      "from": "drop",
+      "index": 1,
+      "text": "{\"event\":\"accept\",\"sdp\":\"v=0\\no=- 1111111111111111111 2 IN IP4 127.0.0.1\\ns=-\\nt=0 0\\na=group:BUNDLE 0\\na=msid-semantic: WMS\\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\\nc=IN IP4 0.0.0.0\\na=candidate:1 1 udp 41885439 198.51.100.20 50000 typ relay raddr 0.0.0.0 rport 0 generation 0\\na=end-of-candidates\\na=ice-ufrag:dr0p\\na=ice-pwd:synthetic-drop-ice-pwd-01\\na=fingerprint:sha-256 10:11:12:13:14:15:16:17:18:19:1A:1B:1C:1D:1E:1F:20:21:22:23:24:25:26:27:28:29:2A:2B:2C:2D:2E:2F\\na=setup:actpass\\na=mid:0\\na=sctp-port:5000\\na=max-message-size:262144\\n\",\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "key one character short",
+      "from": "page",
+      "index": 1,
+      "text": "{\"event\":\"answer\",\"key\":\"wbk1_ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj\",\"sdp\":\"v=0\\r\\no=- 2222222222222222222 2 IN IP4 127.0.0.1\\r\\ns=-\\r\\nt=0 0\\r\\na=group:BUNDLE 0\\r\\na=msid-semantic: WMS\\r\\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\\r\\nc=IN IP4 0.0.0.0\\r\\na=candidate:2 1 udp 2122260223 4b6f0a11-2b1d-4c35-9e7c-7d0f3e1a6c35.local 54321 typ host generation 0\\r\\na=candidate:3 1 udp 1686052607 203.0.113.7 54321 typ srflx raddr 0.0.0.0 rport 0 generation 0\\r\\na=candidate:4 1 udp 41885439 198.51.100.20 50002 typ relay raddr 203.0.113.7 rport 54321 generation 0\\r\\na=end-of-candidates\\r\\na=ice-ufrag:pAg3\\r\\na=ice-pwd:synthetic-page-ice-pwd-01\\r\\na=fingerprint:sha-256 40:41:42:43:44:45:46:47:48:49:4A:4B:4C:4D:4E:4F:50:51:52:53:54:55:56:57:58:59:5A:5B:5C:5D:5E:5F\\r\\na=setup:active\\r\\na=mid:0\\r\\na=sctp-port:5000\\r\\na=max-message-size:262144\\r\\n\",\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "key with another prefix",
+      "from": "page",
+      "index": 1,
+      "text": "{\"event\":\"answer\",\"key\":\"wbk2_ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8\",\"sdp\":\"v=0\\r\\no=- 2222222222222222222 2 IN IP4 127.0.0.1\\r\\ns=-\\r\\nt=0 0\\r\\na=group:BUNDLE 0\\r\\na=msid-semantic: WMS\\r\\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\\r\\nc=IN IP4 0.0.0.0\\r\\na=candidate:2 1 udp 2122260223 4b6f0a11-2b1d-4c35-9e7c-7d0f3e1a6c35.local 54321 typ host generation 0\\r\\na=candidate:3 1 udp 1686052607 203.0.113.7 54321 typ srflx raddr 0.0.0.0 rport 0 generation 0\\r\\na=candidate:4 1 udp 41885439 198.51.100.20 50002 typ relay raddr 203.0.113.7 rport 54321 generation 0\\r\\na=end-of-candidates\\r\\na=ice-ufrag:pAg3\\r\\na=ice-pwd:synthetic-page-ice-pwd-01\\r\\na=fingerprint:sha-256 40:41:42:43:44:45:46:47:48:49:4A:4B:4C:4D:4E:4F:50:51:52:53:54:55:56:57:58:59:5A:5B:5C:5D:5E:5F\\r\\na=setup:active\\r\\na=mid:0\\r\\na=sctp-port:5000\\r\\na=max-message-size:262144\\r\\n\",\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "answer in the manifest slot",
+      "from": "page",
+      "index": 0,
+      "text": "{\"event\":\"answer\",\"key\":\"wbk1_ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8\",\"sdp\":\"v=0\\r\\no=- 2222222222222222222 2 IN IP4 127.0.0.1\\r\\ns=-\\r\\nt=0 0\\r\\na=group:BUNDLE 0\\r\\na=msid-semantic: WMS\\r\\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\\r\\nc=IN IP4 0.0.0.0\\r\\na=candidate:2 1 udp 2122260223 4b6f0a11-2b1d-4c35-9e7c-7d0f3e1a6c35.local 54321 typ host generation 0\\r\\na=candidate:3 1 udp 1686052607 203.0.113.7 54321 typ srflx raddr 0.0.0.0 rport 0 generation 0\\r\\na=candidate:4 1 udp 41885439 198.51.100.20 50002 typ relay raddr 203.0.113.7 rport 54321 generation 0\\r\\na=end-of-candidates\\r\\na=ice-ufrag:pAg3\\r\\na=ice-pwd:synthetic-page-ice-pwd-01\\r\\na=fingerprint:sha-256 40:41:42:43:44:45:46:47:48:49:4A:4B:4C:4D:4E:4F:50:51:52:53:54:55:56:57:58:59:5A:5B:5C:5D:5E:5F\\r\\na=setup:active\\r\\na=mid:0\\r\\na=sctp-port:5000\\r\\na=max-message-size:262144\\r\\n\",\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "sixth restart",
+      "from": "drop",
+      "index": 7,
+      "text": "{\"event\":\"restart\",\"sdp\":\"v=0\\r\\no=- 1111111111111111111 2 IN IP4 127.0.0.1\\r\\ns=-\\r\\nt=0 0\\r\\na=group:BUNDLE 0\\r\\na=msid-semantic: WMS\\r\\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\\r\\nc=IN IP4 0.0.0.0\\r\\na=candidate:1 1 udp 41885439 198.51.100.20 50004 typ relay raddr 0.0.0.0 rport 0 generation 0\\r\\na=end-of-candidates\\r\\na=ice-ufrag:dr1p\\r\\na=ice-pwd:synthetic-drop-ice-pwd-02\\r\\na=fingerprint:sha-256 10:11:12:13:14:15:16:17:18:19:1A:1B:1C:1D:1E:1F:20:21:22:23:24:25:26:27:28:29:2A:2B:2C:2D:2E:2F\\r\\na=setup:actpass\\r\\na=mid:0\\r\\na=sctp-port:5000\\r\\na=max-message-size:262144\\r\\n\",\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "decline from the page",
+      "from": "page",
+      "index": 1,
+      "text": "{\"event\":\"decline\",\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "unknown stop reason",
+      "from": "page",
+      "index": 3,
+      "text": "{\"event\":\"stop\",\"reason\":\"bored\",\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "not an object",
+      "from": "page",
+      "index": 3,
+      "text": "[\"stop\"]",
+      "stopReason": "failed"
+    },
+    {
+      "name": "message beyond index 7",
+      "from": "page",
+      "index": 8,
+      "text": "{\"event\":\"stop\",\"reason\":\"cancelled\",\"v\":1}",
+      "stopReason": "failed"
+    }
+  ],
+  "frames": [
+    {
+      "name": "DATA at offset 0",
+      "from": "page",
+      "hex": "0100000000000000004653574e454e4332"
+    },
+    {
+      "name": "DATA at offset 65,536",
+      "from": "page",
+      "hex": "01000000000001000000ff"
+    },
+    {
+      "name": "ACK of the first MiB",
+      "from": "drop",
+      "hex": "020000000000100000"
+    },
+    {
+      "name": "END",
+      "from": "page",
+      "hex": "03af0f07cd52e74781e0608cc95514ef9fb334a6bd658b606138c8aebee25f3eb9000000000000002b"
+    },
+    {
+      "name": "KEPT",
+      "from": "drop",
+      "hex": "04"
+    },
+    {
+      "name": "STOP cancelled",
+      "from": "page",
+      "hex": "0501"
+    },
+    {
+      "name": "STOP failed",
+      "from": "drop",
+      "hex": "0502"
+    },
+    {
+      "name": "STOP storage",
+      "from": "drop",
+      "hex": "0503"
+    }
+  ],
+  "frameRefusals": [
+    {
+      "name": "empty message",
+      "from": "page",
+      "hex": ""
+    },
+    {
+      "name": "type zero",
+      "from": "page",
+      "hex": "00"
+    },
+    {
+      "name": "reserved resume type",
+      "from": "drop",
+      "hex": "060000000000000000"
+    },
+    {
+      "name": "DATA without bytes",
+      "from": "page",
+      "hex": "010000000000000000"
+    },
+    {
+      "name": "DATA from the receiver",
+      "from": "drop",
+      "hex": "01000000000000000000"
+    },
+    {
+      "name": "ACK from the sender",
+      "from": "page",
+      "hex": "020000000000000000"
+    },
+    {
+      "name": "short ACK",
+      "from": "drop",
+      "hex": "0200000000000000"
+    },
+    {
+      "name": "END one byte short",
+      "from": "page",
+      "hex": "03000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "KEPT with a trailing byte",
+      "from": "drop",
+      "hex": "0400"
+    },
+    {
+      "name": "STOP without a reason",
+      "from": "page",
+      "hex": "05"
+    }
+  ],
+  "envelopes": [
+    {
+      "name": "known-answer.txt",
+      "type": "text/plain",
+      "size": 43,
+      "metadataBytes": 57,
+      "paddedBytes": 65536,
+      "records": 1,
+      "envelopeBytes": 65608
+    },
+    {
+      "name": "empty.txt",
+      "type": "text/plain",
+      "size": 0,
+      "metadataBytes": 49,
+      "paddedBytes": 65536,
+      "records": 1,
+      "envelopeBytes": 65608
+    },
+    {
+      "name": "Café holiday.mp4",
+      "type": "video/mp4",
+      "size": 120000000,
+      "metadataBytes": 64,
+      "paddedBytes": 120586240,
+      "records": 115,
+      "envelopeBytes": 120588136
+    },
+    {
+      "name": "a.bin",
+      "type": "application/octet-stream",
+      "size": 1048507,
+      "metadataBytes": 65,
+      "paddedBytes": 1048576,
+      "records": 1,
+      "envelopeBytes": 1048648
+    },
+    {
+      "name": "a.bin",
+      "type": "application/octet-stream",
+      "size": 1048508,
+      "metadataBytes": 65,
+      "paddedBytes": 2097152,
+      "records": 2,
+      "envelopeBytes": 2097240
+    },
+    {
+      "name": "largest.bin",
+      "type": "application/octet-stream",
+      "size": 250000000,
+      "metadataBytes": 73,
+      "paddedBytes": 250609664,
+      "records": 239,
+      "envelopeBytes": 250613544
+    }
+  ]
+}
