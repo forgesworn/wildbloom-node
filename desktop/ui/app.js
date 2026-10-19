@@ -161,6 +161,7 @@ elements.checkUpdate.addEventListener("click", async () => {
     nodeUrl: $("drop-node-url"), nodeStatus: $("drop-node-status"), nodeChange: $("drop-node-change"),
     npub: $("drop-device-npub"), approval: $("drop-approval-text"), copy: $("drop-device-copy"), copyStatus: $("drop-device-status"), renew: $("drop-renew"),
     folder: $("drop-folder"), folderHint: $("drop-folder-hint"), folderShow: $("drop-folder-show"),
+    afterDownload: [...document.querySelectorAll('input[name="drop-after-download"]')], expiry: $("drop-expiry"),
     recovery: $("drop-recovery-text"), recoveryButton: $("drop-recovery"), error: $("drop-settings-error"),
   };
   let snapshot = null;
@@ -170,6 +171,9 @@ elements.checkUpdate.addEventListener("click", async () => {
     ui.error.textContent = text || "";
     ui.error.hidden = !text;
   }
+
+  // A backend that doesn't report sharing yet gets today's behaviour.
+  const currentSharing = () => ({ afterDownload: "delete", expirySeconds: 86400, ...(snapshot?.sharing || {}) });
 
   function render() {
     const online = snapshot?.online;
@@ -205,6 +209,14 @@ elements.checkUpdate.addEventListener("click", async () => {
       ? `${folderPath}. Deleting a file here removes it on all your computers. Their copies go to the ${trash}.`
       : `${folderPath}.`;
     ui.folderShow.disabled = !folder.enabled;
+
+    const sharing = currentSharing();
+    for (const radio of ui.afterDownload) {
+      radio.checked = radio.value === sharing.afterDownload;
+      radio.disabled = !snapshot;
+    }
+    ui.expiry.value = String(sharing.expirySeconds);
+    ui.expiry.disabled = !snapshot;
 
     const recovery = snapshot?.recovery || {};
     ui.recovery.textContent = recovery.savedAt ? `Saved ${Drop.fullDate(recovery.savedAt)}` : "Not saved yet";
@@ -284,6 +296,23 @@ elements.checkUpdate.addEventListener("click", async () => {
     }
     await refreshDrop();
   });
+  // Applies at once, to files shared from now on. A refusal puts the controls back.
+  async function changeSharing() {
+    showError("");
+    const before = currentSharing();
+    const next = {
+      afterDownload: ui.afterDownload.find((radio) => radio.checked)?.value || before.afterDownload,
+      expirySeconds: Number(ui.expiry.value) || before.expirySeconds,
+    };
+    try {
+      await Drop.call("set_sharing", next);
+      snapshot = { ...(snapshot || {}), sharing: next };
+    } catch {
+      showError("Couldn't change the sharing settings.");
+    }
+    render();
+  }
+  for (const control of [...ui.afterDownload, ui.expiry]) control.addEventListener("change", changeSharing);
   ui.folderShow.addEventListener("click", async () => {
     try {
       await Drop.call("open_watch_folder");

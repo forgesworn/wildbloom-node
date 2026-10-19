@@ -57,6 +57,7 @@
     watchFolder: { enabled: false, state: 'off', path: '~/Wildbloom' },
     limits: { dropMaxBytes: 1_000_000_000, shareMaxBytes: 250_000_000 },
     browserApproval: false,
+    sharing: { afterDownload: 'delete', expirySeconds: 86400 },
   });
 
   const name = params.get('state') || 'list';
@@ -88,6 +89,7 @@
     if (flag === 'folder-too-many') state.watchFolder = { enabled: true, state: 'too_many', path: '~/Wildbloom' };
     if (flag === 'no-online') noOnline();
     if (flag === 'good') files = goodRows();
+    if (flag === 'downloads') files = files.concat([row('f40', 'brief.pdf', 'shared', { sharedUntil: nowSeconds + 20 * 3600, downloadedAt: nowSeconds - 1080 }), row('f41', 'deck.key', 'sharing_ended', { sharingEnded: nowSeconds - 1080, downloadedAt: nowSeconds - 1080 }), row('f42', 'map.png', 'stop_pending', { downloadedAt: nowSeconds - 1080 })]);
     if (flag === 'shared') files = goodRows().concat([row('f12', 'quote.pdf', 'shared', { sharedUntil: nowSeconds + 20 * 3600 }), row('f22', 'plan.pdf', 'shared', { sharedUntil: nowSeconds + 3600 })]);
   }
 
@@ -143,6 +145,7 @@
     open_drop_flow: () => undefined,
     remove: ({ id }) => { stub.files = stub.files.filter((item) => item.id !== id); stub.emit('drop://file', { id, removed: true }); },
     stop_sharing: () => undefined,
+    set_sharing: ({ afterDownload, expirySeconds }) => { stub.state.sharing = { afterDownload, expirySeconds }; },
     check_online_node: ({ url }) => {
       const host = hostOf(url);
       if (url.includes('silent')) throw { code: 'no_answer', host };

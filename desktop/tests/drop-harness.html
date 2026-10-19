@@ -29,6 +29,11 @@
           s11: { state: 'relay_unreachable' },
           s12: { state: 'node_unreachable' },
           s13: { state: 'left' },
+          s14: { state: 'sent', deleteAt: now + 86400, awaitingDownload: true, afterDownload: 'delete' },
+          s15: { state: 'sent', deleteAt: now + 86400, awaitingDownload: true, afterDownload: 'keep' },
+          s16: { state: 'downloaded', downloadedAt: now, copy: 'deleted' },
+          s17: { state: 'downloaded', downloadedAt: now, copy: 'deleting' },
+          s18: { state: 'downloaded', downloadedAt: now, copy: 'kept', deleteAt: now + 86400 },
         };
         const waitFor = async (test) => { for (let i = 0; i < 200; i++) { const v = test(); if (v) return v; await new Promise((r) => setTimeout(r, 25)); } return null; };
         const shareKey = name.startsWith('share-') ? name.slice(6) : null;

@@ -5,7 +5,7 @@
   'use strict';
   const D = window.WildbloomDrop;
   if (!D) return;
-  const { h, call, listen, uid, icon, iconSlot, until, buttonRow, confirmDialog, writeClipboard } = D;
+  const { h, call, listen, uid, icon, iconSlot, until, timeOf, buttonRow, confirmDialog, writeClipboard } = D;
 
   let current = null;
 
@@ -25,7 +25,8 @@
     const statusSlot = h('div', { role: 'status', class: 'share-slot' });
     const bottom = h('div', { class: 'share-bottom' });
     const live = h('div', { class: 'sr-only', role: 'status', 'aria-live': 'polite' });
-    const dialog = h('dialog', { class: 'drop-scope sheet', 'aria-labelledby': titleId }, h('div', { class: 'sheet-body' }, heading, top, statusSlot, bottom, live));
+    // The status line comes straight after the heading in every state.
+    const dialog = h('dialog', { class: 'drop-scope sheet', 'aria-labelledby': titleId }, h('div', { class: 'sheet-body' }, heading, statusSlot, top, bottom, live));
     const session = {
       row, opener, dialog, heading, top, statusSlot, bottom, live,
       payload: null, started: false, timer: null, announced: new Set(), copyTimers: new Set(),
@@ -64,7 +65,7 @@
 
   function requestClose(session) {
     const state = session.payload?.state;
-    if (session.started && state !== 'sent' && state !== 'too_big') {
+    if (session.started && state !== 'sent' && state !== 'downloaded' && state !== 'too_big') {
       call('share_cancel', { id: session.row.id }).catch(() => {});
     }
     session.dialog.close();
@@ -76,10 +77,10 @@
   }
 
   function statusLine(session, tone, iconName, text, withTime) {
-    const line = h('p', { class: `share-status` }, iconSlot(iconName, tone, iconName === 'refresh' ? 'spin' : ''), h('span', {}, text));
-    const nodes = [line];
-    if (withTime) nodes.push(h('p', { class: 'share-time', 'aria-hidden': 'true', 'data-time': true }, ''));
-    session.statusSlot.replaceChildren(...nodes);
+    // The countdown sits on the status line, on its own side, and is not read out (the 2 and 1 minute announcements are).
+    const line = h('p', { class: 'share-status' }, iconSlot(iconName, tone, iconName === 'refresh' ? 'spin' : ''), h('span', { class: 'share-text' }, text),
+      withTime ? h('span', { class: 'share-time', 'aria-hidden': 'true', 'data-time': true }, '') : null);
+    session.statusSlot.replaceChildren(line);
   }
 
   function button(label, kind, key, onclick, primary) {
@@ -97,19 +98,29 @@
     return node;
   }
 
-  function stepLink(session, p) {
+  /** A finished step shrinks to one line: a check for its number, a plain title, no body. */
+  function stepHead(titleId, number, text, done) {
+    return h('p', { class: `step-title${done ? ' done' : ''}`, id: titleId },
+      done ? h('span', { class: 'num tone-success', 'aria-hidden': 'true' }, icon('check')) : h('span', { class: 'num', 'aria-hidden': 'true' }, String(number)),
+      h('span', {}, text, done ? h('span', { class: 'sr-only' }, ', done') : null));
+  }
+  function stepLink(session, p, done) {
     const titleId = uid('step');
+    const head = stepHead(titleId, 1, 'Send them this link', done);
+    if (done) return h('section', { class: 'share-step', 'aria-labelledby': titleId }, head);
     const input = h('input', { class: 'field mono', type: 'text', readonly: true, tabindex: '-1', 'aria-labelledby': titleId, onfocus: (event) => event.target.select() });
     input.value = p.link || '';
     return h('section', { class: 'share-step', 'aria-labelledby': titleId },
-      h('p', { class: 'step-title', id: titleId }, h('span', { class: 'num', 'aria-hidden': 'true' }, '1'), h('span', {}, 'Send them this link')),
-      h('div', { class: 'step-body' }, input, copyButton(session, 'Copy link', 'copy-link', p.link || '', 'Link copied.')));
+      head,
+      h('div', { class: 'step-body inline' }, input, copyButton(session, 'Copy link', 'copy-link', p.link || '', 'Link copied.')));
   }
-  function stepWords(session, p) {
+  function stepWords(session, p, done) {
     const titleId = uid('step');
+    const head = stepHead(titleId, 2, 'Phone them and read out these words', done);
+    if (done) return h('section', { class: 'share-step', 'aria-labelledby': titleId }, head);
     const words = p.words || [];
     return h('section', { class: 'share-step', 'aria-labelledby': titleId },
-      h('p', { class: 'step-title', id: titleId }, h('span', { class: 'num', 'aria-hidden': 'true' }, '2'), h('span', {}, 'Phone them and read out these words')),
+      head,
       h('div', { class: 'step-body' },
         h('ol', { class: 'words', 'aria-label': `Words to read out: ${words.join(', ')}` }, words.map((word) => h('li', {}, word))),
         copyButton(session, 'Copy words', 'copy-words', words.join(' '), 'Words copied.'),
@@ -119,7 +130,7 @@
     const titleId = uid('step');
     const words = p.checkWords || [];
     return h('section', { class: 'share-step', 'aria-labelledby': titleId },
-      h('p', { class: 'step-title', id: titleId }, h('span', { class: 'num', 'aria-hidden': 'true' }, '3'), h('span', {}, 'Read these words to them')),
+      stepHead(titleId, 3, 'Read these words to them', false),
       h('div', { class: 'step-body' },
         h('ol', { class: 'words', 'aria-label': `Check words to read out: ${words.join(', ')}` }, words.map((word) => h('li', {}, word))),
         h('p', { class: 'share-hint' }, 'Ask if they see the same 3 words.')));
@@ -136,15 +147,14 @@
     if (p.state === 'preparing' && previous === 'preparing') {
       const bar = session.top.querySelector('progress');
       if (bar) bar.value = Math.round(p.progress || 0);
-      const text = session.statusSlot.querySelector('.share-status span:last-child');
+      const text = session.statusSlot.querySelector('.share-text');
       if (text) text.textContent = progressText(p);
       return;
     }
 
     clearInterval(session.timer);
     session.timer = null;
-    heading.textContent = p.state === 'sent' ? 'Sent' : `Share ${row.name}`;
-    const links = () => [stepLink(session, p), stepWords(session, p)];
+    const links = (done) => [stepLink(session, p, done), stepWords(session, p, done)];
     const close = () => button('Close', 'secondary', 'close', () => requestClose(session));
     const startAgain = () => button('Start again', 'primary', 'start-again', () => restart('share_again'), true);
     const tryAgain = () => button('Try again', 'primary', 'try-again', () => restart('share_start'), true);
@@ -172,7 +182,7 @@
       case 'ready':
       case 'opened':
       case 'check':
-        topNodes = links();
+        topNodes = links(p.state === 'check');
         if (p.state === 'check') topNodes.push(stepCheck(p));
         if (p.state === 'ready') statusLine(session, 'muted', 'pending', 'Waiting for them to open the link', true);
         else if (p.state === 'opened') statusLine(session, 'accent', 'check', "They've opened the link.", true);
@@ -187,7 +197,7 @@
         break;
       case 'wrong_words':
         if (p.triesLeft > 0) {
-          topNodes = links();
+          topNodes = links(false);
           statusLine(session, 'warning', 'alert', `They typed the wrong words. They can try ${p.triesLeft} more ${p.triesLeft === 1 ? 'time' : 'times'}.`, true);
           bottomNodes = [buttonRow(button('Cancel', 'secondary', 'cancel', () => requestClose(session)))];
         } else {
@@ -199,13 +209,30 @@
         statusLine(session, 'accent', 'refresh', 'Sending…');
         bottomNodes = [buttonRow(button('Cancel', 'secondary', 'cancel', () => requestClose(session)))];
         break;
-      case 'sent': {
-        statusLine(session, 'success', 'check', `They can download ${row.name} now.`);
-        const when = p.deleteAt ? until(p.deleteAt) : null;
-        topNodes = [
-          h('p', {}, when ? `Wildbloom deletes the shared copy at ${when}, or sooner if you stop sharing. This computer needs to be on to delete it.` : 'Wildbloom deletes the shared copy after 24 hours, or sooner if you stop sharing. This computer needs to be on to delete it.'),
-          h('p', { class: 'share-hint' }, "Stopping can't take back a copy they've already downloaded."),
-        ];
+      case 'sent':
+      case 'downloaded': {
+        const downloaded = p.state === 'downloaded';
+        const awaiting = !downloaded && p.awaitingDownload === true;
+        const deleteAt = p.deleteAt ? until(p.deleteAt) : null;
+        const keepText = deleteAt
+          ? `Wildbloom deletes the shared copy at ${deleteAt}, or sooner if you stop sharing. This computer needs to be on to delete it.`
+          : 'Wildbloom deletes the shared copy after 24 hours, or sooner if you stop sharing. This computer needs to be on to delete it.';
+        const needsOn = 'This computer needs to be on to delete it.';
+        let body;
+        let stoppable = true;
+        if (downloaded) {
+          statusLine(session, 'success', 'check', `Downloaded at ${timeOf(p.downloadedAt)}.`);
+          if (p.copy === 'deleted') { body = 'The shared copy is deleted, so the link no longer works.'; stoppable = false; }
+          else if (p.copy === 'deleting') { body = `Wildbloom deletes the shared copy when it can reach your online node. ${needsOn}`; stoppable = false; }
+          else body = keepText;
+        } else if (awaiting) {
+          statusLine(session, 'muted', 'pending', 'Sent. Waiting for them to download it.');
+          body = p.afterDownload === 'keep' ? keepText : `Wildbloom deletes the shared copy once they've downloaded it, or ${deleteAt ? `by ${deleteAt}` : 'when it expires'}. ${needsOn}`;
+        } else {
+          statusLine(session, 'success', 'check', `They can download ${row.name} now.`);
+          body = keepText;
+        }
+        topNodes = [h('p', { class: 'share-body' }, body)];
         const done = button('Done', 'primary', 'done', () => requestClose(session), true);
         const stop = button('Stop sharing…', 'secondary', 'stop', async (event) => {
           const yes = await confirmDialog({
@@ -219,7 +246,7 @@
           } catch { /* the row shows a pending state */ }
           session.dialog.close();
         });
-        bottomNodes = [buttonRow(done, stop)];
+        bottomNodes = [stoppable ? buttonRow(done, stop) : buttonRow(done)];
         break;
       }
       case 'expired':
@@ -248,9 +275,6 @@
     }
     session.top.replaceChildren(...topNodes);
     session.bottom.replaceChildren(...bottomNodes);
-    // After a send the confirmation leads; otherwise the status follows the steps.
-    if (p.state === 'sent') session.top.before(session.statusSlot);
-    else session.top.after(session.statusSlot);
 
     if (LIVE.has(p.state) || (p.state === 'wrong_words' && p.triesLeft > 0)) startCountdown(session, p);
 
@@ -300,5 +324,5 @@
     render(current, payload);
   });
 
-  window.WildbloomShare = { open };
+  window.WildbloomShare = { open, isOpenFor: (id) => Boolean(current && current.row.id === id) };
 })();
