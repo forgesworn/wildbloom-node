@@ -6503,6 +6503,7 @@ dependencies = [
  "url",
  "wildbloom-envelope",
  "wildbloom-private-state",
+ "xattr",
  "zeroize",
 ]
 

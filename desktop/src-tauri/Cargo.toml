@@ -60,6 +60,11 @@ unicode-normalization = "0.1.25"
 # Recycle Bin, never deleted outright.  No chrono: the app never lists the Trash.
 trash = { version = "=5.2.9", default-features = false, features = ["coinit_apartmentthreaded"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# The quarantine flag on direct-send files, so Gatekeeper treats them as
+# downloaded.  Already in the tree through tar; it keeps Drop free of unsafe.
+xattr = "=1.6.1"
+
 [dev-dependencies]
 # The headless Drop test's in-process Nostr relay for NIP-46.
 tokio-tungstenite = "0.28.0"
