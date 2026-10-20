@@ -23,9 +23,9 @@
 //! - [`engine`]: everything behind the IPC commands, independent of Tauri;
 //!   [`index`] (the private SQLite file index), [`client`] (node HTTP),
 //!   [`mirror`] (online copies and checks), [`approve`] (NIP-46 approval),
-//!   [`keysync`] (key list and restore), [`share`] and [`relay`] (sharing),
-//!   [`watch`] and [`folder`] (the Wildbloom folder mirror) and [`status`]
-//!   (the status line).
+//!   [`keysync`] (key list and restore), [`pairing`], [`share`] and [`relay`]
+//!   (sharing), [`watch`] and [`folder`] (the Wildbloom folder mirror) and
+//!   [`status`] (the status line).
 //! - [`commands`]: the Tauri commands and the host that emits events.
 //!
 //! Secrets are zeroised on drop where the types allow it, and no `Debug` or
@@ -49,6 +49,7 @@ pub mod keychain;
 pub mod keysync;
 pub mod layout;
 pub mod mirror;
+pub mod pairing;
 pub mod path;
 pub mod relay;
 pub mod share;
