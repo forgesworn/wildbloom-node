@@ -75,6 +75,10 @@ pub struct Timing {
     /// How long the page has to read a last `stop` or `decline` before the
     /// relay session is deleted.
     pub linger: Duration,
+    /// How long a closed data channel waits for the page's `stop`: a page
+    /// that is closed says so on the exchange, but its channel may close
+    /// first.
+    pub stop_grace: Duration,
 }
 
 impl Timing {
@@ -86,6 +90,7 @@ impl Timing {
         restart_after: Duration::from_secs(8),
         flush: Duration::from_secs(1),
         linger: Duration::from_secs(2),
+        stop_grace: Duration::from_secs(3),
     };
 }
 
@@ -1182,7 +1187,52 @@ impl<T: LiveTransport, H: DirectHost> Run<T, H> {
                 }
                 None
             }
+            // The channel closed before the frame logic finished.  A page that
+            // was closed sends `stop` as it goes; look for it before calling
+            // the connection lost.
+            PeerReport::Ended { outcome, .. }
+                if outcome == "closed" && self.controls.sink.kept().is_none() =>
+            {
+                Some(self.channel_closed().await)
+            }
             other => self.note(other),
+        }
+    }
+
+    /// The window's data channel closed mid-transfer.  If the page's next
+    /// message, read within `stop_grace`, is its `stop`, the page ended it
+    /// ("They closed the page"); otherwise the connection was lost.
+    async fn channel_closed(&mut self) -> End {
+        let lost = End::Failed {
+            reason: "lost",
+            tell: Some(StopReason::Failed),
+            frame: None,
+        };
+        let index = self.exchange.as_ref().map_or(0, |e| e.received());
+        if self.stopped
+            || !self.exchange_alive
+            || self.exchange.is_none()
+            || index >= MESSAGES_PER_SIDE
+        {
+            return lost;
+        }
+        let by = (Instant::now() + self.timing.stop_grace).min(self.deadline);
+        let kind = format!("packet-{index}");
+        let bytes = tokio::select! {
+            biased;
+            _ = cancelled(&mut self.cancel) => return End::Cancelled,
+            _ = sleep_until(by) => return lost,
+            bytes = wait_packet(&self.transport, &kind, self.timing.poll) => bytes,
+        };
+        let Ok(bytes) = bytes else {
+            self.exchange_alive = false;
+            return lost;
+        };
+        match self.open(index, bytes, None).await {
+            Ok(Message::Stop { reason }) => End::peer_stop(reason),
+            // Anything else (a restart answer) cannot bring the channel back.
+            Ok(_) => lost,
+            Err(end) => end,
         }
     }
 

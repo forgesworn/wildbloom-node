@@ -23,6 +23,7 @@ const TIMING: Timing = Timing {
     restart_after: Duration::from_millis(200),
     flush: Duration::from_millis(50),
     linger: Duration::from_millis(20),
+    stop_grace: Duration::from_millis(500),
 };
 
 const DROP_SDP: &str = "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\na=ice-ufrag:dr0p\r\na=fingerprint:sha-256 10:11:12:13\r\na=setup:actpass\r\n";
@@ -840,6 +841,53 @@ async fn the_page_stopping_ends_it_as_theirs() {
     let state = h.end().await;
     assert_eq!(state.reason, Some("unsupported"));
     assert!(!h.phone.wrote(1).await);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_closed_page_is_theirs_whichever_arrives_first() {
+    // The page's stop arrives, then its channel closes.
+    let mut h = start(600);
+    let f = file("a.bin", 200_000);
+    h.connected(&f).await;
+    h.web.write(&f.envelope, 100_000).unwrap();
+    h.phone.send(&stop(StopReason::Cancelled));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    h.web.ended("closed");
+    assert_eq!(h.closed().await, None);
+    let state = h.end().await;
+    assert_eq!((state.state, state.by), ("cancelled", Some("them")));
+    assert!(!h.phone.wrote(2).await, "nothing answers the page's stop");
+
+    // The channel closes first; the page's stop follows within the grace.
+    let mut h = start(600);
+    let f = file("a.bin", 200_000);
+    h.connected(&f).await;
+    h.web.write(&f.envelope, 100_000).unwrap();
+    h.web.ended("closed");
+    tokio::time::sleep(TIMING.stop_grace / 5).await;
+    assert!(
+        !h.task.is_finished(),
+        "a closed channel waits for the page's stop"
+    );
+    h.phone.send(&stop(StopReason::Cancelled));
+    assert_eq!(h.closed().await, None);
+    let state = h.end().await;
+    assert_eq!((state.state, state.by), ("cancelled", Some("them")));
+    assert!(!h.phone.wrote(2).await, "nothing answers the page's stop");
+
+    // The channel closes and the page says nothing: the connection was lost,
+    // and the page is told.
+    let mut h = start(600);
+    let f = file("a.bin", 200_000);
+    h.connected(&f).await;
+    h.web.write(&f.envelope, 100_000).unwrap();
+    let closed_at = Instant::now();
+    h.web.ended("closed");
+    assert_eq!(h.closed().await, None);
+    assert!(closed_at.elapsed() >= TIMING.stop_grace);
+    let state = h.end().await;
+    assert_eq!((state.state, state.reason), ("failed", Some("lost")));
+    assert_eq!(h.phone.read().await, stop(StopReason::Failed));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
