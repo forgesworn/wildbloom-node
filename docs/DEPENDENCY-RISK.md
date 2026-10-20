@@ -36,3 +36,15 @@ installer itself, macOS updates are `.app.tar.gz` (unpacked by the plugin
 without this feature), and Linux ships no updater artifacts.  Do not switch
 to `v1Compatible` artifacts without turning the feature back on and
 re-auditing `zip`.  The audit script now fails on any yanked crate.
+
+## The webpki-roots 0.26 shim
+
+`tokio-tungstenite` (in `wildbloomd`, and through `nostr-sdk` in the desktop)
+still depends on `webpki-roots` 0.26.11.  That release is a semver shim: it
+depends on `webpki-roots` 1 and re-exports it, so its root certificates are
+whichever 1.x is locked.  RUSTSEC-2026-0381 (distrusted emSign intermediates)
+is fixed in 1.0.10 but flags the shim by its version number.  The audit
+script ignores that one advisory only after checking that every locked
+`webpki-roots` in both lockfiles is the 0.26.11 shim or 1.0.10 or later, so a
+locked 1.x older than the fix still fails CI.  Drop the ignore once neither
+lockfile contains 0.26.11.
