@@ -475,6 +475,14 @@ is a failure: the reader sends STOP 2 and closes.
   least every 1,048,576 bytes it writes and when it reaches E; `next` strictly
   increases and never exceeds the bytes received.  The sender shows progress
   from ACKs, never from bytes queued.
+- When the selected candidate pair has a relay candidate at either end, the
+  sender also paces DATA: on average at most 400,000 envelope bytes a second,
+  with no burst above 65,536 bytes.  The sender reads the selected pair from
+  `getStats()` once connected and again after each ICE restart, and does not
+  pace a direct pair.  TURN servers enforce a per-allocation rate by dropping
+  what exceeds it, and SCTP recovers from those drops so slowly that an unpaced
+  send through a 1,000,000-byte-a-second limit averaged under 140,000 bytes a
+  second at a 130 ms round trip, where one paced at 400,000 ran without stalls.
 - After END the receiver checks, in order: exactly E bytes arrived; the envelope
   opens with `key`, every record authenticates, and the record count and
   padding bucket match the header; the metadata equals the manifest exactly;
@@ -508,6 +516,7 @@ deadline passes no restart is possible and an ICE failure ends the direct send.
 | File | `max`, at most 250,000,000 bytes |
 | Data frame | at most 65,536 bytes; F at least 16,384 |
 | Unacknowledged envelope bytes | 8,388,608 |
+| Relayed send rate | 400,000 envelope bytes a second, bursts of at most 65,536 |
 | Session | at most 600 seconds; the data channel may outlive it |
 
 ### What servers learn
