@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-direct-sink-end"
+description = "Enables the direct_sink_end command without any pre-configured scope."
+commands.allow = ["direct_sink_end"]
+
+[[permission]]
+identifier = "deny-direct-sink-end"
+description = "Denies the direct_sink_end command without any pre-configured scope."
+commands.deny = ["direct_sink_end"]

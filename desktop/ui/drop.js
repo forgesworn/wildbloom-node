@@ -127,6 +127,7 @@
     refresh: [['path', { d: 'M13 8a5 5 0 1 1-1.6-3.7M13 2.6v2.8h-2.8' }]],
     share: [['circle', { cx: 4, cy: 8, r: 1.6 }], ['circle', { cx: 12, cy: 4, r: 1.6 }], ['circle', { cx: 12, cy: 12, r: 1.6 }], ['path', { d: 'M5.4 7.2l5.2-2.4M5.4 8.8l5.2 2.4' }]],
     refuse: [['circle', { cx: 8, cy: 8, r: 6 }], ['path', { d: 'M3.8 12.2l8.4-8.4' }]],
+    chevron: [['path', { d: 'M4.5 6.5L8 10l3.5-3.5' }]],
     more: [['circle', { cx: 3.5, cy: 8, r: 1.2, class: 'fill' }], ['circle', { cx: 8, cy: 8, r: 1.2, class: 'fill' }], ['circle', { cx: 12.5, cy: 8, r: 1.2, class: 'fill' }]],
   };
   function icon(name, extra) {
@@ -806,7 +807,7 @@
   window.WildbloomDrop = {
     h, call, listen, delay, uid, plural, icon, iconSlot, formatBytes, until, timeOf, stamp, fullDate, shortNpub, hostOf,
     buttonRow, confirmDialog, confirmFolderOn, openFlowSheet, writeClipboard, readClipboard, openNodeSettings, popupMenu,
-    platform, loadPlatform, middleTruncate, casing,
+    platform, loadPlatform, middleTruncate, casing, revealText,
   };
 
   if (!isDropWindow) return;
@@ -820,7 +821,7 @@
     header: $('drop-header'), footer: $('drop-footer'),
     statusLine: $('status-line'), statusIcon: $('status-icon'), statusText: $('status-text'), statusAction: $('status-action'),
     viewFirst: $('view-first'), viewDrop: $('view-drop'),
-    zone: $('zone'), zoneTitle: $('zone-title'), addFiles: $('add-files'), folderToggle: $('folder-toggle'),
+    zone: $('zone'), zoneTitle: $('zone-title'), addFiles: $('add-files'), addMore: $('add-more'), folderToggle: $('folder-toggle'),
     notices: $('notices'), find: $('find'), findInput: $('find-input'),
     listRegion: $('list-region'), files: $('files'), filesHeading: $('files-heading'), noMatch: $('no-match'),
     overlay: $('drag-overlay'), dragMessage: $('drag-message'), announcer: $('drop-announcer'),
@@ -832,6 +833,7 @@
     online: { configured: false, url: '', reachable: true, failedChecks: 0, usedBytes: 0, limitBytes: 0, full: false },
     approval: { state: 'none' }, recovery: { confirmed: true }, watchFolder: { enabled: false, path: '' },
     limits: { dropMaxBytes: 1e9, shareMaxBytes: 250e6 }, browserApproval: false,
+    receiving: { hideAddress: true, folder: '', maxBytes: 250e6 },
   };
   const rows = new Map();
   const rowEls = new Map();
@@ -1349,6 +1351,26 @@
       else notice(e.message || "Couldn't add those files.");
     }
   }
+  /** "Receive a file" lives in the small menu beside Add files, so the window stays as quiet as before. */
+  function receiveContext() {
+    return {
+      limits: state.limits, receiving: state.receiving, notice,
+      canOpen: () => !state.firstRun && !document.querySelector('dialog[open]'),
+      checkFolder: () => state.watchFolder,
+      refresh: () => refreshStatus().catch(() => {}),
+    };
+  }
+  function openReceive(opener) {
+    if (state.firstRun || document.querySelector('dialog[open]')) return;
+    if (window.WildbloomReceive) window.WildbloomReceive.open(opener, receiveContext());
+  }
+  function openAddMenu(anchor) {
+    if (state.firstRun) return;
+    popupMenu([
+      { id: 'add-files', text: casing('Add Files…', 'Add files…'), run: () => pickFiles() },
+      { id: 'receive-file', text: casing('Receive a File…', 'Receive a file…'), run: () => openReceive(el.addMore) },
+    ], anchor);
+  }
   async function pickFiles() {
     if (state.firstRun) return;
     try {
@@ -1508,6 +1530,8 @@
 
   function bind() {
     el.addFiles.addEventListener('click', pickFiles);
+    el.addMore.append(icon('chevron'));
+    el.addMore.addEventListener('click', (event) => openAddMenu(event.currentTarget));
     el.folderToggle.addEventListener('click', async () => {
       try {
         if (state.watchFolder?.enabled) await call('open_watch_folder');
@@ -1568,6 +1592,9 @@
         openFlowSheet({ sequence: ['recovery'], resave: state.recovery?.confirmed !== false, label: 'Recovery key', refresh: refreshStatus }, el.footerSettings).then(refreshAfter);
       }
     });
+    listen('receive://state', (payload) => {
+      if (payload && window.WildbloomReceive) window.WildbloomReceive.onState(payload, receiveContext(), el.addMore);
+    });
     listen('drop://notice', (payload) => {
       if (payload && payload.kind === 'keeps_running') notice('Wildbloom keeps running. Open it again from your apps.');
     });
@@ -1577,6 +1604,10 @@
     } catch {
       /* the status line shows the failure */
     }
+    // A receive that is still running comes back with the window.
+    // The sheet's script loads after this one.
+    if (document.readyState === 'loading') await new Promise((resolve) => document.addEventListener('DOMContentLoaded', resolve, { once: true }));
+    if (window.WildbloomReceive) window.WildbloomReceive.resume(receiveContext(), el.addMore);
   }
   start();
 })();

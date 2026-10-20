@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-direct-peer-report"
+description = "Enables the direct_peer_report command without any pre-configured scope."
+commands.allow = ["direct_peer_report"]
+
+[[permission]]
+identifier = "deny-direct-peer-report"
+description = "Denies the direct_peer_report command without any pre-configured scope."
+commands.deny = ["direct_peer_report"]

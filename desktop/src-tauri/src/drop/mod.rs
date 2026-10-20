@@ -23,7 +23,8 @@
 //! - [`engine`]: everything behind the IPC commands, independent of Tauri;
 //!   [`index`] (the private SQLite file index), [`client`] (node HTTP),
 //!   [`mirror`] (online copies and checks), [`approve`] (NIP-46 approval),
-//!   [`keysync`] (key list and restore), [`share`] and [`relay`] (sharing),
+//!   [`keysync`] (key list and restore), [`pairing`], [`share`] and [`relay`]
+//!   (sharing), [`direct`] (receiving a file straight from a browser),
 //!   [`watch`] and [`folder`] (the Wildbloom folder mirror) and [`status`]
 //!   (the status line).
 //! - [`commands`]: the Tauri commands and the host that emits events.
@@ -39,6 +40,7 @@ pub mod client;
 pub mod commands;
 pub mod descriptor;
 pub mod device;
+pub mod direct;
 #[cfg(test)]
 mod e2e;
 pub mod engine;
@@ -49,6 +51,7 @@ pub mod keychain;
 pub mod keysync;
 pub mod layout;
 pub mod mirror;
+pub mod pairing;
 pub mod path;
 pub mod relay;
 pub mod share;

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-direct-sink-abort"
+description = "Enables the direct_sink_abort command without any pre-configured scope."
+commands.allow = ["direct_sink_abort"]
+
+[[permission]]
+identifier = "deny-direct-sink-abort"
+description = "Denies the direct_sink_abort command without any pre-configured scope."
+commands.deny = ["direct_sink_abort"]

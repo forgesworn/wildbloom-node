@@ -29,7 +29,7 @@ thiserror = "2.0.17"
 url = "2.5.7"
 # Wildbloom Drop: Foregather live pairing (exact release tag), NIP-46 approval,
 # the private SQLite file index and HTTP body streaming.
-foregather-kit = { git = "https://github.com/forgesworn/foregather-kit", tag = "v0.5.0", features = ["experimental-live"] }
+foregather-kit = { git = "https://github.com/forgesworn/foregather-kit", tag = "v0.6.0", features = ["experimental-live"] }
 nostr-connect = { version = "=0.45.2", default-features = false, features = ["aws_lc_rs", "rustls-tls-native-roots"] }
 rusqlite = { version = "0.40.0", features = ["bundled"] }
 futures-util = "0.3.31"
@@ -59,6 +59,11 @@ unicode-normalization = "0.1.25"
 # Files the Wildbloom folder replaces or removes go to the system Trash or
 # Recycle Bin, never deleted outright.  No chrono: the app never lists the Trash.
 trash = { version = "=5.2.9", default-features = false, features = ["coinit_apartmentthreaded"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The quarantine flag on direct-send files, so Gatekeeper treats them as
+# downloaded.  Already in the tree through tar; it keeps Drop free of unsafe.
+xattr = "=1.6.1"
 
 [dev-dependencies]
 # The headless Drop test's in-process Nostr relay for NIP-46.

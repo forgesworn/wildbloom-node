@@ -1189,7 +1189,13 @@ fn confirm_quit(app: &AppHandle) {
         .iter()
         .filter(|row| matches!(row.state, "encrypting" | "copying" | "restoring"))
         .count();
-    let (title, body) = if engine.share_open() {
+    let receiving = engine.receive_open();
+    let (title, body) = if receiving {
+        (
+            "Quit and stop receiving?".to_owned(),
+            "The file they're sending won't arrive.",
+        )
+    } else if engine.share_open() {
         (
             "Quit and cancel sharing?".to_owned(),
             "The link you're sending will stop working.",
@@ -1216,7 +1222,16 @@ fn confirm_quit(app: &AppHandle) {
             "Cancel".into(),
         ))
         .show(move |quit| {
-            if quit {
+            if !quit {
+                return;
+            }
+            if receiving {
+                // Tell the other person and delete the relay session first.
+                tauri::async_runtime::spawn(async move {
+                    engine.stop_receiving().await;
+                    handle.exit(0);
+                });
+            } else {
                 handle.exit(0);
             }
         });
@@ -1226,6 +1241,13 @@ fn drop_config(app: &AppHandle) -> Result<drop::engine::EngineConfig, String> {
     let base = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
     let home = app.path().home_dir().map_err(|e| e.to_string())?;
     let watch_dir = home.join("Wildbloom");
+    // Received files stay outside the synced folder until the owner adds them.
+    let received_dir = app
+        .path()
+        .download_dir()
+        .unwrap_or_else(|_| home.join("Downloads"))
+        .join("Wildbloom Received");
+    let received_display = drop::direct::receive::display_path(&received_dir, Some(&home));
     let watch_display = if cfg!(windows) {
         watch_dir.display().to_string()
     } else {
@@ -1247,6 +1269,10 @@ fn drop_config(app: &AppHandle) -> Result<drop::engine::EngineConfig, String> {
         watch_display,
         get_base: debug_override("WILDBLOOM_DROP_GET_BASE")
             .unwrap_or_else(|| "https://wildbloom.forgesworn.dev/get/".into()),
+        send_base: debug_override("WILDBLOOM_DROP_SEND_BASE")
+            .unwrap_or_else(|| "https://wildbloom.forgesworn.dev/send/".into()),
+        received_dir,
+        received_display,
         relay_base: debug_override("WILDBLOOM_DROP_RELAY"),
         allow_loopback_http: debug_override("WILDBLOOM_DROP_LOOPBACK").is_some(),
         signer_timeout: Duration::from_secs(120),
@@ -1309,8 +1335,14 @@ fn main() {
     let builder = tauri::Builder::default();
     #[cfg(feature = "native-acceptance")]
     let builder = builder.on_page_load(|webview, payload| {
-        if webview.label() == "main" && payload.event() == tauri::webview::PageLoadEvent::Finished {
-            acceptance::ready();
+        if payload.event() == tauri::webview::PageLoadEvent::Finished {
+            match webview.label() {
+                "main" => acceptance::ready(),
+                // The driver counts the hidden direct-send window's loads, so a
+                // declined file can be shown never to have opened one.
+                drop::direct::PEER_WINDOW => acceptance::page_loaded(drop::direct::PEER_WINDOW),
+                _ => {}
+            }
         }
     });
     let app = builder
@@ -1330,6 +1362,7 @@ fn main() {
         .manage(pool_manager)
         .manage(drop::commands::DropSlot::default())
         .manage(drop::commands::NativeDrops::default())
+        .manage(drop::commands::PeerChannel::default())
         .invoke_handler(tauri::generate_handler![
             node_status,
             save_settings,
@@ -1373,7 +1406,21 @@ fn main() {
             drop::commands::share_cancel,
             drop::commands::stop_sharing,
             drop::commands::set_sharing,
-            drop::commands::open_drop_flow
+            drop::commands::open_drop_flow,
+            drop::commands::receive_start,
+            drop::commands::receive_state,
+            drop::commands::receive_verify,
+            drop::commands::receive_consent,
+            drop::commands::receive_cancel,
+            drop::commands::receive_add_to_wildbloom,
+            drop::commands::receive_reveal,
+            drop::commands::set_receiving,
+            drop::commands::reveal_received_folder,
+            drop::commands::direct_peer_attach,
+            drop::commands::direct_peer_report,
+            drop::commands::direct_sink_write,
+            drop::commands::direct_sink_end,
+            drop::commands::direct_sink_abort
         ])
         .on_window_event(|window, event| match event {
             WindowEvent::CloseRequested { api, .. } => {

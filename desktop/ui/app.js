@@ -162,6 +162,8 @@ elements.checkUpdate.addEventListener("click", async () => {
     npub: $("drop-device-npub"), approval: $("drop-approval-text"), copy: $("drop-device-copy"), copyStatus: $("drop-device-status"), renew: $("drop-renew"),
     folder: $("drop-folder"), folderHint: $("drop-folder-hint"), folderShow: $("drop-folder-show"),
     afterDownload: [...document.querySelectorAll('input[name="drop-after-download"]')], expiry: $("drop-expiry"),
+    hideAddress: $("drop-hide-address"), receivedFolder: $("drop-receiving-folder"),
+    receivedRow: $("drop-receiving-row"), receivedShow: $("drop-receiving-show"),
     recovery: $("drop-recovery-text"), recoveryButton: $("drop-recovery"), error: $("drop-settings-error"),
   };
   let snapshot = null;
@@ -174,6 +176,9 @@ elements.checkUpdate.addEventListener("click", async () => {
 
   // A backend that doesn't report sharing yet gets today's behaviour.
   const currentSharing = () => ({ afterDownload: "delete", expirySeconds: 86400, ...(snapshot?.sharing || {}) });
+
+  // A backend that doesn't report receiving yet hides the address, as Drop does by default.
+  const currentReceiving = () => ({ hideAddress: true, folder: "", ...(snapshot?.receiving || {}) });
 
   function render() {
     const online = snapshot?.online;
@@ -217,6 +222,12 @@ elements.checkUpdate.addEventListener("click", async () => {
     }
     ui.expiry.value = String(sharing.expirySeconds);
     ui.expiry.disabled = !snapshot;
+
+    const receiving = currentReceiving();
+    ui.hideAddress.checked = receiving.hideAddress;
+    ui.hideAddress.disabled = !snapshot;
+    ui.receivedFolder.textContent = receiving.folder ? `Received files go to ${receiving.folder}.` : "";
+    ui.receivedRow.hidden = !receiving.folder;
 
     const recovery = snapshot?.recovery || {};
     ui.recovery.textContent = recovery.savedAt ? `Saved ${Drop.fullDate(recovery.savedAt)}` : "Not saved yet";
@@ -313,6 +324,27 @@ elements.checkUpdate.addEventListener("click", async () => {
     render();
   }
   for (const control of [...ui.afterDownload, ui.expiry]) control.addEventListener("change", changeSharing);
+  // Applies when the next receive starts. A refusal puts the box back.
+  ui.hideAddress.addEventListener("change", async () => {
+    showError("");
+    const hideAddress = ui.hideAddress.checked;
+    try {
+      await Drop.call("set_receiving", { hideAddress });
+      snapshot = { ...(snapshot || {}), receiving: { ...currentReceiving(), hideAddress } };
+    } catch {
+      showError("Couldn't change that setting.");
+    }
+    render();
+  });
+  // Rust makes the folder first if nothing has arrived yet.
+  ui.receivedShow.addEventListener("click", async () => {
+    showError("");
+    try {
+      await Drop.call("reveal_received_folder");
+    } catch (error) {
+      showError(error.message || "Couldn't open the Received folder.");
+    }
+  });
   ui.folderShow.addEventListener("click", async () => {
     try {
       await Drop.call("open_watch_folder");

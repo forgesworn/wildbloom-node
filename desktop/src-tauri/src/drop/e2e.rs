@@ -311,6 +311,9 @@ fn engine_for(
         watch_dir: watch_dir.to_path_buf(),
         watch_display: "~/Wildbloom".into(),
         get_base: "http://127.0.0.1:5472/get/".into(),
+        send_base: "http://127.0.0.1:5472/send/".into(),
+        received_dir: base.join("Downloads").join("Wildbloom Received"),
+        received_display: "~/Downloads/Wildbloom Received".into(),
         relay_base: Some(relay_api.to_owned()),
         allow_loopback_http: true,
         signer_timeout: Duration::from_secs(30),
@@ -609,6 +612,13 @@ struct Services {
 }
 
 async fn services() -> Option<Services> {
+    services_with(&[]).await
+}
+
+/// The loopback services, with the online node also issuing TURN credentials
+/// for `turn_urls` when there are any (direct send).  Nothing has to listen
+/// at those URLs for a run over host candidates.
+async fn services_with(turn_urls: &[String]) -> Option<Services> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let Some(bin) = std::env::var_os("WILDBLOOM_E2E_BIN_DIR").map(PathBuf::from) else {
         eprintln!("skipped: WILDBLOOM_E2E_BIN_DIR is not set");
@@ -657,27 +667,41 @@ async fn services() -> Option<Services> {
     super::engine::write_private_file(&token_file, operator_token.as_bytes()).unwrap();
     let online_port = free_port();
     let online_url = format!("http://localhost:{online_port}/");
+    let mut online_command = Command::new(bin.join("wildbloomd-grants"));
+    online_command
+        .args([
+            "--no-tor",
+            "--repair-interval",
+            "0",
+            "--device-grants",
+            "--pairing-issuer",
+        ])
+        .arg("--bind")
+        .arg(format!("127.0.0.1:{online_port}"))
+        .arg("--public-url")
+        .arg(&online_url)
+        .arg("--allow-pubkey")
+        .arg(owner.public_key().to_hex())
+        .arg("--data-dir")
+        .arg(work_path.join("online-node"))
+        .arg("--pairing-relay-url")
+        .arg(format!("http://127.0.0.1:{fg_port}/"))
+        .arg("--pairing-operator-token-file")
+        .arg(&token_file);
+    if !turn_urls.is_empty() {
+        let secret_file = work_path.join("turn-secret");
+        let secret = URL_SAFE_NO_PAD.encode(rand_bytes());
+        super::engine::write_private_file(&secret_file, secret.as_bytes()).unwrap();
+        online_command
+            .arg("--turn-issuer")
+            .arg("--turn-secret-file")
+            .arg(&secret_file);
+        for url in turn_urls {
+            online_command.arg("--turn-url").arg(url);
+        }
+    }
     let online_node = Proc(
-        Command::new(bin.join("wildbloomd-grants"))
-            .args([
-                "--no-tor",
-                "--repair-interval",
-                "0",
-                "--device-grants",
-                "--pairing-issuer",
-            ])
-            .arg("--bind")
-            .arg(format!("127.0.0.1:{online_port}"))
-            .arg("--public-url")
-            .arg(&online_url)
-            .arg("--allow-pubkey")
-            .arg(owner.public_key().to_hex())
-            .arg("--data-dir")
-            .arg(work_path.join("online-node"))
-            .arg("--pairing-relay-url")
-            .arg(format!("http://127.0.0.1:{fg_port}/"))
-            .arg("--pairing-operator-token-file")
-            .arg(&token_file)
+        online_command
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
@@ -2582,4 +2606,58 @@ async fn drop_share_to_the_get_page() {
     );
     std::fs::write(handoff.join("stopped.json"), "{}").unwrap();
     eprintln!("e2e-get: stop sharing deleted the shared copy");
+}
+
+/// The loopback services for the native "Receive a file" acceptance,
+/// `desktop/tests/direct-receive-native.mjs`, which drives the real app, its
+/// hidden direct window and a phone page in Chromium: the Nostr relay and
+/// NIP-46 signer, the Foregather live relay, and an online node that issues
+/// TURN credentials for `WILDBLOOM_E2E_TURN_URL`.  Writes `services.json`
+/// into `WILDBLOOM_E2E_HANDOFF` and serves until `finished.json` appears
+/// there.  Synthetic keys only.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "run by desktop/tests/direct-receive-native.mjs"]
+async fn direct_receive_services() {
+    let (Some(handoff), Some(turn_url)) = (
+        std::env::var_os("WILDBLOOM_E2E_HANDOFF").map(PathBuf::from),
+        std::env::var("WILDBLOOM_E2E_TURN_URL").ok(),
+    ) else {
+        eprintln!("skipped: WILDBLOOM_E2E_HANDOFF or WILDBLOOM_E2E_TURN_URL is not set");
+        return;
+    };
+    let Some(svc) = services_with(std::slice::from_ref(&turn_url)).await else {
+        return;
+    };
+    // The node issues credentials before Drop asks: a quick check that the
+    // issuer is on, so a daemon without it fails here, not as `no_turn`.
+    let probe = svc
+        .http
+        .post(svc.online.url("turn/v1/credentials"))
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_ne!(
+        probe.as_u16(),
+        404,
+        "the online node does not issue TURN credentials: build wildbloomd with --turn-issuer"
+    );
+    std::fs::write(
+        handoff.join("services.json"),
+        serde_json::json!({
+            "bunker": svc.bunker,
+            "onlineUrl": svc.online_url,
+            "relayApi": svc.relay_api,
+            "relayUpstream": format!("http://127.0.0.1:{}", svc.fg_port),
+            "turnUrl": turn_url,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    eprintln!("direct-services: ready");
+    handoff_file(&handoff, "finished.json", 1800).await;
+    eprintln!(
+        "direct-services: done ({} signer requests)",
+        svc.counts.total.load(Ordering::SeqCst)
+    );
 }

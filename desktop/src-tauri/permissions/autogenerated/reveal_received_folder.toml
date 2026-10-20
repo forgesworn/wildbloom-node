@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-reveal-received-folder"
+description = "Enables the reveal_received_folder command without any pre-configured scope."
+commands.allow = ["reveal_received_folder"]
+
+[[permission]]
+identifier = "deny-reveal-received-folder"
+description = "Denies the reveal_received_folder command without any pre-configured scope."
+commands.deny = ["reveal_received_folder"]

@@ -1,0 +1,42 @@
+{
+  "schema": "wildbloom-node.vendor.v1",
+  "bundle": "desktop/ui/vendor/wildbloom-direct.js",
+  "repository": "https://github.com/forgesworn/wildbloom",
+  "commit": "98fdd4a8f8eddf3d4f77e78f6d796839cf22ed1f",
+  "sources": {
+    "src/direct/config.ts": {
+      "sha256": "4dff027bb3695b9abb68da700d271f2f667be0f17854b5b30f9b7e43dff2beb8"
+    },
+    "src/direct/frames.ts": {
+      "sha256": "33a7f9af96392cfb6be3eb191673f83d6026fb5ee142445d1781b5d3144dfecb"
+    },
+    "src/direct/peer.ts": {
+      "sha256": "b438c81071d75706810156a8c9b4fe855d4b5aba6c2c9a26a7e321d464c10b31"
+    },
+    "src/direct/transfer.ts": {
+      "sha256": "40769e01a4392fcdbaf1ffad7569aab62343fc73b026f96c9889827a8725a780"
+    }
+  },
+  "omitted": {
+    "src/direct/config.ts": "the last line, the page build-time ICE allowlist read from import.meta.env; Drop never uses it"
+  },
+  "builder": {
+    "name": "esbuild",
+    "version": "0.28.1",
+    "options": {
+      "bundle": true,
+      "format": "esm",
+      "target": "es2022",
+      "platform": "browser",
+      "minify": false,
+      "treeShaking": true,
+      "sourcemap": false,
+      "legalComments": "none",
+      "charset": "utf8",
+      "pure": [
+        "Object.freeze"
+      ]
+    }
+  },
+  "sha256": "c54dff57953101bb341faa6a8b99647df9fa5894483bbbfd2778e1a7bc1c2023"
+}

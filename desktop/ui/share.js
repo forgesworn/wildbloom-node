@@ -117,9 +117,9 @@
       head,
       h('div', { class: 'step-body inline' }, input, copyButton(session, 'Copy link', 'copy-link', p.link || '', 'Link copied.')));
   }
-  function stepWords(session, p, done) {
+  function stepWords(session, p, done, hint = "Don't send the words with the link. Anyone with both can get the file.", title = 'Phone them and read out these words') {
     const titleId = uid('step');
-    const head = stepHead(titleId, 2, 'Phone them and read out these words', done);
+    const head = stepHead(titleId, 2, title, done);
     if (done) return h('section', { class: 'share-step', 'aria-labelledby': titleId }, head);
     const words = p.words || [];
     return h('section', { class: 'share-step', 'aria-labelledby': titleId },
@@ -127,16 +127,16 @@
       h('div', { class: 'step-body' },
         h('ol', { class: 'words', 'aria-label': `Words to read out: ${words.join(', ')}` }, words.map((word) => h('li', {}, word))),
         copyButton(session, 'Copy words', 'copy-words', words.join(' '), 'Words copied.'),
-        h('p', { class: 'share-hint' }, "Don't send the words with the link. Anyone with both can get the file.")));
+        hint ? h('p', { class: 'share-hint' }, hint) : null));
   }
-  function stepCheck(p) {
+  function stepCheck(p, title = 'Read these words to them', hint = 'Ask if they see the same 3 words.') {
     const titleId = uid('step');
     const words = p.checkWords || [];
     return h('section', { class: 'share-step', 'aria-labelledby': titleId },
-      stepHead(titleId, 3, 'Read these words to them', false),
+      stepHead(titleId, 3, title, false),
       h('div', { class: 'step-body' },
         h('ol', { class: 'words', 'aria-label': `Check words to read out: ${words.join(', ')}` }, words.map((word) => h('li', {}, word))),
-        h('p', { class: 'share-hint' }, 'Ask if they see the same 3 words.')));
+        h('p', { class: 'share-hint' }, hint)));
   }
 
   function render(session, p) {
@@ -344,5 +344,9 @@
     render(current, payload);
   });
 
-  window.WildbloomShare = { open, isOpenFor: (id) => Boolean(current && current.row.id === id) };
+  // The Receive sheet draws with the same parts.
+  window.WildbloomShare = {
+    open, isOpenFor: (id) => Boolean(current && current.row.id === id),
+    parts: { statusLine, button, copyButton, stepLink, stepWords, stepCheck, startCountdown, clock },
+  };
 })();

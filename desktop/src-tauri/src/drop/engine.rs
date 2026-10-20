@@ -79,6 +79,20 @@ pub trait Host: Send + Sync + 'static {
     fn open_path(&self, path: &Path);
     /// Shows a file selected in Finder, Explorer or the file manager.
     fn reveal_path(&self, path: &Path);
+    /// The receive sheet's state (`receive://state`, Drop window only).
+    fn emit_receive(&self, _state: &super::direct::ReceiveState) {}
+    /// Creates the hidden direct-send window; `false` if it cannot be made.
+    fn open_peer_window(&self) -> bool {
+        false
+    }
+    /// A request to the hidden direct-send window, over its request channel.
+    fn peer_request(&self, _request: &super::direct::PeerRequest) {}
+    /// Destroys the hidden direct-send window.
+    fn close_peer_window(&self) {}
+    /// Keeps the computer from idle-sleeping while the guard lives.
+    fn keep_awake(&self) -> super::direct::awake::Awake {
+        super::direct::awake::Awake::none()
+    }
 }
 
 /// Configuration that differs between the app and the tests.
@@ -94,6 +108,15 @@ pub struct EngineConfig {
     pub watch_display: String,
     /// The recipient page base, `https://wildbloom.forgesworn.dev/get/`.
     pub get_base: String,
+    /// The send page base for "Receive a file",
+    /// `https://wildbloom.forgesworn.dev/send/`.
+    pub send_base: String,
+    /// Where received files are kept: outside the Wildbloom folder, by
+    /// default `Wildbloom Received` in the Downloads folder.
+    pub received_dir: PathBuf,
+    /// How the Received folder is shown, for example
+    /// `~/Downloads/Wildbloom Received`.
+    pub received_display: String,
     /// The pairing relay API base; `None` derives `<online origin>pair/v1/`.
     pub relay_base: Option<String>,
     /// Loopback HTTP for nodes, the relay and links: tests only.
@@ -182,6 +205,8 @@ pub struct Engine {
     /// When each deletion the folder pass released in the brake's window was
     /// inferred (see [`super::watch::brake`]).  In memory only.
     pub(crate) removal_window: Mutex<std::collections::VecDeque<Instant>>,
+    /// "Receive a file": the running receive and what it kept.
+    pub(crate) direct: super::direct::receive::DirectState,
 }
 
 impl std::fmt::Debug for Engine {
@@ -306,6 +331,7 @@ impl Engine {
             folder_lock: tokio::sync::Mutex::new(()),
             folder_state: Mutex::new("off"),
             removal_window: Mutex::new(std::collections::VecDeque::new()),
+            direct: super::direct::receive::DirectState::default(),
         });
         let _ = engine.keychain();
         Ok(engine)
@@ -342,6 +368,7 @@ impl Engine {
             }
         }
         self.sweep_orphan_outbox();
+        self.sweep_received();
         // The index and keychain are the durable record of the key list.
         self.keysync_wake.notify_one();
         self.spawn_workers();
@@ -697,6 +724,7 @@ impl Engine {
                 share_max_bytes: SHARE_MAX_PLAINTEXT_BYTES,
             },
             sharing: super::share::SharingPolicy::load(&self.index).settings(),
+            receiving: self.receiving_settings(),
             browser_approval: false,
         }
     }

@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Wildbloom Drop connection</title>
+    <!--
+      The hidden direct-send window.  Rust creates it per transfer (label
+      "direct") and destroys it afterwards; it is never shown.  It runs the
+      RTCPeerConnection and the frame logic with the web project's
+      TypeScript (vendor/wildbloom-direct.js), as desktop/ui/DROP-IPC.md
+      ("Hidden direct-send window") sets out.
+    -->
+    <script type="module" src="direct.js"></script>
+  </head>
+  <body></body>
+</html>

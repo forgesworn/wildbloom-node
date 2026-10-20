@@ -68,6 +68,7 @@
     limits: { dropMaxBytes: 1_000_000_000, shareMaxBytes: 250_000_000 },
     browserApproval: false,
     sharing: { afterDownload: 'delete', expirySeconds: 86400 },
+    receiving: { hideAddress: true, folder: '~/Downloads/Wildbloom Received', maxBytes: 250_000_000 },
   });
 
   const name = params.get('state') || 'list';
@@ -108,7 +109,7 @@
 
   const stub = {
     state, files, calls, handlers: {}, menus: [], clipboard: '', clipboardRead: 'bunker://relay.example/pair?secret=abc', saveResult: '/tmp/test/Wildbloom recovery key.txt',
-    approval: { state: 'idle' }, windows: [], key: KEY, npub: NPUB,
+    receive: { state: 'idle' }, approval: { state: 'idle' }, windows: [], key: KEY, npub: NPUB,
     emit(eventName, payload) {
       for (const callback of listeners.get(eventName) || []) callback({ event: eventName, payload });
     },
@@ -117,6 +118,8 @@
       if (index >= 0) stub.files[index] = next; else stub.files.push(next);
       stub.emit('drop://file', next);
     },
+    // Sets the receive state and sends it as receive://state, as Rust does.
+    setReceive(next) { stub.receive = next; stub.emit('receive://state', structuredClone(next)); return next; },
     snapshot() { return structuredClone({ ...stub.state, files: stub.files }); },
     flush() { stub.emit('drop://status', structuredClone(stub.state)); },
   };
@@ -206,7 +209,43 @@
     share_again: () => ({ state: 'preparing', progress: 10 }),
     share_verify: ({ matches }) => ({ state: matches ? 'sending' : 'mismatch' }),
     share_cancel: () => undefined,
+    set_receiving: ({ hideAddress }) => {
+      if (typeof hideAddress !== 'boolean') throw { code: 'bad_args' };
+      stub.state.receiving = { ...stub.state.receiving, hideAddress };
+    },
+    reveal_received_folder: () => undefined,
+    // Receive a file. The same machine as the contract: one receive at a time, answers ignored out of turn.
+    receive_state: () => structuredClone(stub.receive),
+    receive_start: () => {
+      if (stub.receiveRefusal) throw { code: stub.receiveRefusal };
+      if (LIVE_RECEIVE.has(stub.receive.state)) throw { code: 'busy' };
+      return structuredClone(stub.setReceive({ state: 'preparing' }));
+    },
+    receive_verify: ({ matches }) => {
+      if (typeof matches !== 'boolean') throw { code: 'bad_args' };
+      if (stub.receive.state !== 'check') return undefined;
+      stub.setReceive(matches ? { state: 'waiting_file' } : { state: 'failed', reason: 'mismatch' });
+    },
+    receive_consent: ({ accept }) => {
+      if (typeof accept !== 'boolean') throw { code: 'bad_args' };
+      if (stub.receive.state !== 'consent') return undefined;
+      const { name, size, type } = stub.receive;
+      stub.setReceive(accept ? { state: 'connecting', name, size, type, hidden: stub.state.receiving.hideAddress } : { state: 'declined', name, size, type });
+    },
+    receive_cancel: () => {
+      if (LIVE_RECEIVE.has(stub.receive.state)) stub.setReceive({ state: 'cancelled', by: 'you' });
+    },
+    receive_add_to_wildbloom: ({ id }) => {
+      if (stub.receive.state !== 'kept' || stub.receive.id !== id) throw { code: 'not_found' };
+      if (stub.addToWildbloomError) throw { code: stub.addToWildbloomError };
+      return { name: stub.receive.name, folder: '~/Wildbloom' };
+    },
+    receive_reveal: ({ id }) => {
+      if (stub.receive.state !== 'kept' || stub.receive.id !== id || stub.revealError) throw { code: 'not_found' };
+    },
   };
+
+  const LIVE_RECEIVE = new Set(['preparing', 'waiting', 'opened', 'check', 'waiting_file', 'consent', 'connecting', 'receiving', 'verifying']);
 
   const invoke = async (command, args) => {
     calls.push({ command, args });

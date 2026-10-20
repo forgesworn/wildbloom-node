@@ -93,7 +93,7 @@ scenario('static: CSP unchanged, textContent only, no network or crypto in JS, n
   assert.match(csp(await read('drop.html')), /connect-src ipc: http:\/\/ipc\.localhost;/);
   const tauri = JSON.parse(await readFile(path.join(root, 'src-tauri', 'tauri.conf.json'), 'utf8'));
   assert.equal(csp(await read('drop.html')), tauri.app.security.csp, 'drop.html CSP must equal tauri.conf.json CSP');
-  for (const name of ['drop.js', 'share.js']) {
+  for (const name of ['drop.js', 'share.js', 'receive.js']) {
     const source = await read(name);
     for (const banned of ['innerHTML', 'outerHTML', 'insertAdjacentHTML', 'document.write', 'eval(', 'new Function', 'fetch(', 'XMLHttpRequest', 'WebSocket', 'crypto.subtle', 'getRandomValues', 'localStorage', 'sessionStorage']) {
       assert.equal(source.includes(banned), false, `${name} must not use ${banned}`);
@@ -705,11 +705,11 @@ scenario('keyboard: tab order, roving rows with arrows, Home and End', async () 
   await ready(page);
   await page.evaluate(() => document.body.focus());
   const stops = [];
-  for (let i = 0; i < 13; i++) {
+  for (let i = 0; i < 14; i++) {
     await page.keyboard.press('Tab');
     stops.push(await page.evaluate(() => { const a = document.activeElement; return a.getAttribute('aria-label') || a.textContent.trim(); }));
   }
-  assert.deepEqual(stops, ['Retry all', 'Share holiday.jpg', 'More actions for holiday.jpg', 'Share tax-return-2026.pdf', 'More actions for tax-return-2026.pdf', 'Retry copying notes.txt', 'More actions for notes.txt', 'Share archive.zip', 'More actions for archive.zip', 'Share quote.pdf', 'More actions for quote.pdf', 'Add files…', 'Settings']);
+  assert.deepEqual(stops, ['Retry all', 'Share holiday.jpg', 'More actions for holiday.jpg', 'Share tax-return-2026.pdf', 'More actions for tax-return-2026.pdf', 'Retry copying notes.txt', 'More actions for notes.txt', 'Share archive.zip', 'More actions for archive.zip', 'Share quote.pdf', 'More actions for quote.pdf', 'Add files…', 'More ways to add files', 'Settings']);
   assert.equal(await page.locator('[tabindex]:not([tabindex="-1"])').count(), 0, 'no positive tabindex');
   await page.locator('li.row[data-id="f1"] [data-ctl="share"]').focus();
   await page.keyboard.press('ArrowDown');
@@ -1443,6 +1443,10 @@ const STATES = [
   'folder', 'folder&status=folder-unavailable', 'folder&status=folder-too-many', 'folder&os=windows', 'confirm-folder-on',
   'held', 'confirm-held', 'confirm-held&os=windows', 'confirm-held&os=linux&desktop=kde',
   'share-s5&os=windows', 'share-s5&os=linux&desktop=kde',
+  'receive-idle', 'receive-r1', 'receive-r2', 'receive-r3', 'receive-r4', 'receive-r5', 'receive-r6', 'receive-r6b', 'receive-r6c', 'receive-r7', 'receive-r7b', 'receive-r7c',
+  'receive-r8', 'receive-r8b', 'receive-r9', 'receive-r10', 'receive-r10b', 'receive-r11', 'receive-r12', 'receive-r12b',
+  'receive-f-no_turn', 'receive-f-wrong_words', 'receive-f-unsupported', 'receive-f-no_relay', 'receive-f-verification',
+  'receive-r4&os=windows', 'receive-r6&os=linux&desktop=kde',
 ];
 const SIZES = [[400, 600], [340, 420], [760, 600]];
 const SCHEMES = ['light', 'dark'];
@@ -1473,6 +1477,8 @@ scenario('every state: no overflow, axe clean, screenshots (light and dark, thre
         const overflow = await page.evaluate(() => ({ wide: document.documentElement.scrollWidth > innerWidth, tall: document.documentElement.scrollHeight > innerHeight + 1 }));
         assert.equal(overflow.wide, false, `${state} ${scheme} ${width}x${height}: horizontal scroll`);
         assert.equal(overflow.tall, false, `${state} ${scheme} ${width}x${height}: the window itself scrolls (only the list or a sheet may)`);
+        const sheetFit = await page.evaluate(() => { const body = document.querySelector('dialog.receive[open] .sheet-body'); return !body || body.scrollWidth <= body.clientWidth; });
+        assert.equal(sheetFit, true, `${state} ${scheme} ${width}x${height}: the sheet scrolls sideways`);
         if (width === 400 || full) await axe(page, `${state} ${scheme} ${width}x${height}`);
         if (shots) await page.screenshot({ path: path.join(shots, `${safe(state)}-${scheme}-${width}x${height}.png`) });
         await page.context().close();
@@ -1796,7 +1802,7 @@ scenario('declutter 22 and 23: no layout shift when the download arrives, and cl
 scenario('declutter 24 to 26: sharing settings', async () => {
   const page = await settingsPage({ scheme: 'dark' });
   const titles = await page.locator('#drop-settings .drop-setting-title').allTextContents();
-  assert.deepEqual(titles, ['Online node', 'This computer', 'Wildbloom folder', 'Sharing', 'Recovery key']);
+  assert.deepEqual(titles, ['Online node', 'This computer', 'Wildbloom folder', 'Sharing', 'Receiving files', 'Recovery key']);
   const group = page.getByRole('group', { name: "When they've downloaded it" });
   assert.equal(await group.count(), 1);
   assert.equal(await group.getByRole('radio', { name: 'Delete the shared copy' }).isChecked(), true);
@@ -1833,14 +1839,15 @@ scenario('declutter 27: tab order through the list is status, rows, Add files, S
   await ready(page);
   await page.evaluate(() => document.body.focus());
   const stops = [];
-  for (let i = 0; i < 13; i++) {
+  for (let i = 0; i < 14; i++) {
     await page.keyboard.press('Tab');
     stops.push(await page.evaluate(() => ({ id: document.activeElement.id, ctl: document.activeElement.getAttribute('data-ctl'), visible: document.activeElement.getClientRects().length > 0 })));
   }
   assert.equal(stops[0].id, 'status-action');
-  assert.equal(stops.at(-2).id, 'add-files');
+  assert.equal(stops.at(-3).id, 'add-files');
+  assert.equal(stops.at(-2).id, 'add-more');
   assert.equal(stops.at(-1).id, 'footer-settings');
-  assert.ok(stops.slice(1, -2).every((stop) => stop.ctl), 'only row controls between');
+  assert.ok(stops.slice(1, -3).every((stop) => stop.ctl), 'only row controls between');
   assert.ok(stops.every((stop) => stop.visible), 'no stop on a hidden element');
   await done(page);
 });
@@ -1851,6 +1858,445 @@ scenario('declutter 29: Share is visible on hover under forced colours', async (
   await page.hover('li[data-id="f1"] h3');
   await page.waitForTimeout(250);
   assert.equal(await page.locator('li[data-id="f1"] [data-ctl="share"]').evaluate((n) => getComputedStyle(n).opacity), '1');
+  await done(page);
+});
+
+/* ---------- receive a file ---------- */
+
+const RLINK = 'https://wildbloom.example/send/#v1.abc123';
+const OFFER = { name: 'holiday.mp4', size: 120_000_000, type: 'video/mp4' };
+const KEPT = { state: 'kept', ...OFFER, id: 'k1', path: '~/Downloads/Wildbloom Received/holiday.mp4', folder: '~/Downloads/Wildbloom Received', canAdd: true };
+async function openReceive(page) {
+  await page.locator('#add-more').click();
+  await page.waitForFunction(() => window.__stub.lastMenu);
+  await page.evaluate(() => { const menu = window.__stub.lastMenu; window.__stub.lastMenu = null; menu.items.find((item) => item.text.startsWith('Receive')).action(); });
+  await page.locator('dialog.receive[open]').waitFor();
+  await page.waitForTimeout(60);
+}
+const setReceive = (page, payload) => page.evaluate((next) => window.__stub.setReceive(next), payload);
+const sheetText = (page) => visual(page.locator('dialog.receive[open]'));
+const statusOf = (page) => visual(page.locator('dialog.receive[open] .share-slot'));
+const buttonsOf = (page) => page.locator('dialog.receive[open] .share-bottom button').allTextContents();
+
+scenario('receive: one small menu beside Add files, nothing new in the list', async () => {
+  let page = await drop('list');
+  await ready(page);
+  assert.equal(await page.locator('#add-more').getAttribute('aria-label'), 'More ways to add files');
+  assert.equal(await page.locator('#add-more').getAttribute('aria-haspopup'), 'menu');
+  assert.doesNotMatch(await text(page.locator('#drop-main')), /Receive/, 'no receive text in the window until it is used');
+  assert.doesNotMatch(await text(page.locator('#drop-footer')), /Receive/);
+  await page.waitForFunction(() => window.__stub.calls.some((c) => c.command === 'receive_state'));
+  assert.equal((await calls(page, 'receive_state')).length, 1, 'start-up asks Rust whether a receive is running');
+  assert.equal((await calls(page, 'receive_start')).length, 0, 'and starts nothing');
+  assert.equal(await page.locator('dialog').count(), 0);
+  await page.locator('#add-more').click();
+  await page.waitForFunction(() => window.__stub.lastMenu);
+  assert.deepEqual(await page.evaluate(() => window.__stub.lastMenu.items.map((item) => item.text)), ['Add Files…', 'Receive a File…']);
+  await page.evaluate(() => window.__stub.lastMenu.items[0].action());
+  assert.equal((await calls(page, 'pick_files')).length, 1, 'the menu still adds files');
+  await done(page);
+  page = await drop('empty', { os: 'windows' });
+  await ready(page);
+  await page.locator('#add-more').click();
+  await page.waitForFunction(() => window.__stub.lastMenu);
+  assert.deepEqual(await page.evaluate(() => window.__stub.lastMenu.items.map((item) => item.text)), ['Add files…', 'Receive a file…']);
+  await done(page);
+});
+
+scenario('receive: the whole happy path, answers sent once, nothing about time or rate', async () => {
+  const page = await drop('list');
+  await ready(page);
+  await openReceive(page);
+  const sheet = page.locator('dialog.receive[open]');
+  assert.equal(await text(sheet.locator('h2')), 'Receive a file');
+  assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Receive a file', 'focus starts on the heading');
+  assert.equal((await calls(page, 'receive_start')).length, 1);
+  assert.equal(await statusOf(page), 'Getting a link ready…');
+  assert.deepEqual(await buttonsOf(page), ['Cancel']);
+
+  const expiresAt = nowSeconds + 581;
+  await setReceive(page, { state: 'waiting', link: RLINK, words: WORDS, expiresAt });
+  assert.equal(await statusOf(page), 'Send the link, say the words another way. 9:41 left');
+  assert.equal(await sheet.locator('input[readonly]').inputValue(), RLINK);
+  assert.equal(await sheet.locator('ol.words').getAttribute('aria-label'), 'Words to read out: orbit, lemon, candle, frost');
+  assert.deepEqual(await sheet.locator('ol.words li').allTextContents(), ['orbit', 'lemon', 'candle', 'frost']);
+  assert.match(await sheetText(page), /Say these words another way, like a call or a message/);
+  assert.match(await sheetText(page), /Don't send the words with the link\. Anyone with both could send you a file\./);
+  assert.match(await sheetText(page), /They can send one file, up to 250 MB\./);
+  await sheet.locator('[data-key="copy-link"]').click();
+  assert.equal(await page.evaluate(() => window.__stub.clipboard), RLINK);
+  await sheet.locator('[data-key="copy-words"]').click();
+  assert.equal(await page.evaluate(() => window.__stub.clipboard), 'orbit lemon candle frost');
+
+  await setReceive(page, { state: 'opened', link: RLINK, words: WORDS, expiresAt });
+  assert.equal(await statusOf(page), 'Someone opened your link. 9:41 left');
+  await setReceive(page, { state: 'check', link: RLINK, words: WORDS, checkWords: ['apple', 'river', 'stone'], expiresAt });
+  assert.equal(await statusOf(page), 'Do these 3 words match theirs? 9:41 left');
+  assert.equal(await sheet.locator('ol.words').getAttribute('aria-label'), 'Check words to read out: apple, river, stone');
+  assert.deepEqual(await buttonsOf(page), ["They don't match", 'They match', 'Cancel'], 'macOS order: primary on the right');
+  await sheet.getByRole('button', { name: 'They match', exact: true }).click();
+  assert.deepEqual((await calls(page, 'receive_verify')).map((c) => c.args), [{ matches: true }]);
+  await page.waitForFunction(() => document.querySelector('dialog.receive .share-slot').textContent.includes('Waiting for them to choose a file.'));
+  assert.deepEqual(await buttonsOf(page), ['Cancel']);
+
+  // The real extension has a line of its own, so a long or odd name cannot hide what kind of file it is.
+  for (const [name, ext] of [
+    ['invoice.pdf.exe', 'Ends in .exe'],
+    [`Holiday photos ${'and more '.repeat(20)}.pdf.app`, 'Ends in .app'],
+    ['README', 'No file extension'],
+    ['.profile', 'No file extension'],
+  ]) {
+    await setReceive(page, { state: 'consent', ...OFFER, name });
+    assert.equal(await visual(sheet.locator('.receive-file .receive-ext')), ext, name);
+  }
+  await setReceive(page, { state: 'consent', ...OFFER });
+  assert.equal(await statusOf(page), 'They want to send you holiday.mp4 (120 MB).');
+  assert.match(await visual(sheet.locator('.receive-file')), /^holiday\.mp4 Ends in \.mp4 120 MB · video\/mp4$/);
+  assert.match(await sheetText(page), /Nothing has been sent yet\. Only accept a file you expect\./);
+  assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Receive a file', 'focus is not on Accept');
+  assert.deepEqual(await buttonsOf(page), ['Decline', 'Accept']);
+  await sheet.getByRole('button', { name: 'Accept', exact: true }).click();
+  assert.deepEqual((await calls(page, 'receive_consent')).map((c) => c.args), [{ accept: true }]);
+  await page.waitForFunction(() => document.querySelector('dialog.receive .share-slot').textContent.includes('Connecting'));
+  assert.equal(await statusOf(page), 'Connecting…');
+  assert.match(await sheetText(page), /Your address is hidden\./);
+  assert.match(await sheetText(page), /You can close this window\. Drop carries on\./);
+  assert.deepEqual(await buttonsOf(page), ['Stop']);
+
+  await setReceive(page, { state: 'receiving', ...OFFER, hidden: true, acknowledged: 54_000_000, total: 120_000_400 });
+  assert.equal(await statusOf(page), 'Receiving…');
+  assert.equal(await visual(sheet.locator('.receive-progress')), 'holiday.mp4 44% of 120 MB');
+  const bar = sheet.locator('progress');
+  assert.equal(await bar.evaluate((n) => n.value), 44);
+  assert.equal(await bar.getAttribute('aria-label'), 'Receiving holiday.mp4');
+  await bar.evaluate((n) => { n.dataset.same = 'yes'; });
+  await setReceive(page, { state: 'receiving', ...OFFER, hidden: true, acknowledged: 90_000_300, total: 120_000_400 });
+  assert.equal(await bar.getAttribute('data-same'), 'yes', 'the bar updates in place');
+  assert.equal(await bar.evaluate((n) => n.value), 75);
+  await setReceive(page, { state: 'receiving', ...OFFER, acknowledged: 120_000_400, total: 120_000_400 });
+  assert.equal(await bar.evaluate((n) => n.value), 99, 'it never says 100% before the file is checked');
+  assert.doesNotMatch(await sheetText(page), /\/s\b|per second|left|remaining|minute|ETA/i, 'no time or rate while receiving');
+  await setReceive(page, { state: 'receiving', ...OFFER, acknowledged: 60_000_000, total: 120_000_400, reconnecting: true });
+  assert.equal(await statusOf(page), 'Reconnecting…');
+  assert.equal(await sheet.locator('progress').evaluate((n) => n.value), 49);
+
+  await setReceive(page, { state: 'verifying', ...OFFER });
+  assert.equal(await statusOf(page), 'Checking the file…');
+  assert.deepEqual(await buttonsOf(page), ['Stop']);
+
+  await setReceive(page, KEPT);
+  assert.equal(await statusOf(page), 'Received holiday.mp4.');
+  assert.match(await sheetText(page), /It's in ~\/Downloads\/Wildbloom Received\/holiday\.mp4\. Wildbloom isn't keeping copies of it yet\./);
+  assert.deepEqual(await buttonsOf(page), ['Show in Finder', 'Add to Wildbloom', 'Done']);
+  await sheet.getByRole('button', { name: 'Show in Finder' }).click();
+  assert.deepEqual((await calls(page, 'receive_reveal')).map((c) => c.args), [{ id: 'k1' }]);
+  await sheet.getByRole('button', { name: 'Add to Wildbloom' }).click();
+  await page.waitForFunction(() => document.querySelector('dialog.receive .share-slot').textContent.includes('Added'));
+  assert.deepEqual((await calls(page, 'receive_add_to_wildbloom')).map((c) => c.args), [{ id: 'k1' }]);
+  assert.equal(await statusOf(page), 'Added holiday.mp4 to Wildbloom.');
+  assert.match(await sheetText(page), /It's in ~\/Wildbloom, and Wildbloom keeps 2 copies of it now\./);
+  assert.deepEqual(await buttonsOf(page), ['Show in Finder', 'Done']);
+  await sheet.getByRole('button', { name: 'Done' }).click();
+  await sheet.waitFor({ state: 'detached' });
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'add-more');
+  assert.equal((await calls(page, 'receive_cancel')).length, 0, 'nothing was cancelled');
+  assert.equal((await calls(page, 'receive_start')).length, 1, 'one receive');
+  await done(page);
+});
+
+scenario('receive: platform wording for the kept file and the button order', async () => {
+  for (const [os, desktop, reveal] of [['windows', '', 'Show in Explorer'], ['linux', 'gnome', 'Show in Folder']]) {
+    const page = await drop('list', { os, desktop });
+    await ready(page);
+    await openReceive(page);
+    await setReceive(page, { state: 'check', link: RLINK, words: WORDS, checkWords: ['apple', 'river', 'stone'], expiresAt: nowSeconds + 500 });
+    const expected = os === 'windows' ? ['They match', "They don't match", 'Cancel'] : ["They don't match", 'They match', 'Cancel'];
+    assert.deepEqual(await buttonsOf(page), expected, `${os} button order`);
+    await setReceive(page, KEPT);
+    assert.ok((await buttonsOf(page)).includes(reveal), `${os}: ${reveal}`);
+    await done(page);
+  }
+});
+
+scenario('receive: closing the sheet never cancels, and reopening shows where it is', async () => {
+  const page = await drop('list');
+  await ready(page);
+  await openReceive(page);
+  await setReceive(page, { state: 'waiting', link: RLINK, words: WORDS, expiresAt: nowSeconds + 581 });
+  await page.keyboard.press('Escape');
+  await page.locator('dialog.receive').waitFor({ state: 'detached' });
+  assert.equal((await calls(page, 'receive_cancel')).length, 0, 'Escape does not cancel');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'add-more');
+  await openReceive(page);
+  assert.equal(await statusOf(page), 'Send the link, say the words another way. 9:41 left');
+  assert.equal((await calls(page, 'receive_start')).length, 1, 'a running receive is shown, not restarted');
+  await setReceive(page, { state: 'receiving', ...OFFER, acknowledged: 1000, total: 120_000_400 });
+  await page.keyboard.press('Escape');
+  await page.locator('dialog.receive').waitFor({ state: 'detached' });
+  assert.equal((await calls(page, 'receive_cancel')).length, 0);
+  await openReceive(page);
+  assert.equal(await statusOf(page), 'Receiving…');
+  await page.getByRole('button', { name: 'Stop' }).click();
+  assert.equal((await calls(page, 'receive_cancel')).length, 1, 'Stop cancels');
+  await page.waitForFunction(() => document.querySelector('dialog.receive .share-slot').textContent.startsWith('Stopped.'));
+  assert.equal(await statusOf(page), 'Stopped. Nothing was kept.');
+  assert.deepEqual(await buttonsOf(page), ['Close', 'Start again']);
+  await page.getByRole('button', { name: 'Close' }).click();
+  await page.locator('dialog.receive').waitFor({ state: 'detached' });
+  await openReceive(page);
+  assert.equal((await calls(page, 'receive_start')).length, 2, 'after the finished one is closed, the entry starts a new receive');
+  assert.equal(await statusOf(page), 'Getting a link ready…');
+  await done(page);
+});
+
+scenario('receive: a receive that is running comes back with the window, and a question reopens the sheet', async () => {
+  let page = await harness('receive-r8', { width: 400, height: 600, scheme: 'light' });
+  assert.equal(await page.locator('dialog.receive[open]').count(), 1, 'the sheet is back');
+  assert.equal(await statusOf(page), 'Receiving…');
+  assert.equal((await calls(page, 'receive_start')).length, 0);
+  await done(page);
+
+  page = await drop('list');
+  await ready(page);
+  await openReceive(page);
+  await setReceive(page, { state: 'waiting', link: RLINK, words: WORDS, expiresAt: nowSeconds + 500 });
+  await page.keyboard.press('Escape');
+  await page.locator('dialog.receive').waitFor({ state: 'detached' });
+  await setReceive(page, { state: 'opened', link: RLINK, words: WORDS, expiresAt: nowSeconds + 500 });
+  assert.equal(await page.locator('dialog.receive').count(), 0, 'no interruption for a state that needs nothing');
+  await setReceive(page, { state: 'check', link: RLINK, words: WORDS, checkWords: ['apple', 'river', 'stone'], expiresAt: nowSeconds + 500 });
+  await page.locator('dialog.receive[open]').waitFor();
+  assert.equal(await statusOf(page), 'Do these 3 words match theirs? 8:20 left');
+  await page.keyboard.press('Escape');
+  await page.locator('dialog.receive').waitFor({ state: 'detached' });
+  await setReceive(page, { state: 'consent', ...OFFER });
+  await page.locator('dialog.receive[open]').waitFor();
+  assert.match(await statusOf(page), /They want to send you holiday\.mp4/);
+  await page.keyboard.press('Escape');
+  await page.locator('dialog.receive').waitFor({ state: 'detached' });
+  await setReceive(page, KEPT);
+  assert.equal(await page.locator('dialog.receive').count(), 0);
+  assert.equal(await text(page.locator('#notices')), "Received holiday.mp4. It's in ~/Downloads/Wildbloom Received.");
+  await setReceive(page, { state: 'failed', reason: 'lost' });
+  assert.equal(await text(page.locator('#notices')), "The connection was lost and couldn't be restored. Nothing was kept.");
+  assert.equal((await calls(page, 'receive_cancel')).length, 0);
+  await done(page);
+});
+
+scenario('receive: declined, cancelled by them, refused start, busy', async () => {
+  let page = await drop('list');
+  await ready(page);
+  await openReceive(page);
+  await setReceive(page, { state: 'consent', ...OFFER });
+  await page.getByRole('button', { name: 'Decline' }).click();
+  assert.deepEqual((await calls(page, 'receive_consent')).map((c) => c.args), [{ accept: false }]);
+  await page.waitForFunction(() => document.querySelector('dialog.receive .share-slot').textContent.includes('You said no.'));
+  assert.equal(await statusOf(page), 'You said no. Nothing was sent.');
+  assert.deepEqual(await buttonsOf(page), ['Close', 'Start again']);
+  await setReceive(page, { state: 'cancelled', by: 'them' });
+  assert.equal(await statusOf(page), 'They closed the page. Nothing was kept.');
+  await page.getByRole('button', { name: 'Start again' }).click();
+  assert.equal((await calls(page, 'receive_start')).length, 2);
+  await setReceive(page, { state: 'check', link: RLINK, words: WORDS, checkWords: ['apple', 'river', 'stone'], expiresAt: nowSeconds + 500 });
+  await page.getByRole('button', { name: "They don't match" }).click();
+  assert.deepEqual((await calls(page, 'receive_verify')).at(-1).args, { matches: false });
+  await page.waitForFunction(() => document.querySelector('dialog.receive .share-slot').textContent.includes("didn't match"));
+  assert.equal(await statusOf(page), "The 3 words didn't match, so nothing was sent.");
+  await done(page);
+
+  page = await drop('list');
+  await ready(page);
+  await page.evaluate(() => { window.__stub.receiveRefusal = 'node_unreachable'; });
+  await openReceive(page);
+  await page.waitForFunction(() => document.querySelector('dialog.receive .share-slot').textContent.includes('approved'));
+  assert.match(await statusOf(page), /^Can't reach your online node, or this computer isn't approved there\./);
+  await page.evaluate(() => { window.__stub.receiveRefusal = 'unknown'; });
+  await page.getByRole('button', { name: 'Start again' }).click();
+  await page.waitForFunction(() => document.querySelector('dialog.receive .share-slot').textContent.includes('sharing service'));
+  await done(page);
+
+  page = await drop('list');
+  await ready(page);
+  await page.evaluate(() => { window.__stub.receive = { state: 'opened', link: 'https://wildbloom.example/send/#v1.x', words: ['a', 'b', 'c', 'd'], expiresAt: Math.floor(Date.now() / 1000) + 300 }; });
+  // The start-up check saw nothing; a later start finds one running and shows it.
+  await page.evaluate(() => { window.__stub.handlers.receive_state = (() => { let n = 0; return () => (n++ === 0 ? { state: 'idle' } : window.__stub.receive); })(); });
+  await openReceive(page);
+  await page.waitForFunction(() => document.querySelector('dialog.receive .share-slot').textContent.includes('opened your link'));
+  assert.equal((await calls(page, 'receive_start')).length, 1);
+  await done(page);
+});
+
+scenario('receive: every failure has plain words, no jargon, and Start again', async () => {
+  const page = await drop('list');
+  await ready(page);
+  await openReceive(page);
+  const reasons = ['node_unreachable', 'no_turn', 'turn_refused', 'turn_limit', 'relay_unreachable', 'expired', 'wrong_words', 'mismatch', 'too_big', 'unsupported', 'protocol', 'peer_failed', 'peer_storage', 'connect', 'lost', 'verification', 'storage', 'no_relay', 'webview', 'a_reason_from_the_future'];
+  const seen = new Set();
+  for (const reason of reasons) {
+    await setReceive(page, { state: 'failed', reason });
+    const line = await statusOf(page);
+    assert.ok(line.length > 20 && line.endsWith('.'), `${reason}: a sentence`);
+    assert.doesNotMatch(line, /\b(TURN|ICE|STUN|SDP|DTLS|NAT)\b/, `${reason}: no jargon`);
+    assert.doesNotMatch(line, /webrtc|\bpeers?\b|protocol|webview|data channel/i, `${reason}: no jargon`);
+    assert.equal(seen.has(line), false, `${reason}: its own words`);
+    seen.add(line);
+    assert.deepEqual(await buttonsOf(page), ['Close', 'Start again']);
+  }
+  await setReceive(page, { state: 'failed', reason: 'too_big' });
+  assert.equal(await statusOf(page), "Their file is over 250 MB, so Drop didn't take it.");
+  await setReceive(page, { state: 'failed', reason: 'a_reason_from_the_future' });
+  assert.equal(await statusOf(page), 'Something went wrong. Nothing was kept.');
+  await done(page);
+});
+
+scenario('receive: Add to Wildbloom problems say what to do, folder off can be turned on', async () => {
+  const page = await drop('list');
+  await ready(page);
+  await openReceive(page);
+  await setReceive(page, KEPT);
+  const sheet = page.locator('dialog.receive[open]');
+  await page.evaluate(() => { window.__stub.addToWildbloomError = 'cannot_sync'; });
+  await sheet.getByRole('button', { name: 'Add to Wildbloom' }).click();
+  await page.waitForFunction(() => document.querySelector('dialog.receive').textContent.includes("can't keep this file"));
+  assert.match(await sheetText(page), /Wildbloom can't keep this file, for example because it's empty\. It stays in the Received folder\./);
+  assert.equal(await statusOf(page), 'Received holiday.mp4.', 'the file is still kept');
+  await page.evaluate(() => { window.__stub.addToWildbloomError = 'move_failed'; });
+  await sheet.getByRole('button', { name: 'Add to Wildbloom' }).click();
+  await page.waitForFunction(() => document.querySelector('dialog.receive').textContent.includes("Couldn't move"));
+  await page.evaluate(() => { window.__stub.addToWildbloomError = 'not_found'; });
+  await sheet.getByRole('button', { name: 'Add to Wildbloom' }).click();
+  await page.waitForFunction(() => document.querySelector('dialog.receive').textContent.includes("isn't where Drop left it"));
+
+  // The folder is off: the usual question, then the add goes through.
+  await page.evaluate(() => {
+    window.__stub.addToWildbloomError = null;
+    let off = 2;
+    window.__stub.handlers.receive_add_to_wildbloom = () => { if (off-- > 0) throw { code: 'folder_off' }; return { name: 'holiday (2).mp4', folder: '~/Wildbloom' }; };
+  });
+  await sheet.getByRole('button', { name: 'Add to Wildbloom' }).click();
+  const confirm = page.locator('dialog.confirm[open]');
+  await confirm.waitFor();
+  assert.equal(await text(confirm.locator('h2')), 'Keep a readable copy of every file in ~/Wildbloom?');
+  await confirm.locator('button', { hasText: 'Cancel' }).click();
+  await page.waitForFunction(() => document.querySelector('dialog.receive').textContent.includes('Your Wildbloom folder is off'));
+  await sheet.getByRole('button', { name: 'Add to Wildbloom' }).click();
+  await confirm.waitFor();
+  await confirm.locator('button', { hasText: 'Turn on' }).click();
+  await page.waitForFunction(() => document.querySelector('dialog.receive .share-slot').textContent.includes('Added'));
+  assert.deepEqual((await calls(page, 'set_watch_folder')).map((c) => c.args), [{ enabled: true }]);
+  assert.equal(await statusOf(page), 'Added holiday (2).mp4 to Wildbloom.');
+
+  await done(page);
+});
+
+scenario('receive: kept while the Wildbloom folder is off', async () => {
+  const page = await harness('receive-r10b', { width: 400, height: 600, scheme: 'light' });
+  assert.equal(await statusOf(page), 'Received holiday.mp4.');
+  assert.match(await sheetText(page), /Your Wildbloom folder is off, so it can't be added yet\. Turn it on in Settings\./);
+  assert.deepEqual(await buttonsOf(page), ['Show in Finder', 'Done']);
+  await page.evaluate(() => { window.__stub.revealError = true; });
+  await page.getByRole('button', { name: 'Show in Finder' }).click();
+  await page.waitForFunction(() => document.querySelector('dialog.receive').textContent.includes("isn't where Drop left it"));
+  await done(page);
+});
+
+scenario('receive: keyboard order stays inside the sheet, Enter and Space work', async () => {
+  const page = await drop('list');
+  await ready(page);
+  await openReceive(page);
+  await setReceive(page, { state: 'waiting', link: RLINK, words: WORDS, expiresAt: nowSeconds + 581 });
+  const order = async (count) => {
+    const stops = [];
+    for (let i = 0; i < count; i++) {
+      await page.keyboard.press('Tab');
+      stops.push(await page.evaluate(() => (document.activeElement.closest('dialog.receive') ? document.activeElement.getAttribute('data-key') || document.activeElement.textContent : 'outside the sheet')));
+    }
+    return stops;
+  };
+  await page.locator('dialog.receive h2').focus();
+  assert.deepEqual(await order(3), ['copy-link', 'copy-words', 'cancel'], 'link, words, then Cancel');
+  await setReceive(page, { state: 'check', link: RLINK, words: WORDS, checkWords: ['apple', 'river', 'stone'], expiresAt: nowSeconds + 500 });
+  await page.locator('dialog.receive h2').focus();
+  assert.deepEqual(await order(3), ['no-match', 'match', 'cancel']);
+  await page.locator('[data-key="match"]').focus();
+  await page.keyboard.press('Enter');
+  assert.deepEqual((await calls(page, 'receive_verify')).map((c) => c.args), [{ matches: true }]);
+  assert.equal(await page.locator('[data-key="match"]').count(), 0, 'the question is gone once answered');
+  await setReceive(page, { state: 'consent', ...OFFER });
+  assert.deepEqual(await order(2), ['decline', 'accept']);
+  await page.keyboard.press('Space');
+  assert.deepEqual((await calls(page, 'receive_consent')).map((c) => c.args), [{ accept: true }], 'Space on the focused Accept');
+  await done(page);
+});
+
+scenario('receive: an answer cannot be sent twice', async () => {
+  const page = await drop('list');
+  await ready(page);
+  await openReceive(page);
+  await setReceive(page, { state: 'consent', ...OFFER });
+  await page.evaluate(() => { window.__stub.handlers.receive_consent = () => new Promise(() => {}); });
+  await page.getByRole('button', { name: 'Accept' }).click();
+  assert.equal(await page.getByRole('button', { name: 'Accept' }).isDisabled(), true);
+  assert.equal(await page.getByRole('button', { name: 'Decline' }).isDisabled(), true);
+  await page.getByRole('button', { name: 'Accept' }).click({ force: true, timeout: 500 }).catch(() => {});
+  assert.equal((await calls(page, 'receive_consent')).length, 1);
+  await done(page);
+});
+
+scenario('receive: hostile and very long names are text, and wrap without overflow', async () => {
+  for (const key of ['r6b', 'r6c']) {
+    const page = await harness(`receive-${key}`, { width: 340, height: 420, scheme: 'dark' });
+    assert.equal(await page.locator('dialog.receive img').count(), 0);
+    const fit = await page.evaluate(() => { const body = document.querySelector('dialog.receive .sheet-body'); return body.scrollWidth <= body.clientWidth; });
+    assert.equal(fit, true, `${key} fits at 340`);
+    await done(page);
+  }
+});
+
+scenario('settings: hide my address when receiving', async () => {
+  const page = await settingsPage({ scheme: 'dark' });
+  const box_ = page.getByRole('checkbox', { name: 'Hide my address when receiving' });
+  assert.equal(await box_.count(), 1);
+  assert.equal(await box_.isChecked(), true, 'on by default');
+  assert.equal(await text(page.locator('#drop-receiving-hint')), "The other person sees the relay's address instead of yours, and sends may be slower.");
+  assert.equal(await box_.getAttribute('aria-describedby'), 'drop-receiving-hint');
+  assert.equal(await text(page.locator('#drop-receiving-folder')), 'Received files go to ~/Downloads/Wildbloom Received.');
+  // Show, beside the path, reveals the Received folder; a refusal says so.
+  const show = page.getByRole('button', { name: 'Show the Received folder' });
+  assert.equal(await text(show), 'Show');
+  const [pathBox, showBox] = [await page.locator('#drop-receiving-folder').boundingBox(), await show.boundingBox()];
+  assert.ok(showBox.x > pathBox.x && Math.abs(showBox.y - pathBox.y) < pathBox.height, 'Show sits beside the path');
+  await show.click();
+  await page.waitForFunction(() => window.__stub.calls.some((c) => c.command === 'reveal_received_folder'));
+  assert.equal((await calls(page, 'reveal_received_folder')).length, 1);
+  assert.equal(await page.locator('#drop-settings-error').isHidden(), true);
+  await page.evaluate(() => { window.__stub.handlers.reveal_received_folder = () => { throw { code: 'received_folder', message: "Couldn't open the Received folder." }; }; });
+  await show.click();
+  await page.locator('#drop-settings-error:not([hidden])').waitFor();
+  assert.equal(await text(page.locator('#drop-settings-error')), "Couldn't open the Received folder.");
+  // Without a folder to show, neither the path nor Show is there.
+  await page.evaluate(() => { window.__stub.state.receiving.folder = ''; window.__stub.flush(); });
+  await page.waitForFunction(() => document.querySelector('#drop-receiving-row').hidden);
+  assert.equal(await show.isVisible(), false);
+  await page.evaluate(() => { window.__stub.state.receiving.folder = '~/Downloads/Wildbloom Received'; window.__stub.flush(); });
+  await page.waitForFunction(() => !document.querySelector('#drop-receiving-row').hidden);
+  await box_.uncheck();
+  await page.waitForFunction(() => window.__stub.calls.some((c) => c.command === 'set_receiving'));
+  assert.deepEqual((await calls(page, 'set_receiving')).map((c) => c.args), [{ hideAddress: false }]);
+  assert.equal(await box_.isChecked(), false);
+  await page.evaluate(() => { window.__stub.state.receiving.hideAddress = true; window.__stub.flush(); });
+  await page.waitForFunction(() => document.querySelector('#drop-hide-address').checked);
+  await page.evaluate(() => { window.__stub.handlers.set_receiving = () => { throw { code: 'unknown' }; }; });
+  await box_.click();
+  await page.locator('#drop-settings-error:not([hidden])').waitFor();
+  assert.equal(await text(page.locator('#drop-settings-error')), "Couldn't change that setting.");
+  assert.equal(await box_.isChecked(), true, 'the box goes back');
+  const result = await new AxeBuilder({ page }).include('#drop-settings').withTags(AXE_TAGS).analyze();
+  assert.deepEqual(result.violations.map((v) => ({ id: v.id, nodes: v.nodes.map((n) => n.target) })), []);
+  for (const width of [820, 420, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `overflow at ${width}`);
+  }
   await done(page);
 });
 

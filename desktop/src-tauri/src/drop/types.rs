@@ -100,6 +100,8 @@ pub struct DropStatus {
     pub watch_folder: WatchFolderStatus,
     pub limits: LimitsStatus,
     pub sharing: SharingSettings,
+    /// "Receive a file": hiding, the Received folder and the size limit.
+    pub receiving: super::direct::ReceivingSettings,
     pub browser_approval: bool,
 }
 

@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "direct-window",
+  "description": "The hidden direct-send window Drop creates per transfer: it takes its requests over its own channel, reports on its connection and feeds the sink, and can do nothing else",
+  "windows": [
+    "direct"
+  ],
+  "permissions": [
+    "allow-direct-peer-attach",
+    "allow-direct-peer-report",
+    "allow-direct-sink-write",
+    "allow-direct-sink-end",
+    "allow-direct-sink-abort"
+  ]
+}

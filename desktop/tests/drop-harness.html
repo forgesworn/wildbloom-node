@@ -35,6 +35,34 @@
           s17: { state: 'downloaded', downloadedAt: now, copy: 'deleting' },
           s18: { state: 'downloaded', downloadedAt: now, copy: 'kept', deleteAt: now + 86400 },
         };
+        const rlink = 'https://wildbloom.example/send/#v1.a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2';
+        const rwords = ['orbit', 'lemon', 'candle', 'frost'];
+        const pair = { link: rlink, words: rwords };
+        const offered = { name: 'holiday.mp4', size: 120000000, type: 'video/mp4' };
+        const receives = {
+          r1: { state: 'preparing' },
+          r2: { state: 'waiting', ...pair, expiresAt: now + 581 },
+          r3: { state: 'opened', ...pair, expiresAt: now + 540 },
+          r4: { state: 'check', ...pair, checkWords: ['apple', 'river', 'stone'], expiresAt: now + 500 },
+          r5: { state: 'waiting_file' },
+          r6: { state: 'consent', ...offered },
+          r6b: { state: 'consent', name: 'holiday-photos-from-the-summer-trip-to-the-coast-with-everyone-final-version-2026.mp4', size: 120000000, type: 'video/mp4' },
+          r6c: { state: 'consent', name: '<img src=x onerror=alert(1)>.pdf', size: 2400, type: 'application/pdf' },
+          r7: { state: 'connecting', ...offered },
+          r7b: { state: 'connecting', ...offered, hidden: true },
+          r7c: { state: 'connecting', ...offered, hidden: true, reconnecting: true },
+          r8: { state: 'receiving', ...offered, hidden: true, acknowledged: 54000000, total: 120000400 },
+          r8b: { state: 'receiving', ...offered, acknowledged: 54000000, total: 120000400, reconnecting: true },
+          r9: { state: 'verifying', ...offered },
+          r10: { state: 'kept', ...offered, id: 'k1', path: '~/Downloads/Wildbloom Received/holiday.mp4', folder: '~/Downloads/Wildbloom Received', canAdd: true },
+          r10b: { state: 'kept', ...offered, id: 'k1', path: '~/Downloads/Wildbloom Received/holiday.mp4', folder: '~/Downloads/Wildbloom Received', canAdd: false },
+          r11: { state: 'declined', ...offered },
+          r12: { state: 'cancelled', by: 'you' },
+          r12b: { state: 'cancelled', by: 'them' },
+        };
+        for (const reason of ['node_unreachable', 'no_turn', 'turn_refused', 'turn_limit', 'relay_unreachable', 'expired', 'wrong_words', 'mismatch', 'too_big', 'unsupported', 'protocol', 'peer_failed', 'peer_storage', 'connect', 'lost', 'verification', 'storage', 'no_relay', 'webview', 'something_new']) receives[`f-${reason}`] = { state: 'failed', reason };
+        const receiveKey = name.startsWith('receive-') ? name.slice(8) : null;
+        if (receiveKey) stub.receive = receives[receiveKey] || { state: 'idle' };
         const waitFor = async (test) => { for (let i = 0; i < 200; i++) { const v = test(); if (v) return v; await new Promise((r) => setTimeout(r, 25)); } return null; };
         const shareKey = name.startsWith('share-') ? name.slice(6) : null;
         if (shareKey) {
@@ -50,7 +78,7 @@
         document.write(patched);
         document.close();
 
-        await waitFor(() => document.getElementById('files') && window.WildbloomShare);
+        await waitFor(() => document.getElementById('files') && window.WildbloomShare && window.WildbloomReceive);
         if (name.startsWith('drag-')) {
           await waitFor(() => document.querySelector('li.row') || document.querySelector('#zone.empty'));
           stub.emit('tauri://drag-enter', { paths: ['/a/one.pdf'], position: { x: 10, y: 10 } });
@@ -59,6 +87,16 @@
         } else if (shareKey) {
           const button = await waitFor(() => document.querySelector('li.row[data-id="f1"] [data-ctl="share"]'));
           button.click();
+        } else if (receiveKey) {
+          // A running receive comes back by itself; the others open from the entry's menu.
+          const live = ['preparing', 'waiting', 'opened', 'check', 'waiting_file', 'consent', 'connecting', 'receiving', 'verifying'].includes(stub.receive.state);
+          if (!live) {
+            const more = await waitFor(() => document.getElementById('add-more'));
+            more.click();
+            const menu = await waitFor(() => stub.lastMenu);
+            menu.items.find((item) => item.text.startsWith('Receive')).action();
+          }
+          await waitFor(() => document.querySelector('dialog.receive[open] .share-status'));
         } else if (name === 'first-run-restore') {
           const button = await waitFor(() => [...document.querySelectorAll('button')].find((b) => b.textContent.startsWith('Restore from')));
           button.click();

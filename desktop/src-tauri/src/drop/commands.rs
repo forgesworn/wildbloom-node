@@ -3,6 +3,10 @@
 //! dialogs never run on the main thread.
 
 use super::client::NodeEndpoint;
+use super::direct::awake::Awake;
+use super::direct::{
+    AddedToWildbloom, PEER_PAGE, PEER_WINDOW, PeerReport, PeerRequest, ReceiveState,
+};
 use super::engine::{Engine, Host, LocalNode};
 use super::status::{StatusLine, Tone};
 use super::types::*;
@@ -15,6 +19,33 @@ use tauri_plugin_dialog::DialogExt as _;
 /// The engine, filled in during set-up.
 #[derive(Default)]
 pub struct DropSlot(pub OnceLock<Arc<Engine>>);
+
+/// The hidden direct-send window's request channel.  The window attaches it
+/// with `direct_peer_attach` before it reports `ready`; every request goes
+/// through it, so requests reach that one webview and no other.  The window
+/// has no event permission at all, so it hears none of the app's events.
+#[derive(Default)]
+pub struct PeerChannel(std::sync::Mutex<Option<tauri::ipc::Channel<PeerRequest>>>);
+
+impl PeerChannel {
+    fn set(&self, channel: Option<tauri::ipc::Channel<PeerRequest>>) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = channel;
+    }
+
+    fn attached(&self) -> bool {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).is_some()
+    }
+
+    /// Sends one request; dropped when no window is attached, which cannot
+    /// happen while a session runs, since Rust sends nothing before `ready`
+    /// and `ready` is refused until the channel is attached.
+    fn send(&self, request: &PeerRequest) {
+        let channel = self.0.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(channel) = channel {
+            let _ = channel.send(request.clone());
+        }
+    }
+}
 
 /// Paths the operating system handed over in a native drop on the Drop
 /// window.  `add_paths` accepts only these, so the webview cannot name an
@@ -93,23 +124,43 @@ impl TauriHost {
     }
 }
 
+/// The windows that show the folder's files and status.  File rows and the
+/// status carry the owner's and device's npubs, the node URL, the folder
+/// path and file names, so they go only to the windows that listen for them
+/// (the Drop window, and the node window for the status), never as a
+/// broadcast that reaches the hidden direct-send window.
+const FILE_WINDOWS: [&str; 1] = ["drop"];
+const STATUS_WINDOWS: [&str; 2] = ["drop", "main"];
+
+impl TauriHost {
+    fn forget_peer_channel(&self) {
+        if let Some(channel) = self.app.try_state::<PeerChannel>() {
+            channel.set(None);
+        }
+    }
+}
+
 impl Host for TauriHost {
     fn emit_file(&self, row: &FileRow) {
-        let _ = self.app.emit("drop://file", row);
+        for window in FILE_WINDOWS {
+            let _ = self.app.emit_to(window, "drop://file", row);
+        }
     }
 
     fn emit_removed(&self, id: &str) {
-        let _ = self.app.emit(
-            "drop://file",
-            RemovedRow {
-                id: id.to_owned(),
-                removed: true,
-            },
-        );
+        let row = RemovedRow {
+            id: id.to_owned(),
+            removed: true,
+        };
+        for window in FILE_WINDOWS {
+            let _ = self.app.emit_to(window, "drop://file", &row);
+        }
     }
 
     fn emit_status(&self, status: &DropStatus, line: &StatusLine) {
-        let _ = self.app.emit("drop://status", status);
+        for window in STATUS_WINDOWS {
+            let _ = self.app.emit_to(window, "drop://status", status);
+        }
         self.update_tray(status, line);
     }
 
@@ -258,6 +309,63 @@ impl Host for TauriHost {
             command
         };
         let _ = command.spawn();
+    }
+
+    fn emit_receive(&self, state: &ReceiveState) {
+        // Links and words only ever go to the Drop window.
+        let _ = self.app.emit_to(DROP_WINDOW, "receive://state", state);
+    }
+
+    fn open_peer_window(&self) -> bool {
+        // One transfer at a time: a window left from an earlier one goes,
+        // and so does its channel.
+        self.forget_peer_channel();
+        if let Some(old) = self.app.get_webview_window(PEER_WINDOW) {
+            let _ = old.destroy();
+        }
+        tauri::WebviewWindowBuilder::new(
+            &self.app,
+            PEER_WINDOW,
+            tauri::WebviewUrl::App(PEER_PAGE.into()),
+        )
+        .title("Wildbloom Drop connection")
+        .visible(false)
+        .focused(false)
+        .skip_taskbar(true)
+        .build()
+        .is_ok()
+    }
+
+    fn peer_request(&self, request: &PeerRequest) {
+        // Through the window's own channel, never an event: an event sent
+        // to one window still reaches any window listening for every target.
+        if let Some(channel) = self.app.try_state::<PeerChannel>() {
+            channel.send(request);
+        }
+    }
+
+    fn close_peer_window(&self) {
+        self.forget_peer_channel();
+        if let Some(window) = self.app.get_webview_window(PEER_WINDOW) {
+            let _ = window.destroy();
+        }
+    }
+
+    fn keep_awake(&self) -> Awake {
+        Awake::hold()
+    }
+}
+
+/// The Drop window's label.
+const DROP_WINDOW: &str = "drop";
+
+/// Each receive command answers only the window that owns it, as the
+/// capability files already require.
+fn only(webview: &tauri::Webview, label: &str) -> CommandResult<()> {
+    if webview.label() == label {
+        Ok(())
+    } else {
+        Err(CommandError::code("wrong_window"))
     }
 }
 
@@ -505,6 +613,184 @@ pub async fn stop_sharing(slot: State<'_, DropSlot>, id: String) -> CommandResul
     engine(&slot)?.stop_sharing(&id).await
 }
 
+// ----------------------------------------------------------- receiving
+
+#[tauri::command]
+pub async fn receive_start(
+    slot: State<'_, DropSlot>,
+    webview: tauri::Webview,
+) -> CommandResult<ReceiveState> {
+    only(&webview, DROP_WINDOW)?;
+    engine(&slot)?.receive_start()
+}
+
+#[tauri::command]
+pub async fn receive_state(
+    slot: State<'_, DropSlot>,
+    webview: tauri::Webview,
+) -> CommandResult<ReceiveState> {
+    only(&webview, DROP_WINDOW)?;
+    Ok(engine(&slot)?.receive_state())
+}
+
+#[tauri::command]
+pub async fn receive_verify(
+    slot: State<'_, DropSlot>,
+    webview: tauri::Webview,
+    matches: bool,
+) -> CommandResult<()> {
+    only(&webview, DROP_WINDOW)?;
+    engine(&slot)?.receive_verify(matches);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn receive_consent(
+    slot: State<'_, DropSlot>,
+    webview: tauri::Webview,
+    accept: bool,
+) -> CommandResult<()> {
+    only(&webview, DROP_WINDOW)?;
+    engine(&slot)?.receive_consent(accept);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn receive_cancel(
+    slot: State<'_, DropSlot>,
+    webview: tauri::Webview,
+) -> CommandResult<()> {
+    only(&webview, DROP_WINDOW)?;
+    engine(&slot)?.receive_cancel();
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn receive_add_to_wildbloom(
+    slot: State<'_, DropSlot>,
+    webview: tauri::Webview,
+    id: String,
+) -> CommandResult<AddedToWildbloom> {
+    only(&webview, DROP_WINDOW)?;
+    engine(&slot)?.receive_add_to_wildbloom(&id).await
+}
+
+#[tauri::command]
+pub async fn receive_reveal(
+    slot: State<'_, DropSlot>,
+    webview: tauri::Webview,
+    id: String,
+) -> CommandResult<()> {
+    only(&webview, DROP_WINDOW)?;
+    engine(&slot)?.receive_reveal(&id)
+}
+
+/// From the node window's settings: hide this computer's address behind the
+/// relay when receiving (the default).
+#[tauri::command]
+pub async fn set_receiving(slot: State<'_, DropSlot>, hide_address: bool) -> CommandResult<()> {
+    engine(&slot)?.set_receiving(hide_address)
+}
+
+/// From the node window's settings: shows the Received folder, making it
+/// first when nothing has arrived yet.
+#[tauri::command]
+pub async fn reveal_received_folder(slot: State<'_, DropSlot>) -> CommandResult<()> {
+    engine(&slot)?.reveal_received_folder()
+}
+
+/// From the hidden window, once at start-up and before `ready`: the channel
+/// its requests arrive on.  Replaces any earlier one.
+#[tauri::command]
+pub async fn direct_peer_attach(
+    peer: State<'_, PeerChannel>,
+    webview: tauri::Webview,
+    channel: tauri::ipc::Channel<PeerRequest>,
+) -> CommandResult<()> {
+    only(&webview, PEER_WINDOW)?;
+    peer.set(Some(channel));
+    Ok(())
+}
+
+/// From the hidden window: replies, state changes and the transfer's end.
+/// `ready` is refused `{ code: "no_channel" }` until the window has attached
+/// its channel, so Rust never sends a request with nowhere to go.
+#[tauri::command]
+pub async fn direct_peer_report(
+    slot: State<'_, DropSlot>,
+    peer: State<'_, PeerChannel>,
+    webview: tauri::Webview,
+    report: PeerReport,
+) -> CommandResult<()> {
+    only(&webview, PEER_WINDOW)?;
+    if report == PeerReport::Ready && !peer.attached() {
+        return Err(CommandError::code("no_channel"));
+    }
+    engine(&slot)?.direct_peer_report(report);
+    Ok(())
+}
+
+/// From the hidden window: one DATA frame's bytes as the raw request body,
+/// with the transfer in `Wildbloom-Transfer` and the envelope offset in
+/// `Wildbloom-Offset`.  Resolves once they are written; the window sends the
+/// ACK only then.
+#[tauri::command]
+pub async fn direct_sink_write(
+    slot: State<'_, DropSlot>,
+    webview: tauri::Webview,
+    request: tauri::ipc::Request<'_>,
+) -> CommandResult<()> {
+    only(&webview, PEER_WINDOW)?;
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err(CommandError::code("sink_failed"));
+    };
+    let header = |name: &str| {
+        request
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+    };
+    let (Some(transfer), Some(offset)) = (
+        header("wildbloom-transfer"),
+        header("wildbloom-offset").and_then(|v| v.parse::<u64>().ok()),
+    ) else {
+        return Err(CommandError::code("sink_failed"));
+    };
+    engine(&slot)?
+        .direct_sink_write(transfer, offset, bytes.clone())
+        .await
+}
+
+/// From the hidden window: END's SHA-256 (lower-case hex) and size.
+/// Resolves once the file is verified and kept (send KEPT); rejects
+/// `sink_failed` (send STOP 2) or `sink_storage` (send STOP 3).
+#[tauri::command]
+pub async fn direct_sink_end(
+    slot: State<'_, DropSlot>,
+    webview: tauri::Webview,
+    transfer: String,
+    sha256: String,
+    size: u64,
+) -> CommandResult<()> {
+    only(&webview, PEER_WINDOW)?;
+    engine(&slot)?
+        .direct_sink_end(transfer, &sha256, size)
+        .await
+}
+
+/// From the hidden window: delete what the sink holds.  Safe to repeat.
+#[tauri::command]
+pub async fn direct_sink_abort(
+    slot: State<'_, DropSlot>,
+    webview: tauri::Webview,
+    transfer: String,
+) -> CommandResult<()> {
+    only(&webview, PEER_WINDOW)?;
+    engine(&slot)?.direct_sink_abort(transfer).await;
+    Ok(())
+}
+
 /// What a drag over the Drop window carries, for the overlay copy.
 pub fn drag_info(paths: &[PathBuf], drop_max_bytes: u64) -> DragInfo {
     let mut info = DragInfo {
@@ -548,4 +834,105 @@ pub fn computer_name() -> String {
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "this computer".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::direct::PeerOp;
+    use super::*;
+    use std::sync::Mutex;
+    use tauri::ipc::{Channel, InvokeResponseBody};
+
+    fn request(seq: u64) -> PeerRequest {
+        PeerRequest {
+            transfer: "t".into(),
+            seq,
+            op: PeerOp::Offer,
+        }
+    }
+
+    fn recording() -> (Channel<PeerRequest>, Arc<Mutex<Vec<serde_json::Value>>>) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let into = seen.clone();
+        let channel = Channel::new(move |body| {
+            let InvokeResponseBody::Json(json) = body else {
+                panic!("a request is JSON");
+            };
+            into.lock()
+                .unwrap()
+                .push(serde_json::from_str(&json).unwrap());
+            Ok(())
+        });
+        (channel, seen)
+    }
+
+    #[test]
+    fn requests_go_only_through_the_attached_channel() {
+        let peer = PeerChannel::default();
+        assert!(!peer.attached());
+        peer.send(&request(1)); // nowhere to go: dropped
+
+        let (first, first_seen) = recording();
+        peer.set(Some(first));
+        assert!(peer.attached());
+        peer.send(&request(2));
+        assert_eq!(
+            *first_seen.lock().unwrap(),
+            [serde_json::json!({ "transfer": "t", "seq": 2, "op": "offer" })]
+        );
+
+        // A later attach replaces the earlier channel.
+        let (second, second_seen) = recording();
+        peer.set(Some(second));
+        peer.send(&request(3));
+        assert_eq!(first_seen.lock().unwrap().len(), 1);
+        assert_eq!(second_seen.lock().unwrap().len(), 1);
+
+        // Closing the window forgets it.
+        peer.set(None);
+        assert!(!peer.attached());
+        peer.send(&request(4));
+        assert_eq!(second_seen.lock().unwrap().len(), 1);
+    }
+
+    /// Every capability that reaches the hidden direct-send window, and what
+    /// it grants.  The window faces a stranger's phone, so it must hear none
+    /// of the app's events and may call only its own commands.
+    #[test]
+    fn the_direct_window_has_no_event_permission() {
+        let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+        let mut granted = Vec::new();
+        for entry in std::fs::read_dir(folder).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|e| e != "json") {
+                continue;
+            }
+            let file = std::fs::read_to_string(&path).unwrap();
+            let capability: serde_json::Value = serde_json::from_str(&file).unwrap();
+            let windows = capability["windows"].as_array().unwrap();
+            if windows
+                .iter()
+                .any(|w| w == PEER_WINDOW || w.as_str().is_some_and(|w| w.contains('*')))
+            {
+                for permission in capability["permissions"].as_array().unwrap() {
+                    let id = permission
+                        .as_str()
+                        .or_else(|| permission["identifier"].as_str())
+                        .unwrap();
+                    granted.push(id.to_owned());
+                }
+            }
+        }
+        granted.sort();
+        assert_eq!(
+            granted,
+            [
+                "allow-direct-peer-attach",
+                "allow-direct-peer-report",
+                "allow-direct-sink-abort",
+                "allow-direct-sink-end",
+                "allow-direct-sink-write",
+            ]
+        );
+    }
 }

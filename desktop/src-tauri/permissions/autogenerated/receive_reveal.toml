@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-receive-reveal"
+description = "Enables the receive_reveal command without any pre-configured scope."
+commands.allow = ["receive_reveal"]
+
+[[permission]]
+identifier = "deny-receive-reveal"
+description = "Denies the receive_reveal command without any pre-configured scope."
+commands.deny = ["receive_reveal"]

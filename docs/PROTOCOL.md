@@ -219,8 +219,9 @@ The response carries `Cache-Control: no-store` and is exactly:
 `own` is for the caller and `peer` for the verified person at the other end.
 Each has exactly the members and limits of an [`ice`](#invitation-and-manifest)
 entry, so Drop puts `peer` into `invite` unchanged.  `urls` are the configured
-URLs in their configured order.  `expires` is the issue time plus 3,600
-seconds.  Each credential is coturn's TURN REST form (`use-auth-secret` with
+URLs in their configured order.  `expires` is the issue time plus 900
+seconds: Drop asks just before it opens a session, which lasts at most 600
+seconds, so every allocation and restart falls inside it.  Each credential is coturn's TURN REST form (`use-auth-secret` with
 the default `:` separator):
 
 - `username` is `<expires>:<label>`, where `label` is 16 fresh random bytes in
@@ -261,7 +262,8 @@ Operator notes:
 - Nothing works until both are deployed: the node flags and the coturn line.
   Until then the node issues credentials that the TURN server refuses.
 - To rotate, add the new line to coturn, restart the node with the new secret,
-  and remove the old line an hour later.
+  and remove the old line 15 minutes later, once the last credential signed
+  with it has expired.
 
 ## Experimental private storage offer
 
@@ -361,7 +363,11 @@ The index is the sender's exchange message index.  The order is:
 2. The page reads and checks it, then sends `manifest` for the file the person
    chooses, or `stop`.
 3. Drop shows the owner the name and size, then sends `accept` or `decline`.
-   `decline` ends the direct send.
+   `decline` ends the direct send.  Before it asks, Drop checks that the
+   volumes holding its temp folder and the Received folder each have twice
+   the envelope length E free and 64 MiB more, since the envelope and the
+   plaintext both pass through temp files.  If not, it sends `stop` with
+   `failed` and tells the owner there is no room, without asking.
 4. The page reads `accept` and sends `answer`.
 5. Within the session deadline Drop may restart ICE at most five times.  It
    sends `restart` at index k + 1 only after reading the page's message at
@@ -372,10 +378,14 @@ The index is the sender's exchange message index.  The order is:
 
 An event at an index the table does not allow, from the wrong side, or a ninth
 message is a protocol failure: the reader sends `stop` with reason `failed` if
-it still can, and ends.  Neither side creates an `RTCPeerConnection` before
-`accept`: Drop creates its connection after the owner accepts, and the page on
-reading `accept`.  A declined or abandoned session therefore exposes no address
-and allocates nothing on a TURN server.
+it still can, and ends.  Once the data is flowing, a packet in the page's slot
+that does not authenticate did not come from the page (the relay or someone at
+it wrote it), so it cannot end the transfer: Drop stops reading the exchange,
+makes no more restarts, and the transfer carries on.  Before then such a packet
+ends the direct send as a protocol failure.  Neither side creates an
+`RTCPeerConnection` before `accept`: Drop creates its connection after the
+owner accepts, and the page on reading `accept`.  A declined or abandoned
+session therefore exposes no address and allocates nothing on a TURN server.
 
 ### Invitation and manifest
 
@@ -386,9 +396,22 @@ and allocates nothing on a TURN server.
 | `ice` | 1 to 4 servers, each exactly `{"credential","urls","username"}`.  `urls` holds 1 to 4 `stun:`, `turn:` or `turns:` URLs of at most 256 bytes; `username` and `credential` hold 1 to 256 bytes without control characters.  At least one URL is `turn:` or `turns:` |
 | `id` | 16 random bytes in canonical unpadded base64url: the transfer's name in each app's own state.  It is never sent to a server, and is neither the relay locator nor a TURN username |
 | `max` | The largest file, in bytes, Drop will accept: 1 to 250,000,000 in v1 |
-| `name` | The FSWNENC2 metadata name: a fixed point of the shared name rule (`sanitise_name` in `crates/envelope`) |
+| `name` | The FSWNENC2 metadata name: a fixed point of the shared name rule (`sanitise_name` in `crates/envelope`) with none of the disguising characters below |
 | `size` | The file's exact size in bytes, 0 to `max` |
 | `type` | The FSWNENC2 metadata media type: lower case, not empty (`application/octet-stream` when unknown), at most 255 UTF-16 units, no control characters |
+
+A direct send's `name` must not hold a character that changes how a name is
+drawn or that cannot be seen, which the shared name rule lets through: U+061C,
+U+180E, U+200B to U+200F, U+202A to U+202E, U+2060 to U+2064, U+2066 to
+U+2069, U+206A to U+206F, U+FEFF and U+E0000 to U+E007F.  These are the
+bidirectional controls (so `invoice`, U+202E, `fdp.terminal` is drawn as
+`invoicelanimret.pdf`), the zero-width and word-joining characters, the
+deprecated formatting characters, the tag characters and the byte order mark.
+A reader refuses such a manifest with `failed`, after the name-rule check and
+before the media type; it never removes the characters itself.  The sending
+page removes them from the chosen file's name before it builds the manifest, so
+an honest file still sends under the plain name it is made of.  The rule
+applies to direct send only; the shared name rule is unchanged.
 
 The manifest is exactly the metadata the page will seal into the envelope, so
 both sides know the envelope's length from it.  The page does not offer a file
@@ -407,8 +430,9 @@ page.  The page's credential travels only inside `invite`, after the check
 words, so only the verified peer receives it.  It never appears in the link, a
 URL, the relay's public fields, a log or browser storage, and the page forgets
 it when the direct send ends.  Drop obtains both from the node's
-[TURN credential issuer](#turn-credential-issuer) after the check words and
-before `invite`, and puts `peer` into `ice` unchanged.
+[TURN credential issuer](#turn-credential-issuer) before it opens the session,
+so a node without the issuer fails before any link is shown, and puts `peer`
+into `ice` unchanged.  An abandoned session's credentials lapse unused.
 
 Each URL in `ice` must equal, byte for byte, an entry of the page's build-time
 allowlist; otherwise the page refuses with `unsupported`.  A paired but hostile
@@ -503,6 +527,9 @@ nothing.  Every envelope record is encrypted exactly once.  If the data channel
 closes, the direct send has failed: v1 has no resume, and the people start again
 with a new link.  The data channel may outlive the session, but once the
 deadline passes no restart is possible and an ICE failure ends the direct send.
+While connected, a page that sends no envelope byte for 90 seconds cannot hold
+Drop: Drop ends the direct send as lost and sends STOP 2.  A reconnection is
+timed by its own clocks instead.
 
 ### Limits
 
@@ -535,5 +562,6 @@ session.  Without hiding, each side sees the other's public address.
 with their exact text and SHA-256, refused messages with the `stop` reason the
 reader sends, valid and refused data-channel frames, and envelope lengths.  The
 first envelope length matches the FSWNENC2 known-answer vector's 65,608 bytes.
-Servers, credentials and keys in it are synthetic.  No Rust or TypeScript
-implementation checks these vectors yet; Drop and the page must pass them.
+Servers, credentials and keys in it are synthetic.  Both readers check every
+vector: Drop's Rust tests read this file, and the web project's tests read a
+byte-for-byte copy of it.

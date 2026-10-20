@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-receive-cancel"
+description = "Enables the receive_cancel command without any pre-configured scope."
+commands.allow = ["receive_cancel"]
+
+[[permission]]
+identifier = "deny-receive-cancel"
+description = "Denies the receive_cancel command without any pre-configured scope."
+commands.deny = ["receive_cancel"]

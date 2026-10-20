@@ -41,6 +41,13 @@
     "allow-share-again",
     "allow-share-verify",
     "allow-share-cancel",
-    "allow-stop-sharing"
+    "allow-stop-sharing",
+    "allow-receive-start",
+    "allow-receive-state",
+    "allow-receive-verify",
+    "allow-receive-consent",
+    "allow-receive-cancel",
+    "allow-receive-add-to-wildbloom",
+    "allow-receive-reveal"
   ]
 }

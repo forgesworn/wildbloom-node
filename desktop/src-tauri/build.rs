@@ -1,8 +1,10 @@
 fn main() {
     // Every app command is listed, so each window's capability must allow
     // the commands it may call: the node window cannot share files (only set
-    // the sharing settings) or reach the recovery key, and the Drop window
-    // cannot reach node settings, sharing settings or pools.
+    // the sharing settings) or reach the recovery key, the Drop window
+    // cannot reach node settings, sharing settings or pools, and the hidden
+    // direct-send window can only attach its request channel, report on its
+    // connection and feed the sink.
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "node_status",
@@ -48,6 +50,20 @@ fn main() {
             "set_sharing",
             "open_file",
             "reveal_file",
+            "receive_start",
+            "receive_state",
+            "receive_verify",
+            "receive_consent",
+            "receive_cancel",
+            "receive_add_to_wildbloom",
+            "receive_reveal",
+            "set_receiving",
+            "reveal_received_folder",
+            "direct_peer_attach",
+            "direct_peer_report",
+            "direct_sink_write",
+            "direct_sink_end",
+            "direct_sink_abort",
         ]),
     ))
     .expect("failed to run tauri-build");

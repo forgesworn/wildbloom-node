@@ -205,6 +205,18 @@ html.drop-scope { background: var(--canvas); }
 .footer-bar .btn { font-size: 0.875rem; }
 .footer-bar .btn.primary { font-size: 1rem; }
 #footer-settings { margin-inline-start: auto; }
+/* Add files is a split button: its small menu also holds Receive a file. */
+.split { display: inline-flex; align-items: stretch; }
+.split #add-files { border-start-end-radius: 0; border-end-end-radius: 0; }
+.drop-scope .split #add-more {
+  width: 28px;
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+  border-inline-start-color: color-mix(in srgb, var(--on-accent) 45%, var(--accent));
+}
+@media (any-pointer: coarse) {
+  .drop-scope .split #add-more { width: 44px; }
+}
 
 /* Drop zone: only the empty state shows it. With files the whole window takes drops. */
 .zone {
@@ -471,6 +483,15 @@ dialog.drop-scope.held .held-names { display: grid; gap: 2px; overflow-wrap: any
 .share-ghost .ghost-icon { flex: none; width: 16px; }
 .share-ghost .share-text { min-width: 0; }
 .share-hint { color: var(--muted); font-size: 0.875rem; }
+/* Receive sheet: the offered file, and the progress of one that is arriving */
+.receive-file { display: grid; gap: 4px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+.receive-file .receive-name { font-size: 1.125rem; font-weight: 600; overflow-wrap: anywhere; }
+.receive-file .receive-ext { font-weight: 600; overflow-wrap: anywhere; }
+.receive-file .receive-meta { color: var(--muted); overflow-wrap: anywhere; }
+.receive-progress { display: grid; gap: 4px; }
+.receive-progress .receive-name { font-weight: 600; overflow-wrap: anywhere; }
+.receive-progress .receive-meta { color: var(--muted); font-variant-numeric: tabular-nums; }
+.receive-path { color: var(--muted); font-size: 0.875rem; overflow-wrap: anywhere; }
 
 @media (prefers-reduced-motion: reduce) {
   .drop-scope *,
@@ -486,6 +507,7 @@ dialog.drop-scope.held .held-names { display: grid; gap: 2px; overflow-wrap: any
 
 @media (forced-colors: active) {
   .drop-scope .btn.primary { border-color: ButtonText; }
+  .drop-scope .split #add-more { border-inline-start-color: ButtonText; }
   .drop-scope progress { accent-color: Highlight; background: Canvas; border: 1px solid CanvasText; }
   .drop-scope progress::-webkit-progress-value { background: Highlight; }
   .drop-scope progress::-moz-progress-bar { background: Highlight; }
@@ -507,6 +529,10 @@ dialog.drop-scope.held .held-names { display: grid; gap: 2px; overflow-wrap: any
 #drop-settings .drop-note { margin: 1rem 0 0; color: #94a290; font-size: 0.8rem; line-height: 1.5; }
 #drop-settings .drop-status-text { margin: 0; color: #aab7a7; }
 #drop-settings .drop-status-text.warn { color: #d6a45b; }
+#drop-settings .drop-received { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.2rem 0.6rem; min-width: 0; }
+#drop-settings .drop-received[hidden] { display: none; }
+#drop-settings .drop-received .drop-status-text { overflow-wrap: anywhere; min-width: 0; }
+#drop-settings button.link { border: 0; border-radius: 0.2rem; padding: 0; color: #8fc67e; background: none; font: inherit; font-weight: 700; text-decoration: underline; text-underline-offset: 0.15em; }
 #drop-settings fieldset { border: 0; margin: 0; padding: 0; display: grid; gap: 0.45rem; min-width: 0; }
 #drop-settings legend { padding: 0; margin-bottom: 0.45rem; color: #d7dfd4; font-weight: 700; }
 #drop-settings #drop-expiry { width: auto; min-width: 10rem; }

@@ -1591,8 +1591,8 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "foregather-kit"
-version = "0.5.0"
-source = "git+https://github.com/forgesworn/foregather-kit?tag=v0.5.0#26c97357eaaaf45f8bb18fcebf2360202c0d6ee8"
+version = "0.6.0"
+source = "git+https://github.com/forgesworn/foregather-kit?tag=v0.6.0#5f184490af4b5ba0f705685a5138ce9db7c8528b"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -6503,6 +6503,7 @@ dependencies = [
  "url",
  "wildbloom-envelope",
  "wildbloom-private-state",
+ "xattr",
  "zeroize",
 ]
 
