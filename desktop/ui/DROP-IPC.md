@@ -46,6 +46,9 @@ Conventions
   limits: { dropMaxBytes: number, shareMaxBytes: number },
   sharing: { afterDownload: "delete" | "keep",              // Added.
              expirySeconds: 3600 | 86400 | 604800 },
+  receiving: { hideAddress: boolean,                        // Added. Receive a file
+               folder: string,                              // the Received folder, for display
+               maxBytes: number },                          // 250000000
   browserApproval: boolean                                  // true once the browser route exists; hides or shows its link
 }
 ```
@@ -81,6 +84,12 @@ Conventions
   how long a sent copy stays otherwise: an hour, a day (the default) or a week. Both are read
   when a file is sent; a share already sent keeps what it was sent with. A changed setting
   is sent as `drop://status`.
+- **Added.** `receiving` is "Receive a file". `hideAddress` (default true) is the node
+  window's "Hide my address when receiving" setting (`set_receiving`): Drop then connects only
+  through the relay, so the sender sees the relay's address, not this computer's. It is read
+  when a receive starts. `folder` is where received files land, outside the Wildbloom folder
+  (`~/Downloads/Wildbloom Received` by default; a full path on Windows). `maxBytes` is the
+  largest file Drop accepts. A changed setting is sent as `drop://status`.
 - The status line (spec 6.1) is resolved in `drop.js` from these fields and the rows, in the
   priority order of the spec. The tray tooltip and menu status item (Rust) must resolve the
   same order from the same data; the copy is in section 6.1 of the design spec.
@@ -269,6 +278,169 @@ The UI shows "too big" itself, without a command, when `bytes > limits.shareMaxB
 A command that rejects with `{ code: "node_unreachable" }` shows that state; any other
 rejection shows `relay_unreachable`.
 
+### Receiving ("Receive a file")
+
+**Added.** A person's phone or browser sends one file straight to this computer: Drop shows a
+link and four words, both people compare three check words, and the file then travels over an
+encrypted WebRTC data channel. Nothing about the file is stored on any server. The Drop window
+shows the sheet; a hidden window (below) does the WebRTC. Rust owns the transfer, so hiding or
+closing the Drop window never ends it, and the sheet can be reopened at any time:
+`receive_state` and the events bring it back to where the transfer is. One receive runs at a
+time.
+
+| Command | Args | Returns |
+|---|---|---|
+| `receive_start` | none | the first `ReceiveState` (`preparing`), then `receive://state` events. Rejects `{ code: "busy" }` while a receive is running and `{ code: "node_unreachable" }` when there is no online node this computer is approved for. Also "Try again" and "Start again" after any final state. |
+| `receive_state` | none | the current `ReceiveState`, or `{ state: "idle" }` when nothing has run since Drop started. Call it when the sheet opens or the window loads, then follow the events. |
+| `receive_verify` | `{ matches: boolean }` | nothing. The owner's answer in `check`. The next state follows as an event. Ignored in any other state. |
+| `receive_consent` | `{ accept: boolean }` | nothing. The owner's answer in `consent`. `false` ends in `declined` (no connection is made and nothing reaches a relay). Ignored in any other state. |
+| `receive_cancel` | none | nothing. Ends the receive at any stage before `kept`: the other person is told and anything partly received is deleted. The sheet's Cancel and Stop buttons call it; closing or hiding the window does not. Best effort; harmless when nothing runs. A file already kept stays kept. |
+| `receive_add_to_wildbloom` | `{ id }` (the `id` of a `kept` state) | `{ name: string, folder: string }`: the name the file took in the Wildbloom folder (a taken name gets " (2)", " (3)" … before the extension) and the folder for display ("~/Wildbloom"). The file is moved, so the folder mirror takes it in as the owner's own and it syncs like any other. Rejects `folder_off` (the Wildbloom folder is not turned on: offer to turn it on), `folder_unavailable` (it can't be found), `cannot_sync` (an empty file, or a name the folder ignores such as one ending in `.part`), `not_found` (the file is no longer where it was kept, or Drop has restarted since) or `move_failed`. |
+| `receive_reveal` | `{ id }` | nothing. "Show in Finder" (macOS), "Show in Explorer" (Windows) or "Show in Folder" (Linux) for the kept file, wherever Add to Wildbloom moved it. Rejects `not_found` as above. |
+| `set_receiving` | `{ hideAddress: boolean }` | nothing. **Node window only**, like `set_sharing`. Then `drop://status`. |
+
+`ReceiveState` (command results and `receive://state` payloads)
+
+```
+{ state: "idle" | "preparing" | "waiting" | "opened" | "check" | "waiting_file" | "consent"
+       | "connecting" | "receiving" | "verifying" | "kept" | "declined" | "cancelled" | "failed",
+  link?: string,            // waiting, opened, check: the link to send
+  words?: string[4],        // same states: the words to say another way
+  expiresAt?: number,       // same states: when the 600 s window ends; the UI runs the countdown
+  checkWords?: string[3],   // check
+  name?: string,            // consent onwards: the file's name (kept: the name it was kept under)
+  size?: number,            // consent onwards: the file's size in bytes
+  type?: string,            // consent onwards: its media type
+  hidden?: boolean,         // connecting, receiving: this computer's address is hidden behind the relay
+  acknowledged?: number,    // receiving: envelope bytes on disk and acknowledged to the sender
+  total?: number,           // receiving: the envelope's length (a little more than size)
+  reconnecting?: boolean,   // connecting, receiving: the connection dropped and Drop is getting it back
+  id?: string,              // kept: the handle for receive_add_to_wildbloom and receive_reveal
+  path?: string,            // kept: where the file is, for display ("~/Downloads/Wildbloom Received/holiday.mp4")
+  folder?: string,          // kept: the Received folder, for display
+  canAdd?: boolean,         // kept: Add to Wildbloom can run now (the folder is on and found)
+  by?: "you" | "them",      // cancelled
+  reason?: string }         // failed, below
+```
+
+| State | Sheet (copy follows the design spec, section 8.3) |
+|---|---|
+| `idle` | Nothing running: "Receive a file" with a Start button. |
+| `preparing` | Getting a link: a spinner. |
+| `waiting` | "Send the link, say the words another way": `link` (Copy link), the four `words` (Copy words) and the countdown to `expiresAt`. Cancel. |
+| `opened` | As `waiting`, plus "Someone opened your link". |
+| `check` | "Do these 3 words match theirs?" with `checkWords`, Yes (`receive_verify` true) and No (false). |
+| `waiting_file` | "Waiting for them to choose a file." Cancel. |
+| `consent` | "They want to send you {name} ({size})." with Accept and Decline (`receive_consent`). `type` may pick an icon. Nothing has been sent yet. |
+| `connecting` | "Connecting…", with `name`. `hidden` may add "Your address is hidden." `reconnecting` true: "Reconnecting…". Stop. |
+| `receiving` | Progress `acknowledged / total` (never from anything else), with `name` and `size`. `reconnecting` true: "Reconnecting…" on the same bar. Stop. |
+| `verifying` | "Checking the file…". Every byte has arrived; nothing can be opened yet. |
+| `kept` | "Received {name}" with `path`, and "Add to Wildbloom" (shown when `canAdd`; otherwise say the Wildbloom folder is off) and "Show in Finder" (platform wording as `reveal_file`). The file is in `folder`, outside the Wildbloom folder, and is not synced until added. |
+| `declined` | "You said no. Nothing was sent." |
+| `cancelled` | `by: "you"`: "Stopped. Nothing was kept." `by: "them"`: "They closed the page. Nothing was kept." |
+| `failed` | By `reason`, with "Start again". |
+
+`reason` for `failed`:
+
+| `reason` | Meaning |
+|---|---|
+| `node_unreachable` | The online node did not answer, or this computer is not approved there. |
+| `no_turn` | The online node does not issue relay (TURN) credentials yet, so it cannot receive files directly. |
+| `turn_refused`, `turn_limit` | The node refused relay credentials (`turn_limit`: too many tries this hour; try later). |
+| `relay_unreachable` | The pairing relay failed. |
+| `expired` | The 10-minute window ended before the file started to arrive. |
+| `wrong_words` | Someone opened the link with the wrong words. The link can't be used again. |
+| `mismatch` | The owner said the check words did not match. |
+| `too_big` | Their file is larger than `receiving.maxBytes`. |
+| `unsupported` | Their page can't use what this computer offered (for example its relay). |
+| `protocol` | Something arrived that the protocol does not allow. |
+| `peer_failed`, `peer_storage` | Their side failed. |
+| `connect` | The two devices never connected. |
+| `lost` | The connection was lost and could not be restored. |
+| `verification` | The file did not check out (wrong size, damaged or not what they offered). Nothing was kept. |
+| `storage` | There is no room on this computer. Nothing was kept. |
+| `no_relay` | Hiding the address needs a relay and none was offered. |
+| `webview` | The connection could not be set up in this app. |
+
+An unknown `reason` falls back to a generic "Something went wrong. Nothing was kept."
+
+## Hidden direct-send window
+
+**Added.** For each transfer, after the owner accepts the file, Rust creates a never-shown
+window, label `direct`, at `direct.html`, and destroys it when the transfer ends. It runs the
+one `RTCPeerConnection` and the frame logic with the web project's TypeScript
+(`src/direct/peer.ts`'s `DirectPeer` with its `buildRtcConfiguration`, and `transfer.ts`'s
+`receiveEnvelope`), with a `DirectSink` that forwards to Rust. Its capability
+(`capabilities/direct-window.json`) allows only listening for events and the four commands
+below. The CSP is unchanged: WebKit's WebRTC needs no `connect-src` entry.
+
+What it receives and never receives:
+
+- It gets Drop's own TURN credential (`create.iceServers`) and the SDP. Nothing else: never the
+  link, the words, the page's credential (that travels only inside the invitation) or the
+  envelope key (Rust keeps it and verifies the file itself).
+- It must not log a credential or an SDP, and keeps nothing in browser storage.
+
+**Start-up.** Subscribe to `direct://peer` first, then call
+`invoke("direct_peer_report", { report: { kind: "ready" } })`. Rust sends nothing before
+`ready`, and gives up with `failed`/`webview` if it does not come within 20 seconds.
+
+**Requests** arrive as the event `direct://peer`. Each has `transfer` (the transfer's `id`; send
+it back in every report) and `seq` (send it back in the reply). One request is outstanding at a
+time except `close`, which may come at any moment.
+
+| `op` | Fields | What to do | Reply (`kind`) |
+|---|---|---|---|
+| `create` | `iceServers: [{ credential, urls, username }]`, `relayOnly: boolean`, `envelopeBytes: number`, `size: number` | `new DirectPeer({ iceServers, hide: relayOnly })`: one connection and the pre-negotiated data channel (`negotiated: true`, `id: 0`, label `wildbloom-direct/1`). Keep `envelopeBytes` and `size` for `receiveEnvelope`. Report every connection state change from now on (below). | `done`; `error` with `reason: "no-relay"` for `NoRelayError`, any other `reason` for anything else |
+| `offer` | none | `peer.offer()`: the local description once gathering completes or three seconds after it starts. | `offer` with `sdp` |
+| `answer` | `sdp` | `peer.applyAnswer(sdp)`, for the answer and for each restart answer. After the first, wait for the data channel: report `channel` when it opens and start `receiveEnvelope({ channel, envelopeBytes, plaintextBytes: size, sink })`. | `done` |
+| `restart` | none | `peer.offer(true)`: an ICE restart offer on the same connection. The data channel carries on. | `offer` with `sdp` |
+| `close` | `stop: 1 \| 2 \| 3 \| null` | If `receiveEnvelope` is still running and `stop` is set, send the STOP frame with that reason (1 when the owner cancelled, 2 for a failure Rust found, 3 when there was no room) and end it. Wait at most a second for the send buffer to drain, then close the connection. Rust destroys the window after the reply or after a second. | `done` |
+
+**Reports** go through `invoke("direct_peer_report", { report })`, where `report` is one of:
+
+```
+{ kind: "ready" }
+{ kind: "done", transfer, seq }
+{ kind: "offer", transfer, seq, sdp }
+{ kind: "error", transfer, seq, reason }                 // "no-relay" or a short code
+{ kind: "state", transfer, state }                        // connectionState: "new" | "connecting" | "connected"
+                                                          //   | "disconnected" | "failed" | "closed"
+{ kind: "channel", transfer }                             // the data channel opened
+{ kind: "ended", transfer, outcome }                      // receiveEnvelope settled: "kept", or the
+                                                          //   TransferError kind: "cancelled" | "peer-cancelled"
+                                                          //   | "peer-failed" | "peer-storage" | "protocol"
+                                                          //   | "closed" | "verification" | "storage"
+```
+
+Report state changes as they happen, without judging them: Rust decides on restarts (at once
+on `failed`, after 8 seconds of `disconnected`, at most five, only before the session
+deadline) and gives up (90 seconds without a first connection, 45 seconds after `failed`
+without recovering). A report for another transfer is ignored. The window does not run the
+connection watchdog or restarts of its own.
+
+**The sink.** `receiveEnvelope` calls the `DirectSink` in order, one step at a time:
+
+- `write(bytes)`: `invoke("direct_sink_write", bytes, { headers: { "Wildbloom-Transfer":
+  transfer, "Wildbloom-Offset": String(offset) } })`, with `bytes` the DATA frame's payload as
+  a `Uint8Array` (sent as the raw request body) and `offset` the envelope bytes written before
+  it (0 first). It resolves once the bytes are on disk; `receiveEnvelope` sends its ACK only
+  then. Rust writes them to a private temp file in its own state folder, never under
+  `~/Wildbloom`, and refuses a gap, an overlap or a byte past `envelopeBytes`.
+- `end({ sha256, size })`: `invoke("direct_sink_end", { transfer, sha256, size })` with
+  `sha256` as 64 lower-case hex characters. Rust checks, in order: exactly `envelopeBytes`
+  arrived; the envelope opens with the key and every record authenticates, with the record
+  count and padding matching its header; the metadata is the manifest exactly; the
+  plaintext's size and SHA-256 are END's. It resolves once the file is kept in the Received
+  folder: `receiveEnvelope` then sends KEPT.
+- `abort()`: `invoke("direct_sink_abort", { transfer })`. Deletes what Rust holds. Safe to
+  repeat.
+
+Both `direct_sink_write` and `direct_sink_end` reject `{ code: "sink_failed" }` (throw an
+`Error`, so `receiveEnvelope` sends STOP 2) or `{ code: "sink_storage" }` (throw
+`SinkStorageError`, so it sends STOP 3). Either way Rust has already deleted the temp files.
+Nothing is visible to the owner before KEPT.
+
 ## Events (Rust to webview)
 
 | Event | Payload | Meaning |
@@ -276,6 +448,8 @@ rejection shows `relay_unreachable`.
 | `drop://file` | `FileRow`, or `{ id, removed: true }` | Upsert or delete one row. |
 | `drop://status` | `DropStatus` without `files` | Any change outside the rows. Merged into the UI's copy. The node window listens too. |
 | `share://state` | `ShareState` with `id` | State of the open share. Ignored when no sheet is open for that `id`. |
+| `receive://state` | `ReceiveState` | **Added.** The receive sheet's state, sent to the Drop window only (it carries the link and words). Sent whether or not the sheet is open. |
+| `direct://peer` | a request (above) | **Added.** To the hidden `direct` window only. |
 | `drop://notice` | `{ kind: "keeps_running" }` | **Added.** Shown as an inline notice, "Wildbloom keeps running. Open it again from your apps." Send it once, before hiding the window, when the window is closed on a desktop with no tray (GNOME without AppIndicator). |
 | `drop://open-flow` | `{ flow: "recovery" }` | **Added.** Open the recovery key sheet ("Save recovery key again…", checkbox not required) in the Drop window. |
 | `drop://drag-info` | `{ files: number, folders: number, tooBig: number }` | **Added.** The webview cannot inspect paths. When Rust receives the window's drag-enter (it carries paths) it classifies them and emits this so the overlay can say "Folders can't be added yet" or "Too big to add". `tooBig` counts files over `limits.dropMaxBytes`. Optional: without it the overlay just says "Drop to keep 2 copies". |
@@ -309,12 +483,18 @@ Every app command is listed in the build's app manifest, so a window can call on
 capability allows:
 
 - **Drop window** (`capabilities/drop-window.json`): every Drop command above except
-  `open_drop_flow` and `set_sharing`. No node settings, sharing settings, pool or updater
-  commands.
+  `open_drop_flow`, `set_sharing` and `set_receiving`, and except the `direct_*` commands. No
+  node settings, sharing or receiving settings, pool or updater commands. The `receive_*`
+  commands also refuse `{ code: "wrong_window" }` from any other window.
+- **Hidden direct-send window** (`capabilities/direct-window.json`, label `direct`): only
+  `direct_peer_report`, `direct_sink_write`, `direct_sink_end` and `direct_sink_abort`, and
+  listening for events (`core:event:allow-listen`, `allow-unlisten`). It cannot emit events.
+  The four commands refuse `{ code: "wrong_window" }` from any other window.
 - **Node window** (`capabilities/default.json`): its own node, pool and update commands, plus
   `platform_info`, `drop_status`, `check_online_node`, `set_online_node`, `approve_device`,
   `renew_approval`, `approval_status`, `cancel_approval`, `set_watch_folder`,
-  `open_watch_folder`, `open_drop_flow` and `set_sharing` (**added**). (`open_file` and `reveal_file` are Drop window only.) It cannot share, remove or save files, restore, or
+  `open_watch_folder`, `open_drop_flow`, `set_sharing` (**added**) and `set_receiving`
+  (**added**). (`open_file` and `reveal_file` are Drop window only.) It cannot share, remove or save files, restore, or
   read or save the recovery key.
 
 ## Behaviour Rust can rely on
@@ -327,3 +507,8 @@ capability allows:
   except that restore shows its own screen between `node` and `approve`.
 - Dismissing a sheet or step while an approval is waiting calls `cancel_approval`.
 - Closing the share sheet calls `share_cancel` (not after `sent` or `downloaded`).
+- **Added.** The receive sheet calls `receive_state` when it opens and follows
+  `receive://state`. Its Cancel and Stop buttons call `receive_cancel`; dismissing the sheet
+  after a final state, or hiding the window, does not. Quitting while a receive runs asks
+  "Quit and stop receiving?" ("The file they're sending won't arrive."), and Rust tells the
+  other person before it exits.
