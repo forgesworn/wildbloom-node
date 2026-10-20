@@ -132,7 +132,9 @@ async function phoneKit() {
 }
 
 async function openWindow() {
-  const context = await browser.newContext();
+  // With addresses shown, Chrome gathers on every interface only for a page with media permission,
+  // else only on the default route's, which behind a full-tunnel VPN takes no local packets.
+  const context = await browser.newContext({ permissions: ['microphone'] });
   const page = await context.newPage();
   const problems = [];
   const consoleLines = [];

@@ -41,7 +41,7 @@ import dgram from 'node:dgram';
 import { once } from 'node:events';
 import { closeSync, existsSync, ftruncateSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { tmpdir } from 'node:os';
+import { networkInterfaces, tmpdir } from 'node:os';
 import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, devices } from 'playwright-core';
@@ -58,6 +58,21 @@ for (const file of [daemon, appBinary]) assert.ok(existsSync(file), `Build ${fil
 const provenance = JSON.parse(readFileSync(join(repo, 'desktop/ui/vendor/wildbloom-direct.provenance.json'), 'utf8'));
 const KEPT_BYTES = Number(process.env.DIRECT_E2E_BYTES ?? 32 * 1024 * 1024 + 4321);
 const CLOSED_BYTES = 200_000_000;
+
+// Drop's webview gathers host candidates only on the default route's interface. Both ends run
+// on this machine, so that address must take local packets: a full-tunnel VPN's does not.
+{
+  const iface = execFileSync('route', ['-n', 'get', 'default'], { encoding: 'utf8' }).match(/interface: (\S+)/u)?.[1];
+  const address = networkInterfaces()[iface]?.find((entry) => entry.family === 'IPv4')?.address;
+  assert.ok(address, `No IPv4 address on the default route's interface (${iface}).`);
+  const socket = dgram.createSocket('udp4');
+  await new Promise((done, fail) => { socket.once('error', fail); socket.bind(0, address, done); });
+  const heard = new Promise((done) => socket.once('message', () => done(true)));
+  socket.send(Buffer.from('probe'), socket.address().port, address);
+  const delivered = await Promise.race([heard, new Promise((done) => setTimeout(() => done(false), 1000))]);
+  socket.close();
+  assert.ok(delivered, `The default route is ${iface}, which does not take packets sent on this machine (a full-tunnel VPN?). Drop's webview gathers only there, so host candidates cannot connect: run with the LAN as the default route.`);
+}
 
 const root = mkdtempSync(join(tmpdir(), 'wildbloom-direct-native-'));
 const home = join(root, 'home');
@@ -138,7 +153,7 @@ const pageServer = createServer(async (request, response) => {
   const url = new URL(request.url, pageOrigin);
   if (url.pathname === '/send/') { response.writeHead(301, { Location: '/send' }).end(); return; }
   if (url.pathname.startsWith('/pair/v1/')) {
-    relayLog.push(`${request.method} ${url.pathname.replace(/[A-Za-z0-9_-]{22,}/gu, '<id>')}`);
+    relayLog.push({ at: Date.now(), line: `${request.method} ${url.pathname.replace(/[A-Za-z0-9_-]{22,}/gu, '<id>')}` });
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
     const headers = {};
@@ -291,7 +306,11 @@ try {
   const executablePath = process.env.WILDBLOOM_BROWSER_EXECUTABLE ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
   browser = await chromium.launch({ headless: true, executablePath, args: ['--disable-features=WebRtcHideLocalIpsWithMdns'] });
   async function openPhone(link, on = browser) {
-    const context = await on.newContext({ ...devices['Pixel 7'], acceptDownloads: false });
+    // With its addresses shown, Chrome gathers on every interface only for a page with media
+    // permission; otherwise only on the default route's, which behind a full-tunnel VPN is the
+    // tunnel, and Drop's webview on this same machine cannot reach that. The page never asks
+    // for the microphone; the permission only widens what it gathers.
+    const context = await on.newContext({ ...devices['Pixel 7'], acceptDownloads: false, permissions: ['microphone'] });
     await context.addInitScript(() => {
       const Original = window.RTCPeerConnection;
       window.__rtc = [];
@@ -314,6 +333,12 @@ try {
   const expectTitle = (page, text, timeout = 60_000) => page.waitForFunction((t) => document.getElementById('title')?.textContent === t, text, { timeout })
     .catch(async () => { throw new Error(`Expected "${text}" but the phone shows "${await title(page).catch(() => '?')}"`); });
   const rtcCount = (page) => page.evaluate(() => window.__rtc.length);
+  /** The phone's view of its connection, for a failure message: states and candidate kinds and addresses, never a credential. */
+  const describeRtc = (page) => page.evaluate(() => (window.__rtc ?? []).map((pc) => ({
+    connection: pc.connectionState, ice: pc.iceConnectionState, gathering: pc.iceGatheringState,
+    local: (pc.localDescription?.sdp ?? '').split('\r\n').filter((l) => l.startsWith('a=candidate')).map((l) => l.split(' ').slice(2, 8).join(' ')),
+    remote: (pc.remoteDescription?.sdp ?? '').split('\r\n').filter((l) => l.startsWith('a=candidate')).map((l) => l.split(' ').slice(2, 8).join(' ')),
+  }))).catch(() => []);
   const selectedPair = (page) => page.evaluate(async () => {
     const pc = window.__rtc[0];
     if (!pc) return undefined;
@@ -352,6 +377,13 @@ try {
     return { phone, from };
   }
   const receivedNow = () => filesUnder(received).map((path) => path.slice(received.length + 1)).sort();
+  /** What the Drop window shows for the receive: the open sheet's status line, or the notice when it is closed. */
+  const shown = (expected) => until(async () => {
+    const seen = await app.evaluate(`(() => { const sheet = document.querySelector('dialog.receive[open]');
+      return { sheet: sheet ? sheet.querySelector('[role=status]')?.innerText ?? '' : null, notice: document.getElementById('notices')?.innerText ?? '' }; })()`);
+    const text = seen.sheet ?? seen.notice;
+    return text.includes(expected) && { where: seen.sheet === null ? 'notice' : 'sheet', text: text.trim() };
+  }, async () => `the Drop window to say "${expected}"`, 10_000);
 
   // ------------------------------------------- 1. a file arrives and is kept
   {
@@ -368,7 +400,7 @@ try {
     const sampler = setInterval(() => { selectedPair(phone.page).then((p) => { if (p) paths.push(p); }); }, 250);
     const final = await waitState(from, ['kept', 'failed', 'cancelled'], 240_000);
     clearInterval(sampler);
-    assert.equal(final.state, 'kept', `Drop ended ${final.state} (${final.reason ?? final.by ?? ''})`);
+    if (final.state !== 'kept') assert.fail(`Drop ended ${final.state} (${final.reason ?? final.by ?? ''}); the phone saw ${JSON.stringify(await describeRtc(phone.page))}`);
     await expectTitle(phone.page, 'Sent');
     const states = await app.evaluate(`window.__e2e.states.slice(${from}).map((s) => ({ state: s.state, at: s.at, acknowledged: s.acknowledged ?? null, total: s.total ?? null, hidden: s.hidden ?? null }))`);
     const firstReceiving = states.find((s) => s.state === 'receiving');
@@ -397,6 +429,7 @@ try {
       verify_s: (final.at - verifying.at) / 1000, frames: Math.ceil(firstReceiving.total / 65_527), mb_per_s: Number((firstReceiving.total / 1e6 / seconds).toFixed(2)),
       path, hidden: false, received_as: final.path,
     };
+    journey.shown = await shown('Received');
     evidence.journeys.push(journey);
     log(`ok  kept: ${bytes.length} bytes byte for byte in ~/Downloads/Wildbloom Received in ${journey.transfer_s.toFixed(1)} s (${journey.mb_per_s} MB/s) over ${path.local}/${path.remote}`);
     await phone.context.close();
@@ -419,13 +452,21 @@ try {
     const closedAt = Date.now();
     await phone.page.close({ runBeforeUnload: false });
     const final = await waitState(from, ['kept', 'failed', 'cancelled'], 120_000);
-    assert.ok((final.state === 'cancelled' && final.by === 'them') || (final.state === 'failed' && final.reason === 'lost'), `Drop ended ${final.state} ${final.by ?? final.reason}`);
+    // What the page managed to write to the relay as it closed: its `stop`, if anything.
+    const stopSent = relayLog.some((entry) => entry.at >= closedAt && entry.line.startsWith('PUT '));
+    // Drop waits a moment after the channel closes for that `stop`: with it, they closed the page
+    // (design section 6.7); without it, the connection was lost.
+    const expected = stopSent
+      ? { state: 'cancelled', why: 'them', text: 'They closed the page. Nothing was kept.' }
+      : { state: 'failed', why: 'lost', text: "The connection was lost and couldn't be restored. Nothing was kept." };
+    assert.deepEqual([final.state, final.by ?? final.reason], [expected.state, expected.why], `The page ${stopSent ? 'said' : 'did not say'} stop as it closed.`);
+    const screen = await shown(expected.text);
     await until(() => leftIn(tempDir).length === 0, 'the temporary folder to empty', 15_000);
     assert.deepEqual(receivedNow(), before, 'Nothing new in the Received folder.');
     assert.equal(directLoads - loads, 1);
-    const journey = { name: 'page-closed', file_bytes: CLOSED_BYTES, acknowledged_at_close: under.acknowledged, ended: final.state === 'cancelled' ? 'cancelled by them' : 'failed lost', noticed_s: (final.at - closedAt) / 1000 };
+    const journey = { name: 'page-closed', file_bytes: CLOSED_BYTES, acknowledged_at_close: under.acknowledged, page_stop_sent: stopSent, ended: `${final.state} ${final.by ?? final.reason}`, noticed_s: (final.at - closedAt) / 1000, shown: screen };
     evidence.journeys.push(journey);
-    log(`ok  page closed after ${under.acknowledged} of ${CLOSED_BYTES} bytes: Drop says ${journey.ended} in ${journey.noticed_s.toFixed(1)} s, nothing kept, temp folder empty`);
+    log(`ok  page closed after ${under.acknowledged} of ${CLOSED_BYTES} bytes, ${stopSent ? 'saying' : 'without saying'} stop: Drop says ${journey.ended} in ${journey.noticed_s.toFixed(1)} s and its ${screen.where} reads "${screen.text}"; nothing kept, temp folder empty`);
     await phone.context.close();
   }
 
@@ -456,7 +497,8 @@ try {
     assert.ok(seen.length > 0, 'Drop showed it was reconnecting before it gave up.');
     await until(() => leftIn(tempDir).length === 0, 'the temporary folder to empty', 15_000);
     assert.deepEqual(receivedNow(), before, 'Nothing new in the Received folder.');
-    const journey = { name: 'phone-vanished', file_bytes: CLOSED_BYTES, acknowledged_at_kill: under.acknowledged, ended: 'failed lost', reconnecting_after_s: (seen[0] - killedAt) / 1000, gave_up_s: (final.at - killedAt) / 1000 };
+    const screen = await shown("The connection was lost and couldn't be restored. Nothing was kept.");
+    const journey = { name: 'phone-vanished', file_bytes: CLOSED_BYTES, acknowledged_at_kill: under.acknowledged, ended: 'failed lost', reconnecting_after_s: (seen[0] - killedAt) / 1000, gave_up_s: (final.at - killedAt) / 1000, shown: screen };
     evidence.journeys.push(journey);
     log(`ok  phone killed after ${under.acknowledged} bytes: Drop showed reconnecting after ${journey.reconnecting_after_s.toFixed(1)} s and gave up (failed lost) after ${journey.gave_up_s.toFixed(1)} s, nothing kept`);
     await doomed.close().catch(() => undefined);
@@ -481,12 +523,13 @@ try {
     const seen = await app.evaluate(`window.__e2e.states.slice(${from}).map((s) => s.state)`);
     assert.ok(!seen.includes('connecting') && !seen.includes('receiving'), `Drop never connected: ${seen.join(', ')}`);
     assert.deepEqual(receivedNow(), before);
-    evidence.journeys.push({ name: 'declined', phone_peer_connections: 0, direct_window_loads: 0, states: seen });
+    const screen = await app.evaluate(`document.querySelector('dialog.receive[open] [role=status]')?.innerText ?? null`);
+    evidence.journeys.push({ name: 'declined', phone_peer_connections: 0, direct_window_loads: 0, states: seen, shown: screen });
     log('ok  declined: Drop never opened its hidden window, the phone made no peer connection, nothing kept');
     await phone.context.close();
   }
 
-  evidence.relay_requests = [...new Set(relayLog)].length;
+  evidence.relay_requests = relayLog.length;
   evidence.passed = passed = true;
   log('Receive a file passed end to end in the real app.');
 } finally {
