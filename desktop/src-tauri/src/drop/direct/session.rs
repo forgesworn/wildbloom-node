@@ -1316,10 +1316,16 @@ impl<T: LiveTransport, H: DirectHost> Run<T, H> {
             self.exchange_alive = false;
             return lost;
         };
+        let before = self.exchange.as_ref().map(ExchangeChannel::received);
         match self.open(index, bytes, None).await {
             Ok(Message::Stop { reason }) => End::peer_stop(reason),
             // Anything else (a restart answer) cannot bring the channel back.
             Ok(_) => lost,
+            // Not from the page: the channel closed all the same.
+            Err(_) if self.exchange.as_ref().map(ExchangeChannel::received) == before => {
+                self.exchange_alive = false;
+                lost
+            }
             Err(end) => end,
         }
     }
@@ -1345,7 +1351,20 @@ impl<T: LiveTransport, H: DirectHost> Run<T, H> {
             }
             return self.restart_or_give_up();
         };
+        let before = self.exchange.as_ref().map(ExchangeChannel::received);
         match self.open(index, bytes, None).await {
+            // A packet that did not authenticate changes nothing in the
+            // exchange: the relay (or someone at it) wrote it, not the page.
+            // It cannot end a transfer the page is still sending; the
+            // exchange is given up instead, so the transfer goes on without
+            // restarts, as when the relay is gone.
+            Err(_) if self.exchange.as_ref().map(ExchangeChannel::received) == before => {
+                self.exchange_alive = false;
+                if matches!(self.pending, Pending::Answer { .. }) {
+                    self.pending = Pending::None;
+                }
+                self.restart_or_give_up()
+            }
             Err(end) => Some(end),
             Ok(Message::Stop { reason }) => Some(End::peer_stop(reason)),
             Ok(Message::RestartAnswer { sdp }) if self.pending == Pending::Answer { index } => {

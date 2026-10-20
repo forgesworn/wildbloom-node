@@ -39,6 +39,8 @@ fn restart_sdp(n: usize) -> String {
 struct Relay {
     slots: Mutex<HashMap<String, Vec<u8>>>,
     deleted: AtomicBool,
+    /// Every poll Drop has made.
+    polls: AtomicUsize,
 }
 
 #[derive(Clone)]
@@ -62,6 +64,7 @@ impl LiveTransport for Inviter {
     }
 
     async fn poll(&self, kind: &str) -> Result<Option<Vec<u8>>, RelayError> {
+        self.0.polls.fetch_add(1, Ordering::SeqCst);
         if self.0.deleted.load(Ordering::SeqCst) {
             return Err(RelayError::Http(404));
         }
@@ -314,6 +317,12 @@ impl Web {
                 .write(&transfer, (i * 65_527) as u64, part)?;
         }
         Ok(())
+    }
+
+    /// Writes every byte of `f`'s envelope and ends.
+    fn end_all(&self, f: &File) -> Result<Kept, SinkError> {
+        self.write(&f.envelope, f.envelope.len())?;
+        self.end(&f.plain)
     }
 
     fn end(&self, plain: &[u8]) -> Result<Kept, SinkError> {
@@ -1321,4 +1330,38 @@ async fn a_stop_while_the_file_is_placed_ends_as_kept() {
     assert_eq!(state.state, "kept");
     assert_eq!(std::fs::read(&kept.path).unwrap(), f.plain);
     assert!(!h.names().contains(&"cancelled"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_forged_relay_packet_does_not_end_a_transfer() {
+    let mut h = start(600);
+    let f = file("forged.bin", 300_000);
+    h.connected(&f).await;
+    // Someone at the relay fills the page's next slot with a packet that
+    // does not authenticate.
+    let next = h.phone.exchange.as_ref().unwrap().sent();
+    h.phone
+        .put(&format!("packet-{next}"), b"not a packet from the page");
+    // Drop stops reading the exchange, and neither stops nor tells the page.
+    let by = Instant::now() + Duration::from_secs(5);
+    let settled = loop {
+        let before = h.relay.polls.load(Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        if h.relay.polls.load(Ordering::SeqCst) == before {
+            break true;
+        }
+        if Instant::now() >= by {
+            break false;
+        }
+    };
+    assert!(settled, "Drop kept polling the relay");
+    assert!(h.web.quiet().await, "no request to the window");
+    assert!(!h.phone.wrote(2).await, "no stop to the page");
+    // The transfer goes on to a kept file.
+    let kept = h.web.end_all(&f).unwrap();
+    h.web.ended("kept");
+    assert_eq!(h.closed().await, None);
+    let state = h.end().await;
+    assert_eq!(state.state, "kept");
+    assert_eq!(std::fs::read(&kept.path).unwrap(), f.plain);
 }

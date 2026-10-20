@@ -374,10 +374,14 @@ The index is the sender's exchange message index.  The order is:
 
 An event at an index the table does not allow, from the wrong side, or a ninth
 message is a protocol failure: the reader sends `stop` with reason `failed` if
-it still can, and ends.  Neither side creates an `RTCPeerConnection` before
-`accept`: Drop creates its connection after the owner accepts, and the page on
-reading `accept`.  A declined or abandoned session therefore exposes no address
-and allocates nothing on a TURN server.
+it still can, and ends.  Once the data is flowing, a packet in the page's slot
+that does not authenticate did not come from the page (the relay or someone at
+it wrote it), so it cannot end the transfer: Drop stops reading the exchange,
+makes no more restarts, and the transfer carries on.  Before then such a packet
+ends the direct send as a protocol failure.  Neither side creates an
+`RTCPeerConnection` before `accept`: Drop creates its connection after the
+owner accepts, and the page on reading `accept`.  A declined or abandoned
+session therefore exposes no address and allocates nothing on a TURN server.
 
 ### Invitation and manifest
 
