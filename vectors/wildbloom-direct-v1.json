@@ -305,6 +305,41 @@
       "stopReason": "failed"
     },
     {
+      "name": "name with a right-to-left override that disguises its extension",
+      "from": "page",
+      "index": 0,
+      "text": "{\"event\":\"manifest\",\"name\":\"invoice‮fdp.terminal\",\"size\":120000,\"type\":\"application/octet-stream\",\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "name with a zero-width space",
+      "from": "page",
+      "index": 0,
+      "text": "{\"event\":\"manifest\",\"name\":\"holiday​.mp4\",\"size\":120000,\"type\":\"video/mp4\",\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "name with a tag character",
+      "from": "page",
+      "index": 0,
+      "text": "{\"event\":\"manifest\",\"name\":\"holiday󠁁.mp4\",\"size\":120000,\"type\":\"video/mp4\",\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "name with a byte order mark",
+      "from": "page",
+      "index": 0,
+      "text": "{\"event\":\"manifest\",\"name\":\"holi﻿day.mp4\",\"size\":120000,\"type\":\"video/mp4\",\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "name with a left-to-right isolate",
+      "from": "page",
+      "index": 0,
+      "text": "{\"event\":\"manifest\",\"name\":\"holiday⁦.mp4\",\"size\":120000,\"type\":\"video/mp4\",\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
       "name": "media type not lower case",
       "from": "page",
       "index": 0,

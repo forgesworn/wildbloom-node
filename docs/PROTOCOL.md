@@ -388,9 +388,22 @@ and allocates nothing on a TURN server.
 | `ice` | 1 to 4 servers, each exactly `{"credential","urls","username"}`.  `urls` holds 1 to 4 `stun:`, `turn:` or `turns:` URLs of at most 256 bytes; `username` and `credential` hold 1 to 256 bytes without control characters.  At least one URL is `turn:` or `turns:` |
 | `id` | 16 random bytes in canonical unpadded base64url: the transfer's name in each app's own state.  It is never sent to a server, and is neither the relay locator nor a TURN username |
 | `max` | The largest file, in bytes, Drop will accept: 1 to 250,000,000 in v1 |
-| `name` | The FSWNENC2 metadata name: a fixed point of the shared name rule (`sanitise_name` in `crates/envelope`) |
+| `name` | The FSWNENC2 metadata name: a fixed point of the shared name rule (`sanitise_name` in `crates/envelope`) with none of the disguising characters below |
 | `size` | The file's exact size in bytes, 0 to `max` |
 | `type` | The FSWNENC2 metadata media type: lower case, not empty (`application/octet-stream` when unknown), at most 255 UTF-16 units, no control characters |
+
+A direct send's `name` must not hold a character that changes how a name is
+drawn or that cannot be seen, which the shared name rule lets through: U+061C,
+U+180E, U+200B to U+200F, U+202A to U+202E, U+2060 to U+2064, U+2066 to
+U+2069, U+206A to U+206F, U+FEFF and U+E0000 to U+E007F.  These are the
+bidirectional controls (so `invoice`, U+202E, `fdp.terminal` is drawn as
+`invoicelanimret.pdf`), the zero-width and word-joining characters, the
+deprecated formatting characters, the tag characters and the byte order mark.
+A reader refuses such a manifest with `failed`, after the name-rule check and
+before the media type; it never removes the characters itself.  The sending
+page removes them from the chosen file's name before it builds the manifest, so
+an honest file still sends under the plain name it is made of.  The rule
+applies to direct send only; the shared name rule is unchanged.
 
 The manifest is exactly the metadata the page will seal into the envelope, so
 both sides know the envelope's length from it.  The page does not offer a file

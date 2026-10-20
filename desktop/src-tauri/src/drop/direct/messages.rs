@@ -573,6 +573,28 @@ fn read_invite(body: &Map<String, Value>, cx: &Context<'_>) -> Result<Message, R
     Ok(Message::Invite { hide, ice, id, max })
 }
 
+/// Characters that change how a name is drawn, or that cannot be seen at
+/// all, which the shared name rule lets through: the bidirectional controls
+/// (so `invoice` + U+202E + `fdp.terminal` is drawn as `invoicelanimret.pdf`),
+/// the zero-width and word-joining characters, the deprecated formatting
+/// characters, the tag characters and the byte order mark.  A direct send's
+/// manifest refuses a name holding any of them; the list is the protocol's
+/// and the page's (`DISGUISING_CHARACTERS` in `src/direct/messages.ts`).
+/// Only direct send refuses them: the shared name rule is unchanged.
+pub fn is_disguising(c: char) -> bool {
+    matches!(
+        c,
+        '\u{061C}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206F}'
+            | '\u{FEFF}'
+            | '\u{E0000}'..='\u{E007F}'
+    )
+}
+
 fn read_manifest(body: &Map<String, Value>, cx: &Context<'_>) -> Result<Message, Refusal> {
     if !has_exactly(body, &["event", "name", "size", "type", "v"]) {
         return Err(failed("manifest members"));
@@ -581,6 +603,9 @@ fn read_manifest(body: &Map<String, Value>, cx: &Context<'_>) -> Result<Message,
         Some(name) if valid_name(name) => name.to_owned(),
         _ => return Err(failed("name is not a fixed point of the name rule")),
     };
+    if name.chars().any(is_disguising) {
+        return Err(failed("name holds a character that disguises it"));
+    }
     let media_type = match body["type"].as_str() {
         Some(media_type) if valid_media_type(media_type) => media_type.to_owned(),
         _ => return Err(failed("type is not a lower-case media type")),
@@ -766,7 +791,7 @@ mod tests {
         let fixture = vectors();
         let allow = allowlist(&fixture);
         let refusals = fixture["refusals"].as_array().unwrap();
-        assert!(refusals.len() >= 42);
+        assert!(refusals.len() >= 47);
         for vector in refusals {
             let name = vector["name"].as_str().unwrap();
             let cx = Context {
@@ -784,6 +809,55 @@ mod tests {
                 "{name}: {}",
                 refusal.detail
             );
+        }
+    }
+
+    /// The disguising-character vectors pass the shared name rule, so they
+    /// are refused by the direct-send rule and not before it.
+    #[test]
+    fn disguised_names_are_refused_by_their_own_rule() {
+        let fixture = vectors();
+        let mut seen = 0;
+        for vector in fixture["refusals"].as_array().unwrap() {
+            let text = vector["text"].as_str().unwrap();
+            let Ok(Value::Object(body)) = serde_json::from_str::<Value>(text) else {
+                continue;
+            };
+            let Some(name) = body.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            if !name.chars().any(is_disguising) {
+                continue;
+            }
+            seen += 1;
+            assert!(valid_name(name), "{name:?} is not a fixed point");
+            let cx = Context {
+                from: Side::Page,
+                index: 0,
+                ice_allowlist: &[],
+                max: Some(MAX_FILE_BYTES),
+            };
+            let refusal = decode(text.as_bytes(), &cx).map(|m| m.event()).unwrap_err();
+            assert_eq!(refusal.detail, "name holds a character that disguises it");
+            assert_eq!(refusal.stop, StopReason::Failed);
+        }
+        assert!(seen >= 5, "{seen}");
+    }
+
+    #[test]
+    fn the_disguising_list_is_the_protocols() {
+        let character = |code: u32| char::from_u32(code).unwrap();
+        for code in [
+            0x061C, 0x180E, 0x200B, 0x200F, 0x202A, 0x202E, 0x2060, 0x2064, 0x2066, 0x2069, 0x206A,
+            0x206F, 0xFEFF, 0xE0000, 0xE0041, 0xE007F,
+        ] {
+            assert!(is_disguising(character(code)), "U+{code:04X}");
+        }
+        for code in [
+            0x061B, 0x061D, 0x180D, 0x180F, 0x200A, 0x2010, 0x2029, 0x202F, 0x205F, 0x2065, 0x2070,
+            0xFEFE, 0xFF00, 0xDFFFF, 0xE0080, 0x61, 0x2E, 0x20, 0xE9,
+        ] {
+            assert!(!is_disguising(character(code)), "U+{code:04X}");
         }
     }
 
