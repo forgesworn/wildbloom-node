@@ -36,6 +36,7 @@ use crate::drop::relay::RelayError;
 use foregather_kit::exchange::ExchangeChannel;
 use foregather_kit::live::{PairingSecret, Session};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -206,6 +207,10 @@ pub struct Controls {
     cancel: watch::Sender<bool>,
     reports: mpsc::UnboundedSender<PeerReport>,
     transfer: Mutex<Option<String>>,
+    /// The final state has gone out.  The task may still be tidying up (a
+    /// last word to the page, the relay session's deletion), but a new
+    /// receive may start.
+    finished: AtomicBool,
     pub sink: SinkSlot,
 }
 
@@ -229,6 +234,15 @@ impl Controls {
 
     pub fn cancelled(&self) -> bool {
         *self.cancel.borrow()
+    }
+
+    pub fn finished(&self) -> bool {
+        self.finished.load(Ordering::SeqCst)
+    }
+
+    /// Marks the final state as sent, just before it is emitted.
+    pub fn mark_finished(&self) {
+        self.finished.store(true, Ordering::SeqCst);
     }
 
     /// A receiver that sees the cancel, for waits outside the session.
@@ -270,6 +284,7 @@ pub fn controls() -> (Arc<Controls>, Inputs) {
         cancel,
         reports,
         transfer: Mutex::new(None),
+        finished: AtomicBool::new(false),
         sink: SinkSlot {
             sink: Mutex::new(None),
             kept: Mutex::new(None),
@@ -1286,6 +1301,7 @@ impl<T: LiveTransport, H: DirectHost> Run<T, H> {
         }
         self.awake = None;
         let state = self.final_state(end);
+        self.controls.mark_finished();
         self.emit(&state);
         // The page reads a last `stop` or `decline` before the session goes.
         if self.told {

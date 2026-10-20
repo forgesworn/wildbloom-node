@@ -53,6 +53,18 @@ struct EngineHost {
 
 impl DirectHost for EngineHost {
     fn emit(&self, state: &ReceiveState) {
+        // A receive that has been replaced says nothing more.
+        let current = self
+            .engine
+            .direct
+            .running
+            .lock()
+            .ok()
+            .and_then(|r| r.as_ref().map(|r| r.generation))
+            == Some(self.generation);
+        if !current {
+            return;
+        }
         let mut state = state.clone();
         if state.state == "kept" {
             self.engine.decorate_kept(&mut state);
@@ -121,6 +133,9 @@ impl Engine {
         Ok(())
     }
 
+    /// The running session's controls while its task runs, including the
+    /// moments after its final state while it closes the window and tidies
+    /// up: the hidden window's commands still reach it.
     fn running_controls(&self) -> Option<Arc<Controls>> {
         self.direct
             .running
@@ -131,16 +146,26 @@ impl Engine {
             .map(|r| r.controls.clone())
     }
 
+    /// The running session's controls until its final state has gone out.
+    fn open_controls(&self) -> Option<Arc<Controls>> {
+        self.running_controls().filter(|c| !c.finished())
+    }
+
     /// Whether a receive is under way (for the quit confirmation).
     pub fn receive_open(&self) -> bool {
-        self.running_controls().is_some()
+        self.open_controls().is_some()
     }
 
     /// `receive_start`: a new receive.  Rejects `busy` while one runs and
     /// `node_unreachable` without an online node this computer may use.
     pub fn receive_start(self: &Arc<Self>) -> CommandResult<ReceiveState> {
         let mut running = self.direct.running.lock().map_err(|_| internal("lock"))?;
-        if running.as_ref().is_some_and(|r| !r.task.is_finished()) {
+        // A receive whose final state has gone out may still be tidying up;
+        // it does not hold up a new one.
+        if running
+            .as_ref()
+            .is_some_and(|r| !r.task.is_finished() && !r.controls.finished())
+        {
             return Err(CommandError::code("busy"));
         }
         let node = self
@@ -203,6 +228,7 @@ impl Engine {
                 self.delete_relay_session(&slot).await;
                 let mut state = ReceiveState::new("cancelled");
                 state.by = Some("you");
+                controls.mark_finished();
                 host.emit(&match reason {
                     None => state,
                     Some(reason) => ReceiveState::failed(reason),
@@ -263,21 +289,21 @@ impl Engine {
     /// The owner's answer to the check words.  Nothing happens if none is
     /// awaited.
     pub fn receive_verify(&self, matches: bool) {
-        if let Some(controls) = self.running_controls() {
+        if let Some(controls) = self.open_controls() {
             controls.verify(matches);
         }
     }
 
     /// The owner's answer to the file.  Nothing happens if none is awaited.
     pub fn receive_consent(&self, accept: bool) {
-        if let Some(controls) = self.running_controls() {
+        if let Some(controls) = self.open_controls() {
             controls.consent(accept);
         }
     }
 
     /// Ends the receive at any stage.  A kept file stays kept.
     pub fn receive_cancel(&self) {
-        if let Some(controls) = self.running_controls() {
+        if let Some(controls) = self.open_controls() {
             controls.cancel();
         }
     }
@@ -712,6 +738,43 @@ mod tests {
                 .unwrap()
                 .contains_key("AAECAwQFBgcICQoLDA0ODw")
         );
+    }
+
+    #[tokio::test]
+    async fn a_receive_that_has_ended_does_not_hold_up_the_next() {
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, host) = engine(dir.path());
+        // A session still tidying up after its final state.
+        let (controls, _inputs) = session::controls();
+        let task = tokio::spawn(std::future::pending::<()>());
+        *engine.direct.running.lock().unwrap() = Some(Running {
+            generation: 7,
+            task,
+            controls: controls.clone(),
+        });
+        assert!(engine.receive_open());
+        assert_eq!(engine.receive_start().unwrap_err().code, "busy");
+        controls.mark_finished();
+        assert!(!engine.receive_open());
+        // Past the busy check: here there is no online node.
+        assert_eq!(engine.receive_start().unwrap_err().code, "node_unreachable");
+        // The hidden window's reports still reach it while it tidies up.
+        assert!(engine.running_controls().is_some());
+        // An older receive's states are not shown once another is current.
+        let old = EngineHost {
+            engine: engine.clone(),
+            generation: 6,
+        };
+        old.emit(&ReceiveState::failed("lost"));
+        assert!(host.receives.lock().unwrap().is_empty());
+        assert_eq!(engine.receive_state().state, "idle");
+        let current = EngineHost {
+            engine: engine.clone(),
+            generation: 7,
+        };
+        current.emit(&ReceiveState::failed("lost"));
+        assert_eq!(host.receives.lock().unwrap().len(), 1);
+        assert_eq!(engine.receive_state().reason, Some("lost"));
     }
 
     #[test]

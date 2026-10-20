@@ -290,7 +290,7 @@ time.
 
 | Command | Args | Returns |
 |---|---|---|
-| `receive_start` | none | the first `ReceiveState` (`preparing`), then `receive://state` events. Rejects `{ code: "busy" }` while a receive is running and `{ code: "node_unreachable" }` when there is no online node this computer is approved for. Also "Try again" and "Start again" after any final state. |
+| `receive_start` | none | the first `ReceiveState` (`preparing`), then `receive://state` events. Rejects `{ code: "busy" }` while a receive is running (until its final state) and `{ code: "node_unreachable" }` when there is no online node this computer is approved for. Also "Try again" and "Start again" after any final state. |
 | `receive_state` | none | the current `ReceiveState`, or `{ state: "idle" }` when nothing has run since Drop started. Call it when the sheet opens or the window loads, then follow the events. |
 | `receive_verify` | `{ matches: boolean }` | nothing. The owner's answer in `check`. The next state follows as an event. Ignored in any other state. |
 | `receive_consent` | `{ accept: boolean }` | nothing. The owner's answer in `consent`. `false` ends in `declined` (no connection is made and nothing reaches a relay). Ignored in any other state. |
