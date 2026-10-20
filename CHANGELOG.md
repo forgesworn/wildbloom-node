@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.11 preview - 2026-10-20
+
+- Update the TLS certificate checks in Drop and `wildbloomd`: `rustls-webpki`
+  0.103.16 and `webpki-roots` and `webpki-root-certs` 1.0.10, which stop
+  trusting distrusted emSign intermediates (RUSTSEC-2026-0381, -0382 and
+  -0383).
+
 ## 0.3.10 preview - 2026-10-20
 
 - Drop can receive a file straight from someone's phone. They open the
