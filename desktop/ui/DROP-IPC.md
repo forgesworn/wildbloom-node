@@ -370,7 +370,11 @@ An unknown `reason` falls back to a generic "Something went wrong. Nothing was k
 window, label `direct`, at `direct.html`, and destroys it when the transfer ends. It runs the
 one `RTCPeerConnection` and the frame logic with the web project's TypeScript
 (`src/direct/peer.ts`'s `DirectPeer` with its `buildRtcConfiguration`, and `transfer.ts`'s
-`receiveEnvelope`), with a `DirectSink` that forwards to Rust. Its capability
+`receiveEnvelope`), with a `DirectSink` that forwards to Rust. That code is not copied by
+hand: `scripts/vendor-direct.mjs` bundles it from a named wildbloom commit into
+`vendor/wildbloom-direct.js`, with the commit, the sources' and the bundle's SHA-256 and the
+bundler's version in `vendor/wildbloom-direct.provenance.json` (`--check` verifies the hash).
+`direct.js` is the window's own script. Its capability
 (`capabilities/direct-window.json`) allows only listening for events and the four commands
 below. The CSP is unchanged: WebKit's WebRTC needs no `connect-src` entry.
 
