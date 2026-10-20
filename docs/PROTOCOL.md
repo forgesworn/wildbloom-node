@@ -363,7 +363,11 @@ The index is the sender's exchange message index.  The order is:
 2. The page reads and checks it, then sends `manifest` for the file the person
    chooses, or `stop`.
 3. Drop shows the owner the name and size, then sends `accept` or `decline`.
-   `decline` ends the direct send.
+   `decline` ends the direct send.  Before it asks, Drop checks that the
+   volumes holding its temp folder and the Received folder each have twice
+   the envelope length E free and 64 MiB more, since the envelope and the
+   plaintext both pass through temp files.  If not, it sends `stop` with
+   `failed` and tells the owner there is no room, without asking.
 4. The page reads `accept` and sends `answer`.
 5. Within the session deadline Drop may restart ICE at most five times.  It
    sends `restart` at index k + 1 only after reading the page's message at

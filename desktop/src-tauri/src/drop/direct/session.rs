@@ -35,7 +35,7 @@ use crate::drop::pairing::{self, Ended, LiveTransport, VerifySlot};
 use crate::drop::relay::RelayError;
 use foregather_kit::exchange::ExchangeChannel;
 use foregather_kit::live::{PairingSecret, Session};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -111,6 +111,20 @@ pub struct Opened<T> {
 pub struct Dirs {
     pub temp: PathBuf,
     pub received: PathBuf,
+    /// The bytes free on the volume holding a path ([`free_space`]; tests
+    /// supply their own).
+    pub space: fn(&Path) -> Option<u64>,
+}
+
+/// Room kept free beyond twice the envelope before a file is accepted.
+pub const SPACE_MARGIN: u64 = 64 * 1024 * 1024;
+
+/// The bytes available to Drop on the volume holding `path`, or on its
+/// nearest existing ancestor (the Received folder may not exist yet).
+/// `None` when it cannot be read.
+pub fn free_space(path: &Path) -> Option<u64> {
+    let existing = path.ancestors().find(|p| p.exists())?;
+    fs2::available_space(existing).ok()
 }
 
 /// How the sink's file ended: kept, or stopped before it could be.  One
@@ -737,6 +751,15 @@ impl<T: LiveTransport, H: DirectHost> Run<T, H> {
             None => return Err(self.refuse("protocol").await),
         };
         self.manifest = Some(manifest.clone());
+        // The envelope and the plaintext both pass through temp files before
+        // the file is placed: ask only if there is room for both and more.
+        if !self.has_room() {
+            return Err(End::Failed {
+                reason: "storage",
+                tell: Some(StopReason::Failed),
+                frame: None,
+            });
+        }
         self.emit(&self.file_state("consent"));
         let (answer, chosen) = oneshot::channel();
         if let Ok(mut slot) = self.controls.consent.lock() {
@@ -809,6 +832,18 @@ impl<T: LiveTransport, H: DirectHost> Run<T, H> {
 
         // 5. The transfer.
         self.transfer().await
+    }
+
+    /// Whether the temp directory's volume and the Received folder's both
+    /// have twice the envelope free and [`SPACE_MARGIN`] besides.  A volume
+    /// whose free space cannot be read does not refuse the file; a write
+    /// that runs out of room still ends it as `storage`.
+    fn has_room(&self) -> bool {
+        let need = self.total.saturating_mul(2).saturating_add(SPACE_MARGIN);
+        [&self.dirs.temp, &self.dirs.received]
+            .into_iter()
+            .filter_map(|dir| (self.dirs.space)(dir))
+            .all(|free| free >= need)
     }
 
     /// Refuses the page's last message: `stop` with `failed`, if it can

@@ -370,10 +370,20 @@ fn start(lifetime: u64) -> Harness {
 }
 
 fn start_with(lifetime: u64, can_open: bool) -> Harness {
-    start_full(lifetime, can_open, TIMING)
+    start_full(lifetime, can_open, TIMING, plenty)
 }
 
-fn start_full(lifetime: u64, can_open: bool, timing: Timing) -> Harness {
+/// Room for anything.
+fn plenty(_: &std::path::Path) -> Option<u64> {
+    Some(u64::MAX)
+}
+
+fn start_full(
+    lifetime: u64,
+    can_open: bool,
+    timing: Timing,
+    space: fn(&std::path::Path) -> Option<u64>,
+) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let temp = dir.path().join("drop-temp");
     let received = dir.path().join("Downloads").join("Wildbloom Received");
@@ -412,6 +422,7 @@ fn start_full(lifetime: u64, can_open: bool, timing: Timing) -> Harness {
     let dirs = Dirs {
         temp: temp.clone(),
         received: received.clone(),
+        space,
     };
     let task = tokio::spawn(run(
         opened,
@@ -1364,4 +1375,40 @@ async fn a_forged_relay_packet_does_not_end_a_transfer() {
     let state = h.end().await;
     assert_eq!(state.state, "kept");
     assert_eq!(std::fs::read(&kept.path).unwrap(), f.plain);
+}
+
+fn no_room(_: &std::path::Path) -> Option<u64> {
+    Some(SPACE_MARGIN)
+}
+
+fn unknown_room(_: &std::path::Path) -> Option<u64> {
+    None
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_file_with_no_room_for_it_is_not_offered() {
+    let mut h = start_full(600, true, TIMING, no_room);
+    let f = file("big.bin", 300_000);
+    h.paired().await;
+    h.until("waiting_file").await;
+    h.phone.send(&Message::Manifest(f.manifest.clone()));
+    let state = h.end().await;
+    assert_eq!(state.state, "failed");
+    assert_eq!(state.reason, Some("storage"));
+    assert!(!h.names().contains(&"consent"));
+    assert_eq!(h.host.opened.load(Ordering::SeqCst), 0);
+    assert_eq!(h.phone.read().await, stop(StopReason::Failed));
+
+    // Free space that cannot be read does not refuse the file.
+    let mut h = start_full(600, true, TIMING, unknown_room);
+    h.offered(&f).await;
+    h.controls.cancel();
+    assert_eq!(h.end().await.state, "cancelled");
+}
+
+#[test]
+fn free_space_reads_the_nearest_existing_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("Downloads").join("Wildbloom Received");
+    assert!(free_space(&missing).is_some_and(|free| free > 0));
 }

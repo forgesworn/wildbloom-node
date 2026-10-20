@@ -216,6 +216,7 @@ impl Engine {
                 let dirs = Dirs {
                     temp: self.cfg.temp_dir.clone(),
                     received: self.cfg.received_dir.clone(),
+                    space: session::free_space,
                 };
                 session::run(opened, host, controls, inputs, dirs, Timing::DEFAULT).await;
                 // The session deleted it; forget it without a second request.
