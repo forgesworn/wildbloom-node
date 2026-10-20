@@ -63,7 +63,10 @@
           <p class="drop-setting-title" id="drop-receiving-title">Receiving files</p>
           <label class="check"><input id="drop-hide-address" type="checkbox" aria-describedby="drop-receiving-hint" /><span>Hide my address when receiving</span></label>
           <p class="hint" id="drop-receiving-hint">The other person sees the relay's address instead of yours, and sends may be slower.</p>
-          <p class="drop-status-text" id="drop-receiving-folder"></p>
+          <div class="drop-received" id="drop-receiving-row">
+            <p class="drop-status-text" id="drop-receiving-folder"></p>
+            <button id="drop-receiving-show" class="link" type="button" aria-label="Show the Received folder">Show</button>
+          </div>
         </div>
         <div class="drop-setting">
           <p class="drop-setting-title" id="drop-recovery-title">Recovery key</p>

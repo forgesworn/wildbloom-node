@@ -638,6 +638,13 @@ pub async fn set_receiving(slot: State<'_, DropSlot>, hide_address: bool) -> Com
     engine(&slot)?.set_receiving(hide_address)
 }
 
+/// From the node window's settings: shows the Received folder, making it
+/// first when nothing has arrived yet.
+#[tauri::command]
+pub async fn reveal_received_folder(slot: State<'_, DropSlot>) -> CommandResult<()> {
+    engine(&slot)?.reveal_received_folder()
+}
+
 /// From the hidden window: replies, state changes and the transfer's end.
 #[tauri::command]
 pub async fn direct_peer_report(

@@ -33,6 +33,7 @@
     "allow-cancel-approval",
     "allow-open-drop-flow",
     "allow-set-sharing",
-    "allow-set-receiving"
+    "allow-set-receiving",
+    "allow-reveal-received-folder"
   ]
 }

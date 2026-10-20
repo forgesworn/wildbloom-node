@@ -1414,6 +1414,7 @@ fn main() {
             drop::commands::receive_add_to_wildbloom,
             drop::commands::receive_reveal,
             drop::commands::set_receiving,
+            drop::commands::reveal_received_folder,
             drop::commands::direct_peer_report,
             drop::commands::direct_sink_write,
             drop::commands::direct_sink_end,

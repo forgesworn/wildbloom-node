@@ -58,6 +58,7 @@ fn main() {
             "receive_add_to_wildbloom",
             "receive_reveal",
             "set_receiving",
+            "reveal_received_folder",
             "direct_peer_report",
             "direct_sink_write",
             "direct_sink_end",

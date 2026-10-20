@@ -2251,6 +2251,25 @@ scenario('settings: hide my address when receiving', async () => {
   assert.equal(await text(page.locator('#drop-receiving-hint')), "The other person sees the relay's address instead of yours, and sends may be slower.");
   assert.equal(await box_.getAttribute('aria-describedby'), 'drop-receiving-hint');
   assert.equal(await text(page.locator('#drop-receiving-folder')), 'Received files go to ~/Downloads/Wildbloom Received.');
+  // Show, beside the path, reveals the Received folder; a refusal says so.
+  const show = page.getByRole('button', { name: 'Show the Received folder' });
+  assert.equal(await text(show), 'Show');
+  const [pathBox, showBox] = [await page.locator('#drop-receiving-folder').boundingBox(), await show.boundingBox()];
+  assert.ok(showBox.x > pathBox.x && Math.abs(showBox.y - pathBox.y) < pathBox.height, 'Show sits beside the path');
+  await show.click();
+  await page.waitForFunction(() => window.__stub.calls.some((c) => c.command === 'reveal_received_folder'));
+  assert.equal((await calls(page, 'reveal_received_folder')).length, 1);
+  assert.equal(await page.locator('#drop-settings-error').isHidden(), true);
+  await page.evaluate(() => { window.__stub.handlers.reveal_received_folder = () => { throw { code: 'received_folder', message: "Couldn't open the Received folder." }; }; });
+  await show.click();
+  await page.locator('#drop-settings-error:not([hidden])').waitFor();
+  assert.equal(await text(page.locator('#drop-settings-error')), "Couldn't open the Received folder.");
+  // Without a folder to show, neither the path nor Show is there.
+  await page.evaluate(() => { window.__stub.state.receiving.folder = ''; window.__stub.flush(); });
+  await page.waitForFunction(() => document.querySelector('#drop-receiving-row').hidden);
+  assert.equal(await show.isVisible(), false);
+  await page.evaluate(() => { window.__stub.state.receiving.folder = '~/Downloads/Wildbloom Received'; window.__stub.flush(); });
+  await page.waitForFunction(() => !document.querySelector('#drop-receiving-row').hidden);
   await box_.uncheck();
   await page.waitForFunction(() => window.__stub.calls.some((c) => c.command === 'set_receiving'));
   assert.deepEqual((await calls(page, 'set_receiving')).map((c) => c.args), [{ hideAddress: false }]);

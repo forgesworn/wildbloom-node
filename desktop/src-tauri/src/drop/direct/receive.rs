@@ -422,6 +422,16 @@ impl Engine {
         Ok(())
     }
 
+    /// `reveal_received_folder`: the Received folder in Finder, Explorer or
+    /// the file manager, made first when nothing has arrived yet.
+    pub fn reveal_received_folder(&self) -> CommandResult<()> {
+        std::fs::create_dir_all(&self.cfg.received_dir).map_err(|_| {
+            CommandError::with_message("received_folder", "Couldn't open the Received folder.")
+        })?;
+        self.host.reveal_path(&self.cfg.received_dir);
+        Ok(())
+    }
+
     /// `receive_add_to_wildbloom`: moves a received file into the Wildbloom
     /// folder under the same no-replace naming, where the folder mirror takes
     /// it in as the owner's own file.  Refused while the folder is off or
@@ -775,6 +785,32 @@ mod tests {
         current.emit(&ReceiveState::failed("lost"));
         assert_eq!(host.receives.lock().unwrap().len(), 1);
         assert_eq!(engine.receive_state().reason, Some("lost"));
+    }
+
+    #[tokio::test]
+    async fn the_received_folder_is_made_and_shown() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocked = tempfile::tempdir().unwrap();
+        // A folder that cannot be made: a file stands where Downloads would be.
+        std::fs::write(blocked.path().join("Downloads"), b"in the way").unwrap();
+        let (fresh, fresh_host) = engine(dir.path());
+        let (stuck, stuck_host) = engine(blocked.path());
+        assert!(!fresh.cfg.received_dir.exists());
+        fresh.reveal_received_folder().unwrap();
+        assert!(fresh.cfg.received_dir.is_dir());
+        assert_eq!(
+            fresh_host.revealed.lock().unwrap().last(),
+            Some(&fresh.cfg.received_dir)
+        );
+        // Again, with the folder there: shown again, nothing else changes.
+        fresh.reveal_received_folder().unwrap();
+        assert_eq!(fresh_host.revealed.lock().unwrap().len(), 2);
+        // Refused, and nothing is shown.
+        assert_eq!(
+            stuck.reveal_received_folder().unwrap_err().code,
+            "received_folder"
+        );
+        assert!(stuck_host.revealed.lock().unwrap().is_empty());
     }
 
     #[test]

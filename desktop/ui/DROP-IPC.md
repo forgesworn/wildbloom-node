@@ -298,6 +298,7 @@ time.
 | `receive_add_to_wildbloom` | `{ id }` (the `id` of a `kept` state) | `{ name: string, folder: string }`: the name the file took in the Wildbloom folder (a taken name gets " (2)", " (3)" … before the extension) and the folder for display ("~/Wildbloom"). The file is moved, so the folder mirror takes it in as the owner's own and it syncs like any other. Rejects `folder_off` (the Wildbloom folder is not turned on: offer to turn it on), `folder_unavailable` (it can't be found), `cannot_sync` (an empty file, or a name the folder ignores such as one ending in `.part`), `not_found` (the file is no longer where it was kept, or Drop has restarted since) or `move_failed`. |
 | `receive_reveal` | `{ id }` | nothing. "Show in Finder" (macOS), "Show in Explorer" (Windows) or "Show in Folder" (Linux) for the kept file, wherever Add to Wildbloom moved it. Rejects `not_found` as above. |
 | `set_receiving` | `{ hideAddress: boolean }` | nothing. **Node window only**, like `set_sharing`. Then `drop://status`. |
+| `reveal_received_folder` | none | nothing. **Added**, node window only: Settings' "Show" beside the Received folder's path. Shows `receiving.folder` in Finder, Explorer or the file manager, as `receive_reveal` shows a file, making the folder first when nothing has arrived yet. Rejects `{ code: "received_folder", message }` when it can't be made. |
 
 `ReceiveState` (command results and `receive://state` payloads)
 
@@ -497,8 +498,8 @@ capability allows:
 - **Node window** (`capabilities/default.json`): its own node, pool and update commands, plus
   `platform_info`, `drop_status`, `check_online_node`, `set_online_node`, `approve_device`,
   `renew_approval`, `approval_status`, `cancel_approval`, `set_watch_folder`,
-  `open_watch_folder`, `open_drop_flow`, `set_sharing` (**added**) and `set_receiving`
-  (**added**). (`open_file` and `reveal_file` are Drop window only.) It cannot share, remove or save files, restore, or
+  `open_watch_folder`, `open_drop_flow`, `set_sharing` (**added**), `set_receiving`
+  (**added**) and `reveal_received_folder` (**added**). (`open_file` and `reveal_file` are Drop window only.) It cannot share, remove or save files, restore, or
   read or save the recovery key.
 
 ## Behaviour Rust can rely on

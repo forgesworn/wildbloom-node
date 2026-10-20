@@ -213,6 +213,7 @@
       if (typeof hideAddress !== 'boolean') throw { code: 'bad_args' };
       stub.state.receiving = { ...stub.state.receiving, hideAddress };
     },
+    reveal_received_folder: () => undefined,
     // Receive a file. The same machine as the contract: one receive at a time, answers ignored out of turn.
     receive_state: () => structuredClone(stub.receive),
     receive_start: () => {
