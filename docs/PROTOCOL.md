@@ -529,5 +529,6 @@ session.  Without hiding, each side sees the other's public address.
 with their exact text and SHA-256, refused messages with the `stop` reason the
 reader sends, valid and refused data-channel frames, and envelope lengths.  The
 first envelope length matches the FSWNENC2 known-answer vector's 65,608 bytes.
-Servers, credentials and keys in it are synthetic.  No Rust or TypeScript
-implementation checks these vectors yet; Drop and the page must pass them.
+Servers, credentials and keys in it are synthetic.  Both readers check every
+vector: Drop's Rust tests read this file, and the web project's tests read a
+byte-for-byte copy of it.
