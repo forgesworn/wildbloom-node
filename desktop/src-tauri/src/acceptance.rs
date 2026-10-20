@@ -102,6 +102,11 @@ pub fn ready() {
     reply(0, json!({"webview_ready": true}));
 }
 
+/// A window other than the node window finished loading its page.
+pub fn page_loaded(label: &str) {
+    reply(0, json!({ "page_loaded": label }));
+}
+
 pub fn start(app: AppHandle) {
     std::thread::spawn(move || {
         let input = std::io::stdin();

@@ -1335,8 +1335,14 @@ fn main() {
     let builder = tauri::Builder::default();
     #[cfg(feature = "native-acceptance")]
     let builder = builder.on_page_load(|webview, payload| {
-        if webview.label() == "main" && payload.event() == tauri::webview::PageLoadEvent::Finished {
-            acceptance::ready();
+        if payload.event() == tauri::webview::PageLoadEvent::Finished {
+            match webview.label() {
+                "main" => acceptance::ready(),
+                // The driver counts the hidden direct-send window's loads, so a
+                // declined file can be shown never to have opened one.
+                drop::direct::PEER_WINDOW => acceptance::page_loaded(drop::direct::PEER_WINDOW),
+                _ => {}
+            }
         }
     });
     let app = builder

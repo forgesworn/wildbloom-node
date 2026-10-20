@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "test": "node tests/pools-ui.mjs && node tests/drop-ui.mjs && node tests/direct-window.mjs",
-    "test:native": "node ../scripts/accept-desktop-native.mjs"
+    "test:native": "node ../scripts/accept-desktop-native.mjs",
+    "test:direct-native": "node tests/direct-receive-native.mjs"
   },
   "devDependencies": { "@axe-core/playwright": "4.13.0", "playwright-core": "1.62.1" }
 }
