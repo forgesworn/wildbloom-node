@@ -5,13 +5,18 @@
 > describes what the software can and cannot do, and a generic way to
 > handle reports. It does not say what the law requires of you.
 
-## ForgeSworn publishes software; it does not run nodes
+## ForgeSworn publishes software; it runs no node for other people
 
-ForgeSworn publishes the Wildbloom Node software. It does not run or host
-nodes, for itself or for anyone else. Nothing found in this repository, in
-the `wildbloom` repository's Cloudflare Pages deployment (which serves only
-a static build), or in the `kithmoot` deployment configuration stands up a
-public `wildbloomd` instance.
+ForgeSworn publishes the Wildbloom Node software. It runs no node for anyone
+else. It does run one node for the maintainer's own devices, at
+shelter.forgesworn.dev, with the pairing and TURN credential issuers that
+the hosted Share and direct send pages use; it accepts no other uploader.
+`[DECISION: how ForgeSworn describes this deployment; see "Share and direct
+send" in the wildbloom repository's
+docs/legal/online-safety-position-draft.md.]` Nothing found in this
+repository, in the `wildbloom` repository's Cloudflare Pages deployment
+(which serves only a static build), or in the `kithmoot` deployment
+configuration stands up a public `wildbloomd` instance.
 
 Anyone who runs a node, or offers one to other people, is responsible for
 their own legal position in whatever jurisdiction applies, including how
