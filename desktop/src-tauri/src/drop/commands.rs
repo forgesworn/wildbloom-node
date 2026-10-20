@@ -97,23 +97,35 @@ impl TauriHost {
     }
 }
 
+/// The windows that show the folder's files and status.  File rows and the
+/// status carry the owner's and device's npubs, the node URL, the folder
+/// path and file names, so they go only to the windows that listen for them
+/// (the Drop window, and the node window for the status), never as a
+/// broadcast that reaches the hidden direct-send window.
+const FILE_WINDOWS: [&str; 1] = ["drop"];
+const STATUS_WINDOWS: [&str; 2] = ["drop", "main"];
+
 impl Host for TauriHost {
     fn emit_file(&self, row: &FileRow) {
-        let _ = self.app.emit("drop://file", row);
+        for window in FILE_WINDOWS {
+            let _ = self.app.emit_to(window, "drop://file", row);
+        }
     }
 
     fn emit_removed(&self, id: &str) {
-        let _ = self.app.emit(
-            "drop://file",
-            RemovedRow {
-                id: id.to_owned(),
-                removed: true,
-            },
-        );
+        let row = RemovedRow {
+            id: id.to_owned(),
+            removed: true,
+        };
+        for window in FILE_WINDOWS {
+            let _ = self.app.emit_to(window, "drop://file", &row);
+        }
     }
 
     fn emit_status(&self, status: &DropStatus, line: &StatusLine) {
-        let _ = self.app.emit("drop://status", status);
+        for window in STATUS_WINDOWS {
+            let _ = self.app.emit_to(window, "drop://status", status);
+        }
         self.update_tray(status, line);
     }
 

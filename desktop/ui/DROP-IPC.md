@@ -450,14 +450,20 @@ Nothing is visible to the owner before KEPT.
 
 | Event | Payload | Meaning |
 |---|---|---|
-| `drop://file` | `FileRow`, or `{ id, removed: true }` | Upsert or delete one row. |
-| `drop://status` | `DropStatus` without `files` | Any change outside the rows. Merged into the UI's copy. The node window listens too. |
+| `drop://file` | `FileRow`, or `{ id, removed: true }` | Upsert or delete one row. Sent to the Drop window only. |
+| `drop://status` | `DropStatus` without `files` | Any change outside the rows. Merged into the UI's copy. Sent to the Drop window and the node window (`main`) only. |
 | `share://state` | `ShareState` with `id` | State of the open share. Ignored when no sheet is open for that `id`. |
 | `receive://state` | `ReceiveState` | **Added.** The receive sheet's state, sent to the Drop window only (it carries the link and words). Sent whether or not the sheet is open. |
 | `direct://peer` | a request (above) | **Added.** To the hidden `direct` window only. |
 | `drop://notice` | `{ kind: "keeps_running" }` | **Added.** Shown as an inline notice, "Wildbloom keeps running. Open it again from your apps." Send it once, before hiding the window, when the window is closed on a desktop with no tray (GNOME without AppIndicator). |
 | `drop://open-flow` | `{ flow: "recovery" }` | **Added.** Open the recovery key sheet ("Save recovery key again…", checkbox not required) in the Drop window. |
 | `drop://drag-info` | `{ files: number, folders: number, tooBig: number }` | **Added.** The webview cannot inspect paths. When Rust receives the window's drag-enter (it carries paths) it classifies them and emits this so the overlay can say "Folders can't be added yet" or "Too big to add". `tooBig` counts files over `limits.dropMaxBytes`. Optional: without it the overlay just says "Drop to keep 2 copies". |
+
+Every event is sent with `emit_to` to the windows named, never broadcast, so the hidden
+`direct` window is not sent the owner's details in the ordinary course. This is not a
+boundary: Tauri delivers an event sent to one window to a listener in any window that
+registered for every target, and the `direct` window may listen (`core:event:allow-listen`)
+for `direct://peer`.
 
 The UI also listens to Tauri's own `tauri://drag-enter`, `tauri://drag-leave` and
 `tauri://drag-drop` (payload `{ paths }`) for the overlay and the drop itself.
