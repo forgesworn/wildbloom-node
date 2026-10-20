@@ -36,8 +36,10 @@ pub const TURN_PATH: &str = "turn/v1/credentials";
 /// Environment form of the shared secret.  Child processes never inherit it;
 /// prefer `--turn-secret-file`.
 pub const SECRET_ENV: &str = "WILDBLOOM_TURN_SECRET";
-/// Lifetime of every credential, from the moment it is issued.
-pub const CREDENTIAL_TTL: u64 = 60 * 60;
+/// Lifetime of every credential, from the moment it is issued: 15 minutes,
+/// which covers a direct send's 600-second session with room to spare,
+/// because Drop asks for credentials just before it opens the session.
+pub const CREDENTIAL_TTL: u64 = 15 * 60;
 /// Per-device issuance budget within any rolling hour, separate from the
 /// pairing issuer's.
 pub const RATE_LIMIT: u32 = 30;
@@ -152,14 +154,25 @@ pub fn ice_urls(urls: &[String]) -> Result<Vec<String>, &'static str> {
 }
 
 /// One entry of the direct-send `ice` list, members in canonical order.
-#[derive(Debug, Serialize)]
+/// `Debug` hides the username and credential.
+#[derive(Serialize)]
 pub struct IceServer {
     pub credential: String,
     pub urls: Vec<String>,
     pub username: String,
 }
 
+impl std::fmt::Debug for IceServer {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("IceServer")
+            .field("urls", &self.urls)
+            .finish_non_exhaustive()
+    }
+}
+
 /// `own` is for the caller, `peer` for the verified person at the other end.
+/// `Debug` shows only the expiry and the URLs.
 #[derive(Debug, Serialize)]
 pub struct TurnCredentials {
     pub expires: u64,
@@ -262,6 +275,29 @@ mod tests {
                 .unwrap(),
             EXPECTED
         );
+    }
+
+    #[test]
+    fn debug_never_shows_a_credential_or_username() {
+        let server = || IceServer {
+            credential: EXPECTED.to_owned(),
+            urls: vec!["turn:turn.example.net:3478?transport=udp".to_owned()],
+            username: USERNAME.to_owned(),
+        };
+        let credentials = TurnCredentials {
+            expires: 1_800_003_600,
+            own: server(),
+            peer: server(),
+        };
+        for printed in [
+            format!("{:?}", server()),
+            format!("{credentials:?}"),
+            format!("{credentials:#?}"),
+        ] {
+            assert!(!printed.contains(EXPECTED), "{printed}");
+            assert!(!printed.contains("dGVzdC1sYWJlbA"), "{printed}");
+            assert!(printed.contains("turn.example.net"), "{printed}");
+        }
     }
 
     #[test]

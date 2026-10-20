@@ -219,8 +219,9 @@ The response carries `Cache-Control: no-store` and is exactly:
 `own` is for the caller and `peer` for the verified person at the other end.
 Each has exactly the members and limits of an [`ice`](#invitation-and-manifest)
 entry, so Drop puts `peer` into `invite` unchanged.  `urls` are the configured
-URLs in their configured order.  `expires` is the issue time plus 3,600
-seconds.  Each credential is coturn's TURN REST form (`use-auth-secret` with
+URLs in their configured order.  `expires` is the issue time plus 900
+seconds: Drop asks just before it opens a session, which lasts at most 600
+seconds, so every allocation and restart falls inside it.  Each credential is coturn's TURN REST form (`use-auth-secret` with
 the default `:` separator):
 
 - `username` is `<expires>:<label>`, where `label` is 16 fresh random bytes in
@@ -261,7 +262,8 @@ Operator notes:
 - Nothing works until both are deployed: the node flags and the coturn line.
   Until then the node issues credentials that the TURN server refuses.
 - To rotate, add the new line to coturn, restart the node with the new secret,
-  and remove the old line an hour later.
+  and remove the old line 15 minutes later, once the last credential signed
+  with it has expired.
 
 ## Experimental private storage offer
 

@@ -2152,7 +2152,11 @@ async fn turn_issuer_returns_two_fresh_credentials_to_a_granted_device() {
             ["expires", "own", "peer"]
         );
         let expires = body["expires"].as_u64().unwrap();
-        assert!((before + 3600..=after + 3600).contains(&expires));
+        assert!(
+            (before + super::turn::CREDENTIAL_TTL..=after + super::turn::CREDENTIAL_TTL)
+                .contains(&expires)
+        );
+        assert_eq!(super::turn::CREDENTIAL_TTL, 900);
         let own = turn_label(&body["own"], expires);
         let peer = turn_label(&body["peer"], expires);
         // Exactly these bytes: canonical member order and no other members.

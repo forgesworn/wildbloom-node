@@ -17,8 +17,9 @@
 - Add an opt-in TURN credential issuer (`--turn-issuer`, with `--device-grants`
   and one to four `--turn-url`s) for the planned direct send. A granted
   device's NIP-98 request to `POST /turn/v1/credentials` returns two TURN REST
-  credentials valid for an hour, one for itself and one for the person at the
-  other end, each with a fresh random username label. Each device may make 30
+  credentials valid for 15 minutes, one for itself and one for the person at
+  the other end, each with a fresh random username label. Debug output never
+  shows a credential or username. Each device may make 30
   requests an hour, counted apart from the pairing issuer's. The secret is the
   TURN server's `static-auth-secret`, read from a private file or
   `WILDBLOOM_TURN_SECRET`, and is never logged or returned. Nothing works until
