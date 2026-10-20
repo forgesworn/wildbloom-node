@@ -1,7 +1,29 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cargo audit --deny warnings
+# webpki-roots 0.26.11 is a semver shim that re-exports webpki-roots 1.x, so
+# it carries whichever 1.x is locked.  RUSTSEC-2026-0381 flags the shim by its
+# version number.  Ignore that advisory only while every locked webpki-roots
+# is the shim or a fixed 1.x.  See docs/DEPENDENCY-RISK.md.
+check_webpki_roots() {
+  local lock="$1" bad
+  bad="$(awk '/^name = "webpki-roots"$/ { getline; gsub(/^version = "|"$/, ""); print }' "$lock" \
+    | while read -r version; do
+        case "$version" in
+          (0.26.11) ;;
+          (1.*) [[ "$(printf '%s\n1.0.10\n' "$version" | sort -V | head -n 1)" == 1.0.10 ]] || echo "$version" ;;
+          (*) echo "$version" ;;
+        esac
+      done)"
+  if [[ -n "$bad" ]]; then
+    printf 'webpki-roots in %s is neither the 0.26.11 shim nor 1.0.10 or later:\n%s\n' "$lock" "$bad" >&2
+    exit 1
+  fi
+}
+check_webpki_roots Cargo.lock
+check_webpki_roots desktop/src-tauri/Cargo.lock
+
+cargo audit --deny warnings --ignore RUSTSEC-2026-0381
 
 # These informational advisories are locked transitive dependencies of Tauri's
 # current Linux WebKit/GTK shell and URL-pattern parser, and of the zbus 5
@@ -29,7 +51,7 @@ desktop_ignores=(
   RUSTSEC-2026-0371
   RUSTSEC-2026-0372
 )
-audit_arguments=(--file desktop/src-tauri/Cargo.lock --deny unmaintained --deny unsound)
+audit_arguments=(--file desktop/src-tauri/Cargo.lock --deny unmaintained --deny unsound --ignore RUSTSEC-2026-0381)
 for advisory in "${desktop_ignores[@]}"; do
   audit_arguments+=(--ignore "$advisory")
 done
