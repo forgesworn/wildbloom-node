@@ -486,6 +486,7 @@ dialog.drop-scope.held .held-names { display: grid; gap: 2px; overflow-wrap: any
 /* Receive sheet: the offered file, and the progress of one that is arriving */
 .receive-file { display: grid; gap: 4px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
 .receive-file .receive-name { font-size: 1.125rem; font-weight: 600; overflow-wrap: anywhere; }
+.receive-file .receive-ext { font-weight: 600; overflow-wrap: anywhere; }
 .receive-file .receive-meta { color: var(--muted); overflow-wrap: anywhere; }
 .receive-progress { display: grid; gap: 4px; }
 .receive-progress .receive-name { font-weight: 600; overflow-wrap: anywhere; }

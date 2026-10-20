@@ -52,6 +52,19 @@
     : p.state === 'declined' ? 'You said no. Nothing was sent.'
       : p.by === 'them' ? 'They closed the page. Nothing was kept.' : 'Stopped. Nothing was kept.');
 
+  /**
+   * The extension the kept file will have, as Drop names it in the Received folder (`received::candidate`): the last
+   * `.xxx` unless the dot is the first character, and none when it is too long to leave room for a name. Shown on its
+   * own line, so a long or odd name cannot hide what kind of file it is.
+   */
+  function extensionOf(name) {
+    if (typeof name !== 'string') return '';
+    const at = name.lastIndexOf('.');
+    if (at <= 0) return '';
+    const ext = name.slice(at);
+    return ext.length >= 90 ? '' : ext;
+  }
+
   const percentOf = (p) => (p.total > 0 ? Math.max(0, Math.min(99, Math.floor((p.acknowledged / p.total) * 100))) : 0);
 
   function open(opener, context, initial) {
@@ -223,9 +236,13 @@
     const again = (label) => button(label, 'primary', 'start-again', () => start(session), true);
     const body = (text) => h('p', { class: 'share-body' }, text);
     const links = (done) => [stepLink(session, p, done), stepWords(session, p, done, WORDS_HINT, 'Say these words another way, like a call or a message')];
-    const file = () => h('div', { class: 'receive-file' },
-      h('p', { class: 'receive-name' }, p.name || 'A file'),
-      h('p', { class: 'receive-meta' }, [formatBytes(p.size), p.type].filter(Boolean).join(' · ')));
+    const file = () => {
+      const ext = extensionOf(p.name);
+      return h('div', { class: 'receive-file' },
+        h('p', { class: 'receive-name' }, p.name || 'A file'),
+        h('p', { class: 'receive-ext' }, ext ? `Ends in ${ext}` : 'No file extension'),
+        h('p', { class: 'receive-meta' }, [formatBytes(p.size), p.type].filter(Boolean).join(' · ')));
+    };
 
     let topNodes = [];
     let bottomNodes = [];

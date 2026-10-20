@@ -1939,9 +1939,19 @@ scenario('receive: the whole happy path, answers sent once, nothing about time o
   await page.waitForFunction(() => document.querySelector('dialog.receive .share-slot').textContent.includes('Waiting for them to choose a file.'));
   assert.deepEqual(await buttonsOf(page), ['Cancel']);
 
+  // The real extension has a line of its own, so a long or odd name cannot hide what kind of file it is.
+  for (const [name, ext] of [
+    ['invoice.pdf.exe', 'Ends in .exe'],
+    [`Holiday photos ${'and more '.repeat(20)}.pdf.app`, 'Ends in .app'],
+    ['README', 'No file extension'],
+    ['.profile', 'No file extension'],
+  ]) {
+    await setReceive(page, { state: 'consent', ...OFFER, name });
+    assert.equal(await visual(sheet.locator('.receive-file .receive-ext')), ext, name);
+  }
   await setReceive(page, { state: 'consent', ...OFFER });
   assert.equal(await statusOf(page), 'They want to send you holiday.mp4 (120 MB).');
-  assert.match(await visual(sheet.locator('.receive-file')), /^holiday\.mp4 120 MB · video\/mp4$/);
+  assert.match(await visual(sheet.locator('.receive-file')), /^holiday\.mp4 Ends in \.mp4 120 MB · video\/mp4$/);
   assert.match(await sheetText(page), /Nothing has been sent yet\. Only accept a file you expect\./);
   assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Receive a file', 'focus is not on Accept');
   assert.deepEqual(await buttonsOf(page), ['Decline', 'Accept']);

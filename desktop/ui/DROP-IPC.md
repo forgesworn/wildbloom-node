@@ -332,7 +332,7 @@ time.
 | `opened` | As `waiting`, plus "Someone opened your link". |
 | `check` | "Do these 3 words match theirs?" with `checkWords`, Yes (`receive_verify` true) and No (false). |
 | `waiting_file` | "Waiting for them to choose a file." Cancel. |
-| `consent` | "They want to send you {name} ({size})." with Accept and Decline (`receive_consent`). `type` may pick an icon. Nothing has been sent yet. |
+| `consent` | "They want to send you {name} ({size})." with Accept and Decline (`receive_consent`). `type` may pick an icon. The real extension has a line of its own ("Ends in .exe", or "No file extension"), taken as the Received folder names the file (the last `.xxx`, unless the dot is first), so a long or odd name cannot hide what kind of file it is. Nothing has been sent yet. |
 | `connecting` | "Connecting…", with `name`. `hidden` may add "Your address is hidden." `reconnecting` true: "Reconnecting…". Stop. |
 | `receiving` | Progress `acknowledged / total` (never from anything else), with `name` and `size`. `reconnecting` true: "Reconnecting…" on the same bar. Stop. |
 | `verifying` | "Checking the file…". Every byte has arrived; nothing can be opened yet. |
