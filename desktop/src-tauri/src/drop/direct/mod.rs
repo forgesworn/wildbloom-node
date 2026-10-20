@@ -6,9 +6,15 @@
 //!
 //! - [`messages`]: the strict canonical message codec.
 //! - [`frames`]: the data-channel frames, as the webview reads them.
+//! - [`sink`]: the private temp file, verification at END and keeping.
+//! - [`received`]: the Received folder and "Add to Wildbloom".
+//! - [`awake`]: no idle sleep during a transfer.
 
+pub mod awake;
 pub mod frames;
 pub mod messages;
+pub mod received;
+pub mod sink;
 
 /// The live session's purpose; the namespace is Drop's `wildbloom.drop`.
 pub const PURPOSE: &str = "send";
