@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.10 preview - Unreleased
+## 0.3.10 preview - 2026-10-20
 
 - Drop can receive a file straight from someone's phone. They open the
   owner's link, both sides check the same words, and once the owner accepts,
@@ -155,7 +155,7 @@
 - Include the native macOS desktop lifecycle acceptance suite in CI. Preview
   signing and physical-device limitations remain unchanged.
 
-## 0.3.10 preview - Unreleased
+## Unreleased
 
 - WILDBLOOM_SERVER_NAME accepts a comma-separated list, matching --allow-pubkey and --friend-grant.
 - Add `wildbloomd replicas run --policy-dir --state-root`: one process
