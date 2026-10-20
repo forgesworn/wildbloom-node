@@ -165,8 +165,9 @@ impl Drop for ReceiveState {
     }
 }
 
-/// A request to the hidden window: the `direct://peer` event.  Every request
-/// has the transfer's `id` and a `seq` its reply repeats.
+/// A request to the hidden window, sent over the channel it attached with
+/// `direct_peer_attach`.  Every request has the transfer's `id` and a `seq`
+/// its reply repeats.
 #[derive(Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PeerRequest {
@@ -236,7 +237,7 @@ pub enum PeerState {
 #[derive(Clone, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum PeerReport {
-    /// The page has loaded and listens for `direct://peer`.
+    /// The page has loaded and attached its request channel.
     Ready,
     /// The request `seq` succeeded.
     Done { transfer: String, seq: u64 },

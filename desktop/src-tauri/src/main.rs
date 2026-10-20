@@ -1362,6 +1362,7 @@ fn main() {
         .manage(pool_manager)
         .manage(drop::commands::DropSlot::default())
         .manage(drop::commands::NativeDrops::default())
+        .manage(drop::commands::PeerChannel::default())
         .invoke_handler(tauri::generate_handler![
             node_status,
             save_settings,
@@ -1415,6 +1416,7 @@ fn main() {
             drop::commands::receive_reveal,
             drop::commands::set_receiving,
             drop::commands::reveal_received_folder,
+            drop::commands::direct_peer_attach,
             drop::commands::direct_peer_report,
             drop::commands::direct_sink_write,
             drop::commands::direct_sink_end,

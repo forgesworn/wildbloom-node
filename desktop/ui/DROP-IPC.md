@@ -376,8 +376,8 @@ hand: `scripts/vendor-direct.mjs` bundles it from a named wildbloom commit into
 `vendor/wildbloom-direct.js`, with the commit, the sources' and the bundle's SHA-256 and the
 bundler's version in `vendor/wildbloom-direct.provenance.json` (`--check` verifies the hash).
 `direct.js` is the window's own script. Its capability
-(`capabilities/direct-window.json`) allows only listening for events and the four commands
-below. The CSP is unchanged: WebKit's WebRTC needs no `connect-src` entry.
+(`capabilities/direct-window.json`) allows only the five commands below: no event permission
+at all, so the window hears none of the app's events. The CSP is unchanged: WebKit's WebRTC needs no `connect-src` entry.
 
 What it receives and never receives:
 
@@ -386,11 +386,17 @@ What it receives and never receives:
   envelope key (Rust keeps it and verifies the file itself).
 - It must not log a credential or an SDP, and keeps nothing in browser storage.
 
-**Start-up.** Subscribe to `direct://peer` first, then call
+**Start-up.** Make a `new __TAURI__.core.Channel()`, set its `onmessage`, and pass it once
+with `invoke("direct_peer_attach", { channel })`; when that resolves, call
 `invoke("direct_peer_report", { report: { kind: "ready" } })`. Rust sends nothing before
-`ready`, and gives up with `failed`/`webview` if it does not come within 20 seconds.
+`ready`, refuses `ready` with `{ code: "no_channel" }` until a channel is attached, and gives
+up with `failed`/`webview` if `ready` does not come within 20 seconds. A later attach replaces
+the earlier channel; Rust forgets the channel when it creates or destroys the window.
 
-**Requests** arrive as the event `direct://peer`. Each has `transfer` (the transfer's `id`; send
+**Requests** arrive as messages on that channel, one request each (the object itself, not an
+event wrapper). A channel's messages reach only the webview that made it, unlike an event,
+and need no permission: payloads over 8 KiB are fetched through Tauri's internal
+`plugin:__TAURI_CHANNEL__|fetch`, which Tauri exempts from the capability check. Each has `transfer` (the transfer's `id`; send
 it back in every report) and `seq` (send it back in the reply). One request is outstanding at a
 time except `close`, which may come at any moment.
 
@@ -454,16 +460,15 @@ Nothing is visible to the owner before KEPT.
 | `drop://status` | `DropStatus` without `files` | Any change outside the rows. Merged into the UI's copy. Sent to the Drop window and the node window (`main`) only. |
 | `share://state` | `ShareState` with `id` | State of the open share. Ignored when no sheet is open for that `id`. |
 | `receive://state` | `ReceiveState` | **Added.** The receive sheet's state, sent to the Drop window only (it carries the link and words). Sent whether or not the sheet is open. |
-| `direct://peer` | a request (above) | **Added.** To the hidden `direct` window only. |
 | `drop://notice` | `{ kind: "keeps_running" }` | **Added.** Shown as an inline notice, "Wildbloom keeps running. Open it again from your apps." Send it once, before hiding the window, when the window is closed on a desktop with no tray (GNOME without AppIndicator). |
 | `drop://open-flow` | `{ flow: "recovery" }` | **Added.** Open the recovery key sheet ("Save recovery key again…", checkbox not required) in the Drop window. |
 | `drop://drag-info` | `{ files: number, folders: number, tooBig: number }` | **Added.** The webview cannot inspect paths. When Rust receives the window's drag-enter (it carries paths) it classifies them and emits this so the overlay can say "Folders can't be added yet" or "Too big to add". `tooBig` counts files over `limits.dropMaxBytes`. Optional: without it the overlay just says "Drop to keep 2 copies". |
 
-Every event is sent with `emit_to` to the windows named, never broadcast, so the hidden
-`direct` window is not sent the owner's details in the ordinary course. This is not a
-boundary: Tauri delivers an event sent to one window to a listener in any window that
-registered for every target, and the `direct` window may listen (`core:event:allow-listen`)
-for `direct://peer`.
+Every event is sent with `emit_to` to the windows named, never broadcast. That narrows
+delivery but is not a boundary: Tauri delivers an event sent to one window to a listener in
+any window that registered for every target. The boundary for the hidden `direct` window is
+its capability, which grants no event permission, so it cannot listen at all; its requests
+come over its own channel (above), not as events.
 
 The UI also listens to Tauri's own `tauri://drag-enter`, `tauri://drag-leave` and
 `tauri://drag-drop` (payload `{ paths }`) for the overlay and the drop itself.
@@ -498,9 +503,9 @@ capability allows:
   node settings, sharing or receiving settings, pool or updater commands. The `receive_*`
   commands also refuse `{ code: "wrong_window" }` from any other window.
 - **Hidden direct-send window** (`capabilities/direct-window.json`, label `direct`): only
-  `direct_peer_report`, `direct_sink_write`, `direct_sink_end` and `direct_sink_abort`, and
-  listening for events (`core:event:allow-listen`, `allow-unlisten`). It cannot emit events.
-  The four commands refuse `{ code: "wrong_window" }` from any other window.
+  `direct_peer_attach`, `direct_peer_report`, `direct_sink_write`, `direct_sink_end` and
+  `direct_sink_abort`. No event permission: it can neither listen for nor emit events. The
+  five commands refuse `{ code: "wrong_window" }` from any other window.
 - **Node window** (`capabilities/default.json`): its own node, pool and update commands, plus
   `platform_info`, `drop_status`, `check_online_node`, `set_online_node`, `approve_device`,
   `renew_approval`, `approval_status`, `cancel_approval`, `set_watch_folder`,

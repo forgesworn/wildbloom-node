@@ -262,9 +262,13 @@ function handle(request) {
   }
 }
 
-// Subscribe first; Rust sends nothing before `ready`.
-if (tauri?.core && tauri.event) {
-  tauri.event.listen('direct://peer', (event) => {
-    void handle(event.payload);
-  }).then(() => report({ kind: 'ready' }), () => undefined);
+// Attach the request channel first; Rust sends nothing before `ready`, and
+// refuses `ready` until the channel is attached. The window has no event
+// permission: its requests come only through this channel.
+if (tauri?.core?.Channel) {
+  const requests = new tauri.core.Channel();
+  requests.onmessage = (request) => {
+    void handle(request);
+  };
+  tauri.core.invoke('direct_peer_attach', { channel: requests }).then(() => report({ kind: 'ready' }), () => undefined);
 }

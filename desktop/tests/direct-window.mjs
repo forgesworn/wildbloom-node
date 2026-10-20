@@ -53,7 +53,7 @@ let passed = 0;
 function fakeTauri() {
   const fake = {
     order: [], reports: [], writes: [], ends: [], aborts: [], bytes: [], held: [],
-    listeners: new Map(), mode: { write: 'ok', end: 'ok' },
+    channel: undefined, mode: { write: 'ok', end: 'ok' },
     globals: Object.getOwnPropertyNames(window),
   };
   window.__fake = fake;
@@ -62,6 +62,7 @@ function fakeTauri() {
     core: {
       async invoke(command, args, options) {
         fake.order.push(command === 'direct_peer_report' ? `report:${args.report.kind}` : command);
+        if (command === 'direct_peer_attach') { fake.channel = args.channel; return null; }
         if (command === 'direct_peer_report') { fake.reports.push(structuredClone(args.report)); return null; }
         if (command === 'direct_sink_write') {
           const headers = options?.headers ?? {};
@@ -81,15 +82,12 @@ function fakeTauri() {
         throw { code: 'not_allowed' };
       },
     },
-    event: {
-      async listen(name, handler) {
-        fake.order.push(`listen:${name}`);
-        fake.listeners.set(name, handler);
-        return () => fake.listeners.delete(name);
-      },
-    },
   };
-  window.__emit = (payload) => fake.listeners.get('direct://peer')?.({ event: 'direct://peer', id: 1, payload });
+  // Like Tauri's Channel: Rust's messages arrive at `onmessage`, one request each.
+  window.__TAURI__.core.Channel = class Channel {
+    onmessage = () => {};
+  };
+  window.__emit = (payload) => fake.channel?.onmessage(structuredClone(payload));
 }
 
 /** The phone's side, from the same bundle: answers Drop's offer and speaks frames. */
@@ -196,9 +194,20 @@ async function journey(name, work) {
 }
 
 try {
-  await journey('starts by subscribing, then says ready, under Drop\'s CSP, and adds no globals', async (w) => {
+  {
+    // The window faces a stranger's phone: no event permission, so it hears none of the app's events.
+    const capability = JSON.parse(await readFile(join(repo, 'desktop/src-tauri/capabilities/direct-window.json'), 'utf8'));
+    assert.deepEqual(capability.windows, ['direct']);
+    assert.deepEqual(capability.permissions.filter((p) => typeof p !== 'string' || p.startsWith('core:')), [], 'The direct window has no core permission.');
+    assert.deepEqual([...capability.permissions].sort(), ['allow-direct-peer-attach', 'allow-direct-peer-report', 'allow-direct-sink-abort', 'allow-direct-sink-end', 'allow-direct-sink-write']);
+    assert.ok(!/__TAURI__\.event|\.event\./.test(await readFile(join(ui, 'direct.js'), 'utf8')), 'direct.js uses no event API.');
+    passed += 1;
+    console.log('ok  the direct window\'s capability grants no events, only its own commands');
+  }
+
+  await journey('starts by attaching its request channel, then says ready, under Drop\'s CSP, and adds no globals', async (w) => {
     const state = await fake(w);
-    assert.deepEqual(state.order.slice(0, 2), ['listen:direct://peer', 'report:ready']);
+    assert.deepEqual(state.order.slice(0, 2), ['direct_peer_attach', 'report:ready']);
     assert.deepEqual(state.reports, [{ kind: 'ready' }]);
     const added = await w.page.evaluate(() => Object.getOwnPropertyNames(window).filter((name) => !window.__fake.globals.includes(name) && !['__fake', '__emit', '__TAURI__', '__phone'].includes(name)));
     assert.deepEqual(added, [], 'The window keeps nothing in globals.');

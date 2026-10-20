@@ -3,8 +3,8 @@ fn main() {
     // the commands it may call: the node window cannot share files (only set
     // the sharing settings) or reach the recovery key, the Drop window
     // cannot reach node settings, sharing settings or pools, and the hidden
-    // direct-send window can only report on its connection and feed the
-    // sink.
+    // direct-send window can only attach its request channel, report on its
+    // connection and feed the sink.
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "node_status",
@@ -59,6 +59,7 @@ fn main() {
             "receive_reveal",
             "set_receiving",
             "reveal_received_folder",
+            "direct_peer_attach",
             "direct_peer_report",
             "direct_sink_write",
             "direct_sink_end",

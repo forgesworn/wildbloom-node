@@ -85,7 +85,7 @@ pub trait Host: Send + Sync + 'static {
     fn open_peer_window(&self) -> bool {
         false
     }
-    /// A request to the hidden direct-send window (`direct://peer`).
+    /// A request to the hidden direct-send window, over its request channel.
     fn peer_request(&self, _request: &super::direct::PeerRequest) {}
     /// Destroys the hidden direct-send window.
     fn close_peer_window(&self) {}

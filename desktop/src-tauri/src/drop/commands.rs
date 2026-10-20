@@ -20,6 +20,33 @@ use tauri_plugin_dialog::DialogExt as _;
 #[derive(Default)]
 pub struct DropSlot(pub OnceLock<Arc<Engine>>);
 
+/// The hidden direct-send window's request channel.  The window attaches it
+/// with `direct_peer_attach` before it reports `ready`; every request goes
+/// through it, so requests reach that one webview and no other.  The window
+/// has no event permission at all, so it hears none of the app's events.
+#[derive(Default)]
+pub struct PeerChannel(std::sync::Mutex<Option<tauri::ipc::Channel<PeerRequest>>>);
+
+impl PeerChannel {
+    fn set(&self, channel: Option<tauri::ipc::Channel<PeerRequest>>) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = channel;
+    }
+
+    fn attached(&self) -> bool {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).is_some()
+    }
+
+    /// Sends one request; dropped when no window is attached, which cannot
+    /// happen while a session runs, since Rust sends nothing before `ready`
+    /// and `ready` is refused until the channel is attached.
+    fn send(&self, request: &PeerRequest) {
+        let channel = self.0.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(channel) = channel {
+            let _ = channel.send(request.clone());
+        }
+    }
+}
+
 /// Paths the operating system handed over in a native drop on the Drop
 /// window.  `add_paths` accepts only these, so the webview cannot name an
 /// arbitrary file for Drop to read and copy.
@@ -104,6 +131,14 @@ impl TauriHost {
 /// broadcast that reaches the hidden direct-send window.
 const FILE_WINDOWS: [&str; 1] = ["drop"];
 const STATUS_WINDOWS: [&str; 2] = ["drop", "main"];
+
+impl TauriHost {
+    fn forget_peer_channel(&self) {
+        if let Some(channel) = self.app.try_state::<PeerChannel>() {
+            channel.set(None);
+        }
+    }
+}
 
 impl Host for TauriHost {
     fn emit_file(&self, row: &FileRow) {
@@ -282,7 +317,9 @@ impl Host for TauriHost {
     }
 
     fn open_peer_window(&self) -> bool {
-        // One transfer at a time: a window left from an earlier one goes.
+        // One transfer at a time: a window left from an earlier one goes,
+        // and so does its channel.
+        self.forget_peer_channel();
         if let Some(old) = self.app.get_webview_window(PEER_WINDOW) {
             let _ = old.destroy();
         }
@@ -300,10 +337,15 @@ impl Host for TauriHost {
     }
 
     fn peer_request(&self, request: &PeerRequest) {
-        let _ = self.app.emit_to(PEER_WINDOW, "direct://peer", request);
+        // Through the window's own channel, never an event: an event sent
+        // to one window still reaches any window listening for every target.
+        if let Some(channel) = self.app.try_state::<PeerChannel>() {
+            channel.send(request);
+        }
     }
 
     fn close_peer_window(&self) {
+        self.forget_peer_channel();
         if let Some(window) = self.app.get_webview_window(PEER_WINDOW) {
             let _ = window.destroy();
         }
@@ -657,14 +699,33 @@ pub async fn reveal_received_folder(slot: State<'_, DropSlot>) -> CommandResult<
     engine(&slot)?.reveal_received_folder()
 }
 
+/// From the hidden window, once at start-up and before `ready`: the channel
+/// its requests arrive on.  Replaces any earlier one.
+#[tauri::command]
+pub async fn direct_peer_attach(
+    peer: State<'_, PeerChannel>,
+    webview: tauri::Webview,
+    channel: tauri::ipc::Channel<PeerRequest>,
+) -> CommandResult<()> {
+    only(&webview, PEER_WINDOW)?;
+    peer.set(Some(channel));
+    Ok(())
+}
+
 /// From the hidden window: replies, state changes and the transfer's end.
+/// `ready` is refused `{ code: "no_channel" }` until the window has attached
+/// its channel, so Rust never sends a request with nowhere to go.
 #[tauri::command]
 pub async fn direct_peer_report(
     slot: State<'_, DropSlot>,
+    peer: State<'_, PeerChannel>,
     webview: tauri::Webview,
     report: PeerReport,
 ) -> CommandResult<()> {
     only(&webview, PEER_WINDOW)?;
+    if report == PeerReport::Ready && !peer.attached() {
+        return Err(CommandError::code("no_channel"));
+    }
     engine(&slot)?.direct_peer_report(report);
     Ok(())
 }
@@ -773,4 +834,105 @@ pub fn computer_name() -> String {
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "this computer".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::direct::PeerOp;
+    use super::*;
+    use std::sync::Mutex;
+    use tauri::ipc::{Channel, InvokeResponseBody};
+
+    fn request(seq: u64) -> PeerRequest {
+        PeerRequest {
+            transfer: "t".into(),
+            seq,
+            op: PeerOp::Offer,
+        }
+    }
+
+    fn recording() -> (Channel<PeerRequest>, Arc<Mutex<Vec<serde_json::Value>>>) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let into = seen.clone();
+        let channel = Channel::new(move |body| {
+            let InvokeResponseBody::Json(json) = body else {
+                panic!("a request is JSON");
+            };
+            into.lock()
+                .unwrap()
+                .push(serde_json::from_str(&json).unwrap());
+            Ok(())
+        });
+        (channel, seen)
+    }
+
+    #[test]
+    fn requests_go_only_through_the_attached_channel() {
+        let peer = PeerChannel::default();
+        assert!(!peer.attached());
+        peer.send(&request(1)); // nowhere to go: dropped
+
+        let (first, first_seen) = recording();
+        peer.set(Some(first));
+        assert!(peer.attached());
+        peer.send(&request(2));
+        assert_eq!(
+            *first_seen.lock().unwrap(),
+            [serde_json::json!({ "transfer": "t", "seq": 2, "op": "offer" })]
+        );
+
+        // A later attach replaces the earlier channel.
+        let (second, second_seen) = recording();
+        peer.set(Some(second));
+        peer.send(&request(3));
+        assert_eq!(first_seen.lock().unwrap().len(), 1);
+        assert_eq!(second_seen.lock().unwrap().len(), 1);
+
+        // Closing the window forgets it.
+        peer.set(None);
+        assert!(!peer.attached());
+        peer.send(&request(4));
+        assert_eq!(second_seen.lock().unwrap().len(), 1);
+    }
+
+    /// Every capability that reaches the hidden direct-send window, and what
+    /// it grants.  The window faces a stranger's phone, so it must hear none
+    /// of the app's events and may call only its own commands.
+    #[test]
+    fn the_direct_window_has_no_event_permission() {
+        let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+        let mut granted = Vec::new();
+        for entry in std::fs::read_dir(folder).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|e| e != "json") {
+                continue;
+            }
+            let file = std::fs::read_to_string(&path).unwrap();
+            let capability: serde_json::Value = serde_json::from_str(&file).unwrap();
+            let windows = capability["windows"].as_array().unwrap();
+            if windows
+                .iter()
+                .any(|w| w == PEER_WINDOW || w.as_str().is_some_and(|w| w.contains('*')))
+            {
+                for permission in capability["permissions"].as_array().unwrap() {
+                    let id = permission
+                        .as_str()
+                        .or_else(|| permission["identifier"].as_str())
+                        .unwrap();
+                    granted.push(id.to_owned());
+                }
+            }
+        }
+        granted.sort();
+        assert_eq!(
+            granted,
+            [
+                "allow-direct-peer-attach",
+                "allow-direct-peer-report",
+                "allow-direct-sink-abort",
+                "allow-direct-sink-end",
+                "allow-direct-sink-write",
+            ]
+        );
+    }
 }

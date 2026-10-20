@@ -48,7 +48,7 @@ pub trait DirectHost: Send + Sync + 'static {
     fn emit(&self, state: &ReceiveState);
     /// Opens the hidden peer window.  `false` if it cannot be made.
     fn open_peer(&self) -> bool;
-    /// A request to the hidden window (`direct://peer`).
+    /// A request to the hidden window, over its request channel.
     fn peer(&self, request: &PeerRequest);
     /// Destroys the hidden window.
     fn close_peer(&self);
