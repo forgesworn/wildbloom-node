@@ -60,6 +60,12 @@
           <p class="hint" id="drop-sharing-hint">Wildbloom can only tell they've downloaded a file within 10 minutes of making its link. If it can't tell, the shared copy stays until it expires. Changes apply to files you share from now on.</p>
         </div>
         <div class="drop-setting">
+          <p class="drop-setting-title" id="drop-receiving-title">Receiving files</p>
+          <label class="check"><input id="drop-hide-address" type="checkbox" aria-describedby="drop-receiving-hint" /><span>Hide my address when receiving</span></label>
+          <p class="hint" id="drop-receiving-hint">The other person sees the relay's address instead of yours, and sends may be slower.</p>
+          <p class="drop-status-text" id="drop-receiving-folder"></p>
+        </div>
+        <div class="drop-setting">
           <p class="drop-setting-title" id="drop-recovery-title">Recovery key</p>
           <p class="drop-setting-value" id="drop-recovery-text"></p>
           <div class="actions"><button id="drop-recovery" class="secondary" type="button">Save recovery key again…</button></div>
