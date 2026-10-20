@@ -24,6 +24,8 @@ const TIMING: Timing = Timing {
     flush: Duration::from_millis(50),
     linger: Duration::from_millis(20),
     stop_grace: Duration::from_millis(500),
+    // Longer than any test waits; the stall test sets its own.
+    stall: Duration::from_secs(60),
 };
 
 const DROP_SDP: &str = "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\na=ice-ufrag:dr0p\r\na=fingerprint:sha-256 10:11:12:13\r\na=setup:actpass\r\n";
@@ -1375,6 +1377,42 @@ async fn a_forged_relay_packet_does_not_end_a_transfer() {
     let state = h.end().await;
     assert_eq!(state.state, "kept");
     assert_eq!(std::fs::read(&kept.path).unwrap(), f.plain);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_peer_that_stops_sending_is_lost() {
+    let timing = Timing {
+        stall: Duration::from_millis(400),
+        ..TIMING
+    };
+    // Bytes that keep coming keep it going, however long it takes.
+    let mut h = start_full(600, true, timing, plenty);
+    let f = file("slow.bin", 600_000);
+    h.connected(&f).await;
+    let transfer = h.web.transfer();
+    for (i, part) in f.envelope.chunks(65_527).enumerate() {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        h.controls
+            .sink
+            .write(&transfer, (i * 65_527) as u64, part)
+            .unwrap();
+    }
+    h.web.end(&f.plain).unwrap();
+    h.web.ended("kept");
+    assert_eq!(h.closed().await, None);
+    assert_eq!(h.end().await.state, "kept");
+
+    // Bytes that stop end it as lost, and nothing is kept.
+    let mut h = start_full(600, true, timing, plenty);
+    let f = file("stalled.bin", 600_000);
+    h.connected(&f).await;
+    h.web.write(&f.envelope, f.envelope.len() / 2).unwrap();
+    let started = Instant::now();
+    assert_eq!(h.closed().await, Some(2));
+    assert!(started.elapsed() >= Duration::from_millis(300));
+    let state = h.end().await;
+    assert_eq!(state.state, "failed");
+    assert_eq!(state.reason, Some("lost"));
 }
 
 fn no_room(_: &std::path::Path) -> Option<u64> {

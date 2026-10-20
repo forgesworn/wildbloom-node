@@ -519,6 +519,9 @@ nothing.  Every envelope record is encrypted exactly once.  If the data channel
 closes, the direct send has failed: v1 has no resume, and the people start again
 with a new link.  The data channel may outlive the session, but once the
 deadline passes no restart is possible and an ICE failure ends the direct send.
+While connected, a page that sends no envelope byte for 90 seconds cannot hold
+Drop: Drop ends the direct send as lost and sends STOP 2.  A reconnection is
+timed by its own clocks instead.
 
 ### Limits
 

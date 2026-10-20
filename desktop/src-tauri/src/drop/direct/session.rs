@@ -79,7 +79,15 @@ pub struct Timing {
     /// that is closed says so on the exchange, but its channel may close
     /// first.
     pub stop_grace: Duration,
+    /// How long a connected peer may send nothing before the transfer is
+    /// given up as lost.
+    pub stall: Duration,
 }
+
+/// How long a connected transfer may go without a new byte before Drop ends
+/// it as lost, so a peer that stops sending cannot hold Drop (and the Mac
+/// awake) indefinitely.  A reconnection is timed by its own clocks instead.
+pub const STALL: Duration = Duration::from_secs(90);
 
 impl Timing {
     pub const DEFAULT: Self = Self {
@@ -91,6 +99,7 @@ impl Timing {
         flush: Duration::from_secs(1),
         linger: Duration::from_secs(2),
         stop_grace: Duration::from_secs(3),
+        stall: STALL,
     };
 }
 
@@ -152,6 +161,8 @@ pub struct SinkSlot {
     sink: Mutex<Option<Sink>>,
     ending: Mutex<Ending>,
     events: mpsc::UnboundedSender<SinkEvent>,
+    /// When the last write arrived, for the stall timer.
+    last_write: Mutex<Option<Instant>>,
     #[cfg(test)]
     pause: Mutex<
         Option<(
@@ -191,6 +202,9 @@ impl SinkSlot {
         };
         match sink.write(offset, bytes) {
             Ok(ack) => {
+                if let Ok(mut last) = self.last_write.lock() {
+                    *last = Some(Instant::now());
+                }
                 if let Some(acked) = ack {
                     let _ = self.events.send(SinkEvent::Progress { acked });
                 }
@@ -300,6 +314,11 @@ impl SinkSlot {
         self.ending.lock().ok().and_then(|e| e.kept.clone())
     }
 
+    /// When the last write arrived.
+    fn last_write(&self) -> Option<Instant> {
+        self.last_write.lock().ok().and_then(|l| *l)
+    }
+
     pub fn holds(&self) -> bool {
         self.sink.lock().is_ok_and(|s| s.is_some())
     }
@@ -394,6 +413,7 @@ pub fn controls() -> (Arc<Controls>, Inputs) {
             sink: Mutex::new(None),
             ending: Mutex::new(Ending::default()),
             events,
+            last_write: Mutex::new(None),
             #[cfg(test)]
             pause: Mutex::new(None),
         },
@@ -579,6 +599,11 @@ struct Run<T, H> {
     restarts: usize,
     /// The data is flowing: restarts may start.
     in_transfer: bool,
+    /// The file is being verified: no more bytes are due.
+    verifying: bool,
+    /// When the data channel opened or the connection last came up: the
+    /// stall timer runs from here or the last write, whichever is later.
+    flowing_since: Option<Instant>,
     kept_at: Option<(Instant, Kept)>,
     awake: Option<Awake>,
 }
@@ -636,6 +661,8 @@ pub async fn run<T: LiveTransport + 'static, H: DirectHost>(
         pending: Pending::None,
         restarts: 0,
         in_transfer: false,
+        verifying: false,
+        flowing_since: None,
         kept_at: None,
         awake: None,
     };
@@ -1078,6 +1105,7 @@ impl<T: LiveTransport, H: DirectHost> Run<T, H> {
             PeerReport::Channel { .. } => {
                 if !self.channel_open {
                     self.channel_open = true;
+                    self.flowing_since = Some(Instant::now());
                     self.emit_progress();
                 }
                 None
@@ -1146,6 +1174,9 @@ impl<T: LiveTransport, H: DirectHost> Run<T, H> {
             PeerState::Connected => {
                 self.connected = true;
                 self.ever_connected = true;
+                if self.channel_open {
+                    self.flowing_since = Some(Instant::now());
+                }
                 self.connect_by = None;
                 self.failed_since = None;
                 self.disconnected_since = None;
@@ -1178,6 +1209,26 @@ impl<T: LiveTransport, H: DirectHost> Run<T, H> {
         }
     }
 
+    /// When a connected transfer that has stopped receiving bytes is given
+    /// up, if the stall timer runs now.
+    fn stall_at(&self) -> Option<Instant> {
+        if !self.channel_open
+            || !self.connected
+            || self.reconnecting
+            || self.verifying
+            || self.kept_at.is_some()
+        {
+            return None;
+        }
+        let since = self.flowing_since?;
+        let since = self
+            .controls
+            .sink
+            .last_write()
+            .map_or(since, |w| w.max(since));
+        Some(since + self.timing.stall)
+    }
+
     /// The earliest clock the transfer loop waits on.
     fn next_timer(&self) -> Option<Instant> {
         let pending = match self.pending {
@@ -1191,6 +1242,7 @@ impl<T: LiveTransport, H: DirectHost> Run<T, H> {
             self.disconnected_since
                 .map(|at| at + self.timing.restart_after),
             pending,
+            self.stall_at(),
         ]
         .into_iter()
         .flatten()
@@ -1247,6 +1299,7 @@ impl<T: LiveTransport, H: DirectHost> Run<T, H> {
                 None
             }
             SinkEvent::Verifying => {
+                self.verifying = true;
                 self.emit(&self.file_state("verifying"));
                 None
             }
@@ -1424,6 +1477,9 @@ impl<T: LiveTransport, H: DirectHost> Run<T, H> {
         }
         if self.connect_by.is_some_and(|by| at >= by) {
             return Some(End::failed("connect"));
+        }
+        if self.stall_at().is_some_and(|by| at >= by) {
+            return Some(End::failed("lost"));
         }
         if self
             .failed_since

@@ -357,7 +357,7 @@ time.
 | `protocol` | Something arrived that the protocol does not allow. |
 | `peer_failed`, `peer_storage` | Their side failed. |
 | `connect` | The two devices never connected. |
-| `lost` | The connection was lost and could not be restored. |
+| `lost` | The connection was lost and could not be restored, or no new byte arrived for 90 seconds while connected. |
 | `verification` | The file did not check out (wrong size, damaged or not what they offered). Nothing was kept. |
 | `storage` | There is no room on this computer. Nothing was kept. Also sent instead of `consent` when the temp and Received folders' volumes lack twice the envelope and 64 MiB free. |
 | `no_relay` | Hiding the address needs a relay and none was offered. |
