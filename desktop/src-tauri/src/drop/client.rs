@@ -741,6 +741,89 @@ pub async fn live_grant(
     Ok(grant)
 }
 
+/// Two TURN REST credentials on the same servers from the node's issuer:
+/// `own` for this computer and `peer` for the verified person at the other
+/// end of a direct send.  `Debug` hides the usernames and credentials.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TurnCredentials {
+    pub expires: u64,
+    pub own: super::direct::messages::IceServer,
+    pub peer: super::direct::messages::IceServer,
+}
+
+/// Why the node gave no TURN credentials.  No variant carries a header or
+/// body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum TurnError {
+    #[error("the node did not answer")]
+    Unreachable,
+    /// 404: the node does not run the TURN credential issuer.
+    #[error("the node does not issue TURN credentials")]
+    NotOffered,
+    /// 429: this computer has asked too often in the last hour.
+    #[error("too many requests for TURN credentials this hour")]
+    Limited,
+    /// Any other refusal, such as 403 without an active device grant.
+    #[error("the node refused TURN credentials (HTTP {0})")]
+    Refused(u16),
+    #[error("the node returned something unexpected")]
+    Invalid,
+}
+
+/// Reads the issuer's reply: exactly `{"expires","own","peer"}`, each entry
+/// exactly an `ice` server that passes the `ice` rules and names a `turn:` or
+/// `turns:` URL.
+pub fn parse_turn_credentials(bytes: &[u8]) -> Result<TurnCredentials, TurnError> {
+    // Objects only: a derived struct would also take the array form.
+    let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| TurnError::Invalid)?;
+    let objects = value.as_object().is_some_and(|reply| {
+        ["own", "peer"]
+            .iter()
+            .all(|name| reply.get(*name).is_some_and(serde_json::Value::is_object))
+    });
+    if !objects {
+        return Err(TurnError::Invalid);
+    }
+    // Read from the bytes, not the value, so a duplicate member is refused.
+    let credentials: TurnCredentials =
+        serde_json::from_slice(bytes).map_err(|_| TurnError::Invalid)?;
+    let sound =
+        |server: &super::direct::messages::IceServer| server.well_formed() && server.has_turn();
+    if credentials.expires == 0 || !sound(&credentials.own) || !sound(&credentials.peer) {
+        return Err(TurnError::Invalid);
+    }
+    Ok(credentials)
+}
+
+/// `POST /turn/v1/credentials` with the device's NIP-98, as [`live_grant`]
+/// does.
+pub async fn turn_credentials(
+    http: &Client,
+    node: &NodeEndpoint,
+    device: &Keys,
+) -> Result<TurnCredentials, TurnError> {
+    let url = node.url("turn/v1/credentials");
+    let auth = http_auth(device, &url, "POST", b"");
+    let response = http
+        .post(&url)
+        .header(header::AUTHORIZATION, auth)
+        .timeout(Duration::from_secs(20))
+        .send()
+        .await
+        .map_err(|_| TurnError::Unreachable)?;
+    match response.status() {
+        StatusCode::CREATED => {}
+        StatusCode::NOT_FOUND => return Err(TurnError::NotOffered),
+        StatusCode::TOO_MANY_REQUESTS => return Err(TurnError::Limited),
+        status => return Err(TurnError::Refused(status.as_u16())),
+    }
+    let bytes = read_bounded(response, 8192)
+        .await
+        .map_err(|_| TurnError::Invalid)?;
+    parse_turn_credentials(&bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1003,5 +1086,158 @@ mod tests {
             .unwrap();
         let event: nostr::prelude::Event = serde_json::from_slice(&json).unwrap();
         assert!(event.tags.iter().all(|t| t.as_slice()[0] != "payload"));
+    }
+
+    // ------------------------------------------------- TURN credentials
+
+    /// The issuer's documented example, with synthetic values.
+    fn turn_reply() -> serde_json::Value {
+        let entry = |label: &str| {
+            serde_json::json!({
+                "credential": format!("{}=", "A".repeat(27)),
+                "urls": ["turn:turn.example.net:3478?transport=udp", "turns:turn.example.net:5349?transport=tcp"],
+                "username": format!("1800003600:{label}"),
+            })
+        };
+        serde_json::json!({
+            "expires": 1_800_003_600u64,
+            "own": entry("b3duLWxhYmVsLXN5bnRoZXRpYw"),
+            "peer": entry("cGVlci1sYWJlbC1zeW50aGV0aWM"),
+        })
+    }
+
+    #[test]
+    fn turn_credentials_parse_exactly() {
+        let good = turn_reply();
+        let parsed = parse_turn_credentials(good.to_string().as_bytes()).unwrap();
+        assert_eq!(parsed.expires, 1_800_003_600);
+        assert_eq!(parsed.own.username, "1800003600:b3duLWxhYmVsLXN5bnRoZXRpYw");
+        assert_eq!(
+            parsed.peer.username,
+            "1800003600:cGVlci1sYWJlbC1zeW50aGV0aWM"
+        );
+        assert_eq!(parsed.own.urls.len(), 2);
+        // Debug never shows a credential or username.
+        let shown = format!("{parsed:?}");
+        assert!(
+            !shown.contains("AAAA") && !shown.contains("b3duLWxh"),
+            "{shown}"
+        );
+
+        type Change = fn(&mut serde_json::Value);
+        let mutate = |change: Change| {
+            let mut value = turn_reply();
+            change(&mut value);
+            parse_turn_credentials(value.to_string().as_bytes())
+        };
+        let refused: Vec<(&str, Change)> = vec![
+            ("extra member", |v| v["note"] = "x".into()),
+            ("missing peer", |v| {
+                v.as_object_mut().unwrap().remove("peer");
+            }),
+            ("extra entry member", |v| v["own"]["ttl"] = 1.into()),
+            ("no TURN URL", |v| {
+                v["peer"]["urls"] = serde_json::json!(["stun:turn.example.net:3478"])
+            }),
+            ("five URLs", |v| {
+                v["own"]["urls"] =
+                    serde_json::json!(["turn:a", "turn:b", "turn:c", "turn:d", "turn:e"])
+            }),
+            ("no URLs", |v| v["own"]["urls"] = serde_json::json!([])),
+            ("bad scheme", |v| {
+                v["own"]["urls"] = serde_json::json!(["https://turn.example.net/"])
+            }),
+            ("space in URL", |v| {
+                v["own"]["urls"] = serde_json::json!(["turn:turn.example.net :3478"])
+            }),
+            ("long URL", |v| {
+                v["own"]["urls"] = serde_json::json!([format!("turn:{}", "a".repeat(252))])
+            }),
+            ("empty credential", |v| v["peer"]["credential"] = "".into()),
+            ("long username", |v| {
+                v["peer"]["username"] = "u".repeat(257).into()
+            }),
+            ("control in username", |v| {
+                v["peer"]["username"] = "a\u{7}b".into()
+            }),
+            ("string expiry", |v| v["expires"] = "1800003600".into()),
+            ("zero expiry", |v| v["expires"] = 0.into()),
+            ("array entry", |v| {
+                v["own"] = serde_json::json!(["c", ["turn:turn.example.net"], "u"])
+            }),
+        ];
+        for (name, change) in refused {
+            assert_eq!(mutate(change), Err(TurnError::Invalid), "{name}");
+        }
+        let text = turn_reply().to_string();
+        let duplicated = text.replacen("\"expires\"", "\"expires\":1,\"expires\"", 1);
+        assert_eq!(
+            parse_turn_credentials(duplicated.as_bytes()),
+            Err(TurnError::Invalid)
+        );
+        assert_eq!(parse_turn_credentials(b"[]"), Err(TurnError::Invalid));
+        assert_eq!(parse_turn_credentials(b""), Err(TurnError::Invalid));
+    }
+
+    /// A server that answers one request with `status` and `body`.
+    async fn answering(status: &'static str, body: String) -> NodeEndpoint {
+        server(move |mut socket| async move {
+            let head = {
+                let mut head = Vec::new();
+                let mut byte = [0u8; 1];
+                while !head.ends_with(b"\r\n\r\n") {
+                    socket.read_exact(&mut byte).await.unwrap();
+                    head.push(byte[0]);
+                }
+                String::from_utf8(head).unwrap()
+            };
+            assert!(head.starts_with("POST /turn/v1/credentials HTTP/1.1"), "{head}");
+            assert!(head.to_ascii_lowercase().contains("authorization: nostr "));
+            let reply = format!(
+                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(reply.as_bytes()).await.unwrap();
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn turn_credentials_come_from_the_issuer_route() {
+        let keys = Keys::generate();
+        let http = http_client();
+        let node = answering("201 Created", turn_reply().to_string()).await;
+        let credentials = turn_credentials(&http, &node, &keys).await.unwrap();
+        assert_eq!(credentials.expires, 1_800_003_600);
+        for (status, expected) in [
+            ("404 Not Found", TurnError::NotOffered),
+            ("429 Too Many Requests", TurnError::Limited),
+            ("403 Forbidden", TurnError::Refused(403)),
+            ("503 Service Unavailable", TurnError::Refused(503)),
+            ("200 OK", TurnError::Refused(200)),
+        ] {
+            let node = answering(status, "{}".into()).await;
+            assert_eq!(
+                turn_credentials(&http, &node, &keys).await,
+                Err(expected),
+                "{status}"
+            );
+        }
+        let node = answering("201 Created", "{\"expires\":1}".into()).await;
+        assert_eq!(
+            turn_credentials(&http, &node, &keys).await,
+            Err(TurnError::Invalid)
+        );
+        // Nothing listening.
+        let closed = {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            drop(listener);
+            NodeEndpoint::parse(&format!("http://127.0.0.1:{port}/"), true).unwrap()
+        };
+        assert_eq!(
+            turn_credentials(&http, &closed, &keys).await,
+            Err(TurnError::Unreachable)
+        );
     }
 }
