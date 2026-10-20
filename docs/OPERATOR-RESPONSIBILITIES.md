@@ -7,15 +7,13 @@
 > `[square brackets]` is a decision or fact each operator must fill in for
 > their own instance.
 
-## ForgeSworn publishes software; it runs no node for other people
+## ForgeSworn publishes software; it offers no node as a service
 
-ForgeSworn publishes the Wildbloom Node software. It runs no node for anyone
-else, and it does not control your node. It does run one node for the
-maintainer's own devices, at shelter.forgesworn.dev, with the pairing and
-TURN credential issuers that the hosted Share and direct send pages use; it
-accepts no other uploader. `[DECISION: how ForgeSworn describes this
-deployment; see "Share and direct send" in the wildbloom repository's
-docs/legal/online-safety-position-draft.md.]`
+ForgeSworn publishes the Wildbloom Node software. It offers no node as a
+service and runs none for anyone else, and it does not control your node.
+Its only node is the maintainer's own, at shelter.forgesworn.dev: only the
+maintainer's key and devices can store files on it, open a pairing session
+through it or obtain TURN credentials from it.
 
 Whoever runs a node, or offers one to other people, is responsible for
 their own legal position in whatever jurisdiction applies, including how
