@@ -1382,16 +1382,17 @@ async fn a_forged_relay_packet_does_not_end_a_transfer() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_peer_that_stops_sending_is_lost() {
     let timing = Timing {
-        stall: Duration::from_millis(400),
+        stall: Duration::from_millis(1500),
         ..TIMING
     };
-    // Bytes that keep coming keep it going, however long it takes.
+    // Bytes that keep coming keep it going, however long it takes: about
+    // 31 writes, 100 ms apart, outlast two stall periods.
     let mut h = start_full(600, true, timing, plenty);
-    let f = file("slow.bin", 600_000);
+    let f = file("slow.bin", 2_000_000);
     h.connected(&f).await;
     let transfer = h.web.transfer();
     for (i, part) in f.envelope.chunks(65_527).enumerate() {
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
         h.controls
             .sink
             .write(&transfer, (i * 65_527) as u64, part)
@@ -1409,7 +1410,7 @@ async fn a_peer_that_stops_sending_is_lost() {
     h.web.write(&f.envelope, f.envelope.len() / 2).unwrap();
     let started = Instant::now();
     assert_eq!(h.closed().await, Some(2));
-    assert!(started.elapsed() >= Duration::from_millis(300));
+    assert!(started.elapsed() >= Duration::from_millis(1400));
     let state = h.end().await;
     assert_eq!(state.state, "failed");
     assert_eq!(state.reason, Some("lost"));

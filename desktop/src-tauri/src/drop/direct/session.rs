@@ -164,14 +164,16 @@ pub struct SinkSlot {
     /// When the last write arrived, for the stall timer.
     last_write: Mutex<Option<Instant>>,
     #[cfg(test)]
-    pause: Mutex<
-        Option<(
-            Pause,
-            std::sync::mpsc::SyncSender<()>,
-            std::sync::mpsc::Receiver<()>,
-        )>,
-    >,
+    pause: Mutex<Option<PauseHook>>,
 }
+
+/// Where to pause, the signal that it has, and the wait to go on.
+#[cfg(test)]
+type PauseHook = (
+    Pause,
+    std::sync::mpsc::SyncSender<()>,
+    std::sync::mpsc::Receiver<()>,
+);
 
 impl SinkSlot {
     fn install(&self, sink: Sink) {
