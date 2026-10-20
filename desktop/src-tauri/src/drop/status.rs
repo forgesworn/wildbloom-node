@@ -219,6 +219,11 @@ mod tests {
                 after_download: "delete",
                 expiry_seconds: 86_400,
             },
+            receiving: crate::drop::direct::ReceivingSettings {
+                hide_address: true,
+                folder: "~/Downloads/Wildbloom Received".into(),
+                max_bytes: 250_000_000,
+            },
             browser_approval: false,
         }
     }

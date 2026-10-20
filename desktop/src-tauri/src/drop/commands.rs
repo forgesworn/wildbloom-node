@@ -3,6 +3,10 @@
 //! dialogs never run on the main thread.
 
 use super::client::NodeEndpoint;
+use super::direct::awake::Awake;
+use super::direct::{
+    AddedToWildbloom, PEER_PAGE, PEER_WINDOW, PeerReport, PeerRequest, ReceiveState,
+};
 use super::engine::{Engine, Host, LocalNode};
 use super::status::{StatusLine, Tone};
 use super::types::*;
@@ -259,6 +263,56 @@ impl Host for TauriHost {
         };
         let _ = command.spawn();
     }
+
+    fn emit_receive(&self, state: &ReceiveState) {
+        // Links and words only ever go to the Drop window.
+        let _ = self.app.emit_to(DROP_WINDOW, "receive://state", state);
+    }
+
+    fn open_peer_window(&self) -> bool {
+        // One transfer at a time: a window left from an earlier one goes.
+        if let Some(old) = self.app.get_webview_window(PEER_WINDOW) {
+            let _ = old.destroy();
+        }
+        tauri::WebviewWindowBuilder::new(
+            &self.app,
+            PEER_WINDOW,
+            tauri::WebviewUrl::App(PEER_PAGE.into()),
+        )
+        .title("Wildbloom Drop connection")
+        .visible(false)
+        .focused(false)
+        .skip_taskbar(true)
+        .build()
+        .is_ok()
+    }
+
+    fn peer_request(&self, request: &PeerRequest) {
+        let _ = self.app.emit_to(PEER_WINDOW, "direct://peer", request);
+    }
+
+    fn close_peer_window(&self) {
+        if let Some(window) = self.app.get_webview_window(PEER_WINDOW) {
+            let _ = window.destroy();
+        }
+    }
+
+    fn keep_awake(&self) -> Awake {
+        Awake::hold()
+    }
+}
+
+/// The Drop window's label.
+const DROP_WINDOW: &str = "drop";
+
+/// Each receive command answers only the window that owns it, as the
+/// capability files already require.
+fn only(webview: &tauri::Webview, label: &str) -> CommandResult<()> {
+    if webview.label() == label {
+        Ok(())
+    } else {
+        Err(CommandError::code("wrong_window"))
+    }
 }
 
 // ------------------------------------------------------------- commands
@@ -503,6 +557,158 @@ pub async fn share_cancel(slot: State<'_, DropSlot>, id: String) -> CommandResul
 #[tauri::command]
 pub async fn stop_sharing(slot: State<'_, DropSlot>, id: String) -> CommandResult<()> {
     engine(&slot)?.stop_sharing(&id).await
+}
+
+// ----------------------------------------------------------- receiving
+
+#[tauri::command]
+pub async fn receive_start(
+    slot: State<'_, DropSlot>,
+    webview: tauri::Webview,
+) -> CommandResult<ReceiveState> {
+    only(&webview, DROP_WINDOW)?;
+    engine(&slot)?.receive_start()
+}
+
+#[tauri::command]
+pub async fn receive_state(
+    slot: State<'_, DropSlot>,
+    webview: tauri::Webview,
+) -> CommandResult<ReceiveState> {
+    only(&webview, DROP_WINDOW)?;
+    Ok(engine(&slot)?.receive_state())
+}
+
+#[tauri::command]
+pub async fn receive_verify(
+    slot: State<'_, DropSlot>,
+    webview: tauri::Webview,
+    matches: bool,
+) -> CommandResult<()> {
+    only(&webview, DROP_WINDOW)?;
+    engine(&slot)?.receive_verify(matches);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn receive_consent(
+    slot: State<'_, DropSlot>,
+    webview: tauri::Webview,
+    accept: bool,
+) -> CommandResult<()> {
+    only(&webview, DROP_WINDOW)?;
+    engine(&slot)?.receive_consent(accept);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn receive_cancel(
+    slot: State<'_, DropSlot>,
+    webview: tauri::Webview,
+) -> CommandResult<()> {
+    only(&webview, DROP_WINDOW)?;
+    engine(&slot)?.receive_cancel();
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn receive_add_to_wildbloom(
+    slot: State<'_, DropSlot>,
+    webview: tauri::Webview,
+    id: String,
+) -> CommandResult<AddedToWildbloom> {
+    only(&webview, DROP_WINDOW)?;
+    engine(&slot)?.receive_add_to_wildbloom(&id).await
+}
+
+#[tauri::command]
+pub async fn receive_reveal(
+    slot: State<'_, DropSlot>,
+    webview: tauri::Webview,
+    id: String,
+) -> CommandResult<()> {
+    only(&webview, DROP_WINDOW)?;
+    engine(&slot)?.receive_reveal(&id)
+}
+
+/// From the node window's settings: hide this computer's address behind the
+/// relay when receiving (the default).
+#[tauri::command]
+pub async fn set_receiving(slot: State<'_, DropSlot>, hide_address: bool) -> CommandResult<()> {
+    engine(&slot)?.set_receiving(hide_address)
+}
+
+/// From the hidden window: replies, state changes and the transfer's end.
+#[tauri::command]
+pub async fn direct_peer_report(
+    slot: State<'_, DropSlot>,
+    webview: tauri::Webview,
+    report: PeerReport,
+) -> CommandResult<()> {
+    only(&webview, PEER_WINDOW)?;
+    engine(&slot)?.direct_peer_report(report);
+    Ok(())
+}
+
+/// From the hidden window: one DATA frame's bytes as the raw request body,
+/// with the transfer in `Wildbloom-Transfer` and the envelope offset in
+/// `Wildbloom-Offset`.  Resolves once they are written; the window sends the
+/// ACK only then.
+#[tauri::command]
+pub async fn direct_sink_write(
+    slot: State<'_, DropSlot>,
+    webview: tauri::Webview,
+    request: tauri::ipc::Request<'_>,
+) -> CommandResult<()> {
+    only(&webview, PEER_WINDOW)?;
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err(CommandError::code("sink_failed"));
+    };
+    let header = |name: &str| {
+        request
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+    };
+    let (Some(transfer), Some(offset)) = (
+        header("wildbloom-transfer"),
+        header("wildbloom-offset").and_then(|v| v.parse::<u64>().ok()),
+    ) else {
+        return Err(CommandError::code("sink_failed"));
+    };
+    engine(&slot)?
+        .direct_sink_write(transfer, offset, bytes.clone())
+        .await
+}
+
+/// From the hidden window: END's SHA-256 (lower-case hex) and size.
+/// Resolves once the file is verified and kept (send KEPT); rejects
+/// `sink_failed` (send STOP 2) or `sink_storage` (send STOP 3).
+#[tauri::command]
+pub async fn direct_sink_end(
+    slot: State<'_, DropSlot>,
+    webview: tauri::Webview,
+    transfer: String,
+    sha256: String,
+    size: u64,
+) -> CommandResult<()> {
+    only(&webview, PEER_WINDOW)?;
+    engine(&slot)?
+        .direct_sink_end(transfer, &sha256, size)
+        .await
+}
+
+/// From the hidden window: delete what the sink holds.  Safe to repeat.
+#[tauri::command]
+pub async fn direct_sink_abort(
+    slot: State<'_, DropSlot>,
+    webview: tauri::Webview,
+    transfer: String,
+) -> CommandResult<()> {
+    only(&webview, PEER_WINDOW)?;
+    engine(&slot)?.direct_sink_abort(transfer).await;
+    Ok(())
 }
 
 /// What a drag over the Drop window carries, for the overlay copy.

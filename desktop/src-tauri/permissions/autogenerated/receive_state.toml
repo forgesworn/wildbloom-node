@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-receive-state"
+description = "Enables the receive_state command without any pre-configured scope."
+commands.allow = ["receive_state"]
+
+[[permission]]
+identifier = "deny-receive-state"
+description = "Denies the receive_state command without any pre-configured scope."
+commands.deny = ["receive_state"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-receive-consent"
+description = "Enables the receive_consent command without any pre-configured scope."
+commands.allow = ["receive_consent"]
+
+[[permission]]
+identifier = "deny-receive-consent"
+description = "Denies the receive_consent command without any pre-configured scope."
+commands.deny = ["receive_consent"]
