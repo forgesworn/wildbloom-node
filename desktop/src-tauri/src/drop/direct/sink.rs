@@ -202,6 +202,13 @@ impl Sink {
     /// so the envelope temp file is deleted however this returns, and the
     /// plaintext temp file is deleted unless it was kept.
     pub fn end(self, sha256: [u8; 32], size: u64) -> Result<Kept, SinkError> {
+        self.verify(sha256, size)?.keep()
+    }
+
+    /// END's checks without keeping: the verified plaintext, still in a
+    /// private temp file, ready for [`Verified::keep`].  Dropping it deletes
+    /// the plaintext, so a transfer stopped between the two keeps nothing.
+    pub fn verify(self, sha256: [u8; 32], size: u64) -> Result<Verified, SinkError> {
         if self.broken {
             return Err(SinkError::Failed("the sink has failed"));
         }
@@ -242,15 +249,40 @@ impl Sink {
             return Err(SinkError::Failed("the size or SHA-256 is not END's"));
         }
         drop(self.envelope);
-        // Defence in depth: the name passed the name rule when the manifest
-        // was read, and is checked again where it is placed.
-        received::keep(plain, &self.received_dir, &metadata.name).map_err(|e| io_error(&e, "keep"))
+        Ok(Verified {
+            plain,
+            name: metadata.name,
+            received_dir: self.received_dir,
+        })
     }
 
     /// Leaves the temp file behind, as a killed process would.
     #[cfg(test)]
     pub(crate) fn leak(self) -> PathBuf {
         self.envelope.into_temp_path().keep().unwrap()
+    }
+}
+
+/// A plaintext that passed every check of END, not yet in the Received
+/// folder.  Dropping it deletes the plaintext.
+pub struct Verified {
+    plain: NamedTempFile,
+    name: String,
+    received_dir: PathBuf,
+}
+
+impl std::fmt::Debug for Verified {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Verified").finish_non_exhaustive()
+    }
+}
+
+impl Verified {
+    /// Places the file in the Received folder.
+    pub fn keep(self) -> Result<Kept, SinkError> {
+        // Defence in depth: the name passed the name rule when the manifest
+        // was read, and is checked again where it is placed.
+        received::keep(self.plain, &self.received_dir, &self.name).map_err(|e| io_error(&e, "keep"))
     }
 }
 

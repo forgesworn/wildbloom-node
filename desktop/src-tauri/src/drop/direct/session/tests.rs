@@ -361,6 +361,10 @@ fn start(lifetime: u64) -> Harness {
 }
 
 fn start_with(lifetime: u64, can_open: bool) -> Harness {
+    start_full(lifetime, can_open, TIMING)
+}
+
+fn start_full(lifetime: u64, can_open: bool, timing: Timing) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let temp = dir.path().join("drop-temp");
     let received = dir.path().join("Downloads").join("Wildbloom Received");
@@ -406,7 +410,7 @@ fn start_with(lifetime: u64, can_open: bool) -> Harness {
         controls.clone(),
         inputs,
         dirs,
-        TIMING,
+        timing,
     ));
     let allowlist = turn().peer.urls.clone();
     Harness {
@@ -1246,4 +1250,75 @@ async fn reports_for_another_transfer_are_ignored() {
     // Without the window's report, KEPT is given a moment and then it ends.
     h.closed().await;
     assert_eq!(h.end().await.state, "kept");
+}
+
+/// Starts `end` for the whole of `f` on a blocking thread and waits until
+/// it reaches `at`.  The returned sender lets it go on.
+async fn end_paused_at(
+    h: &Harness,
+    f: &File,
+    at: Pause,
+) -> (
+    tokio::task::JoinHandle<Result<Kept, SinkError>>,
+    std::sync::mpsc::SyncSender<()>,
+) {
+    h.web.write(&f.envelope, f.envelope.len()).unwrap();
+    let (paused, go) = h.controls.sink.pause_at(at);
+    let controls = h.controls.clone();
+    let transfer = h.web.transfer();
+    let plain = f.plain.clone();
+    let ending = tokio::task::spawn_blocking(move || {
+        controls
+            .sink
+            .end(&transfer, sha(&plain), plain.len() as u64)
+    });
+    tokio::task::spawn_blocking(move || paused.recv_timeout(Duration::from_secs(10)))
+        .await
+        .unwrap()
+        .expect("end reached the pause");
+    (ending, go)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stop_while_verifying_keeps_nothing() {
+    let mut h = start(600);
+    let f = file("race.txt", 300_000);
+    h.connected(&f).await;
+    let (ending, go) = end_paused_at(&h, &f, Pause::BeforeLock).await;
+    h.until("verifying").await;
+    // The owner stops while the file is verified but not yet placed.
+    h.controls.cancel();
+    assert_eq!(h.closed().await, Some(1));
+    let state = h.until("cancelled").await;
+    assert_eq!(state.by, Some("you"));
+    // The end then finds the session stopped and places nothing.
+    go.send(()).unwrap();
+    assert_eq!(
+        ending.await.unwrap(),
+        Err(SinkError::Failed("the transfer was stopped"))
+    );
+    let state = h.end().await;
+    assert_eq!(state.state, "cancelled");
+    assert!(h.controls.sink.kept().is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stop_while_the_file_is_placed_ends_as_kept() {
+    let mut h = start(600);
+    let f = file("race.txt", 300_000);
+    h.connected(&f).await;
+    let (ending, go) = end_paused_at(&h, &f, Pause::InLock).await;
+    // The owner stops while the file is being placed: the session waits for
+    // the placing and reports the file it placed.
+    h.controls.cancel();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!h.names().contains(&"cancelled"), "{:?}", h.names());
+    go.send(()).unwrap();
+    let kept = ending.await.unwrap().unwrap();
+    // Kept: the window is closed without a STOP.
+    assert_eq!(h.closed().await, None);
+    let state = h.end().await;
+    assert_eq!(state.state, "kept");
+    assert_eq!(std::fs::read(&kept.path).unwrap(), f.plain);
+    assert!(!h.names().contains(&"cancelled"));
 }

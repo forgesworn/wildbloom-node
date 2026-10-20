@@ -113,11 +113,39 @@ pub struct Dirs {
     pub received: PathBuf,
 }
 
+/// How the sink's file ended: kept, or stopped before it could be.  One
+/// lock decides between the two, so the ending the owner is shown is always
+/// what is on disk.
+#[derive(Default)]
+struct Ending {
+    /// The session is ending without a kept file: nothing may be placed.
+    cancelled: bool,
+    kept: Option<Kept>,
+}
+
+/// Where [`SinkSlot::end`] waits for a test.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Pause {
+    /// Verified, before the ending's lock.
+    BeforeLock,
+    /// Holding the ending's lock, before the file is placed.
+    InLock,
+}
+
 /// The sink, shared by the session and the sink commands.
 pub struct SinkSlot {
     sink: Mutex<Option<Sink>>,
-    kept: Mutex<Option<Kept>>,
+    ending: Mutex<Ending>,
     events: mpsc::UnboundedSender<SinkEvent>,
+    #[cfg(test)]
+    pause: Mutex<
+        Option<(
+            Pause,
+            std::sync::mpsc::SyncSender<()>,
+            std::sync::mpsc::Receiver<()>,
+        )>,
+    >,
 }
 
 impl SinkSlot {
@@ -163,17 +191,34 @@ impl SinkSlot {
     }
 
     /// `direct_sink_end`: verifies and keeps the file, or deletes it.
-    /// Blocking.
+    /// Blocking.  The file is placed only while holding the ending's lock and
+    /// only if the session has not ended without it ([`SinkSlot::cancel`]).
     pub fn end(&self, transfer: &str, sha256: [u8; 32], size: u64) -> Result<Kept, SinkError> {
         let Some(sink) = self.take(transfer) else {
             return Err(SinkError::Failed("no transfer is receiving"));
         };
         let _ = self.events.send(SinkEvent::Verifying);
-        match sink.end(sha256, size) {
+        let verified = match sink.verify(sha256, size) {
+            Ok(verified) => verified,
+            Err(error) => {
+                let _ = self.events.send(SinkEvent::Failed(error));
+                return Err(error);
+            }
+        };
+        #[cfg(test)]
+        self.paused(Pause::BeforeLock);
+        let Ok(mut ending) = self.ending.lock() else {
+            return Err(SinkError::Failed("the sink is unavailable"));
+        };
+        #[cfg(test)]
+        self.paused(Pause::InLock);
+        if ending.cancelled {
+            // Stopped first: the plaintext goes with `verified`.
+            return Err(SinkError::Failed("the transfer was stopped"));
+        }
+        match verified.keep() {
             Ok(kept) => {
-                if let Ok(mut slot) = self.kept.lock() {
-                    *slot = Some(kept.clone());
-                }
+                ending.kept = Some(kept.clone());
                 let _ = self.events.send(SinkEvent::Kept(kept.clone()));
                 Ok(kept)
             }
@@ -184,20 +229,61 @@ impl SinkSlot {
         }
     }
 
+    #[cfg(test)]
+    fn paused(&self, at: Pause) {
+        let hook = self.pause.lock().ok().and_then(|mut p| {
+            if p.as_ref().is_some_and(|(want, ..)| *want == at) {
+                p.take()
+            } else {
+                None
+            }
+        });
+        if let Some((_, paused, go)) = hook {
+            let _ = paused.send(());
+            let _ = go.recv();
+        }
+    }
+
+    /// Makes the next [`SinkSlot::end`] stop at `at`: it signals the first
+    /// returned receiver and waits on the sender.
+    #[cfg(test)]
+    pub(crate) fn pause_at(
+        &self,
+        at: Pause,
+    ) -> (
+        std::sync::mpsc::Receiver<()>,
+        std::sync::mpsc::SyncSender<()>,
+    ) {
+        let (paused, paused_rx) = std::sync::mpsc::sync_channel(1);
+        let (go, go_rx) = std::sync::mpsc::sync_channel(1);
+        *self.pause.lock().unwrap() = Some((at, paused, go_rx));
+        (paused_rx, go)
+    }
+
     /// `direct_sink_abort`: deletes what the sink holds.  Safe to repeat.
     pub fn abort(&self, transfer: &str) {
         drop(self.take(transfer));
     }
 
-    fn abort_any(&self) {
-        if let Ok(mut slot) = self.sink.lock() {
-            slot.take();
-        }
+    /// The session is ending.  Returns the kept file if one was placed;
+    /// otherwise no file will be, and what the sink holds is deleted.  Waits
+    /// for an end that is placing its file.  Blocking.
+    fn cancel(&self) -> Option<Kept> {
+        let kept = {
+            let mut ending = self.ending.lock().ok()?;
+            if ending.kept.is_none() {
+                ending.cancelled = true;
+            }
+            ending.kept.clone()
+        };
+        let sink = self.sink.lock().ok().and_then(|mut s| s.take());
+        drop(sink);
+        kept
     }
 
     /// The file this session kept, if it kept one.
     pub fn kept(&self) -> Option<Kept> {
-        self.kept.lock().ok().and_then(|k| k.clone())
+        self.ending.lock().ok().and_then(|e| e.kept.clone())
     }
 
     pub fn holds(&self) -> bool {
@@ -292,8 +378,10 @@ pub fn controls() -> (Arc<Controls>, Inputs) {
         finished: AtomicBool::new(false),
         sink: SinkSlot {
             sink: Mutex::new(None),
-            kept: Mutex::new(None),
+            ending: Mutex::new(Ending::default()),
             events,
+            #[cfg(test)]
+            pause: Mutex::new(None),
         },
     });
     (
@@ -1319,10 +1407,18 @@ impl<T: LiveTransport, H: DirectHost> Run<T, H> {
     /// stopped it), the sink's files go unless kept, the page is told, the
     /// final state is emitted and the relay session is deleted.
     async fn finish(&mut self, end: End) -> ReceiveState {
-        // A file kept while the session was ending stays kept.
-        let end = match (end, self.controls.sink.kept()) {
-            (End::Kept(kept), _) | (_, Some(kept)) => End::Kept(kept),
-            (end, None) => end,
+        // One decision, under the sink's lock: a file kept while the session
+        // was ending stays kept (waiting for one being placed), and
+        // otherwise no file can be placed from here on.
+        let end = match end {
+            End::Kept(kept) => End::Kept(kept),
+            end => {
+                let controls = self.controls.clone();
+                match tokio::task::spawn_blocking(move || controls.sink.cancel()).await {
+                    Ok(Some(kept)) => End::Kept(kept),
+                    _ => end,
+                }
+            }
         };
         let (tell, frame) = match &end {
             End::Cancelled => (Some(StopReason::Cancelled), Some(1)),
@@ -1341,10 +1437,6 @@ impl<T: LiveTransport, H: DirectHost> Run<T, H> {
             }
             self.host.close_peer();
             self.peer_open = false;
-        }
-        if !matches!(end, End::Kept(_)) {
-            let controls = self.controls.clone();
-            let _ = tokio::task::spawn_blocking(move || controls.sink.abort_any()).await;
         }
         if let Some(reason) = tell {
             self.tell(reason).await;
