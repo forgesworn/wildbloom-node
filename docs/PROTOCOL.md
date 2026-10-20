@@ -407,8 +407,9 @@ page.  The page's credential travels only inside `invite`, after the check
 words, so only the verified peer receives it.  It never appears in the link, a
 URL, the relay's public fields, a log or browser storage, and the page forgets
 it when the direct send ends.  Drop obtains both from the node's
-[TURN credential issuer](#turn-credential-issuer) after the check words and
-before `invite`, and puts `peer` into `ice` unchanged.
+[TURN credential issuer](#turn-credential-issuer) before it opens the session,
+so a node without the issuer fails before any link is shown, and puts `peer`
+into `ice` unchanged.  An abandoned session's credentials lapse unused.
 
 Each URL in `ice` must equal, byte for byte, an entry of the page's build-time
 allowlist; otherwise the page refuses with `unsupported`.  A paired but hostile
