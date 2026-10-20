@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.9 preview - Unreleased
+## 0.3.9 preview - 2026-10-20
 
 - Hold back a mass removal from the Wildbloom folder until the owner chooses.
   When many files vanish from the folder at once (50 files, or 10 that are at
