@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.10 preview - Unreleased
+
+- Drop can receive a file straight from someone's phone. They open the
+  owner's link, both sides check the same words, and once the owner accepts,
+  the file streams over a direct connection into
+  `~/Downloads/Wildbloom Received`, marked as downloaded. Nothing is stored on
+  any server. Find it under **Add files… > Receive a file…**.
+- TURN credentials from `POST /turn/v1/credentials` are now valid for 15
+  minutes instead of an hour, and Debug output never shows a credential or
+  username.
+
 ## 0.3.9 preview - 2026-10-20
 
 - Hold back a mass removal from the Wildbloom folder until the owner chooses.
@@ -17,9 +28,8 @@
 - Add an opt-in TURN credential issuer (`--turn-issuer`, with `--device-grants`
   and one to four `--turn-url`s) for the planned direct send. A granted
   device's NIP-98 request to `POST /turn/v1/credentials` returns two TURN REST
-  credentials valid for 15 minutes, one for itself and one for the person at
-  the other end, each with a fresh random username label. Debug output never
-  shows a credential or username. Each device may make 30
+  credentials valid for an hour, one for itself and one for the person at the
+  other end, each with a fresh random username label. Each device may make 30
   requests an hour, counted apart from the pairing issuer's. The secret is the
   TURN server's `static-auth-secret`, read from a private file or
   `WILDBLOOM_TURN_SECRET`, and is never logged or returned. Nothing works until
@@ -145,7 +155,7 @@
 - Include the native macOS desktop lifecycle acceptance suite in CI. Preview
   signing and physical-device limitations remain unchanged.
 
-## Unreleased
+## 0.3.10 preview - Unreleased
 
 - WILDBLOOM_SERVER_NAME accepts a comma-separated list, matching --allow-pubkey and --friend-grant.
 - Add `wildbloomd replicas run --policy-dir --state-root`: one process
