@@ -339,4 +339,15 @@ async fn a_running_group_node_serves_only_its_group_and_remembers_across_a_resta
     assert_eq!(send_delete(&node).await, 409);
     assert_eq!(get(&node, &alice, &hash).await.status().as_u16(), 200);
     node.stop().await;
+
+    // Without group mode the directory is refused, so the core can never
+    // demote the group's claims to evictable guest data.
+    let output = Command::new(BIN)
+        .args(["--no-tor", "--bind", "127.0.0.1:0"])
+        .arg("--data-dir")
+        .arg(&data)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("group state"));
 }

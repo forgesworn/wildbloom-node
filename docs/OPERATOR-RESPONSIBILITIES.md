@@ -108,7 +108,9 @@ including in response to a legal notice.]`
   may hold; the keeper chooses the devices.  It refuses `--open-shelter`,
   `--service-profile` and `--checkout-profile`.  Removing a `--group-keeper`
   entry and restarting ends every grant that keeper signed at once; the
-  group's stored files stay until you remove them.  Back up
+  group's stored files stay until you remove them.  A data directory that holds
+  `group-grants.sqlite3` will not start without `--group-mode`, so its claims
+  are never demoted to evictable data.  Back up
   `group-grants.sqlite3` with the store: a lost copy forgets revocations.
 - `--open-shelter` is a single on/off switch for admitting unknown signed
   guest mirrors. There is no per-key denylist under open shelter: you cannot

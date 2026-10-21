@@ -340,6 +340,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     }
+    refuse_orphaned_group_state(cli.group_mode, &data_dir)?;
     if cli.allowed_pubkeys.is_empty() && cli.friend_grants.is_empty() && !cli.open_shelter {
         tracing::warn!(
             "no owner, friend grant or open-shelter policy is configured; writes require a previously activated paid allowance"
@@ -663,6 +664,22 @@ fn group_mode_config(cli: &Cli) -> Result<Option<grants::GroupConfig>, Box<dyn s
             .collect(),
         max_concurrent_writes: cli.max_concurrent_writes,
     }))
+}
+
+/// A data directory that holds group state must start in group mode: without
+/// it the core would not see the group keys as friends and would demote their
+/// claims to evictable guest data.
+fn refuse_orphaned_group_state(
+    group_mode: bool,
+    data_dir: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if !group_mode && grants::Grants::group_database_path(data_dir).exists() {
+        return Err(
+            "this data directory holds group state: start with --group-mode and the same --group-keeper entries, or move group-grants.sqlite3 aside"
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 fn validate_public_url(url: &Url) -> Result<(), Box<dyn std::error::Error>> {
