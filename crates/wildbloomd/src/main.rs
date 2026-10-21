@@ -44,6 +44,50 @@ impl FromStr for FriendGrantArg {
     }
 }
 
+/// `KEEPER:CEILING_BYTES[:ROOM+ROOM]` for `--group-keeper`.
+#[derive(Debug, Clone)]
+struct GroupKeeperArg(grants::Enrolment);
+
+impl FromStr for GroupKeeperArg {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let mut parts = value.split(':');
+        let (Some(keeper), Some(ceiling)) = (parts.next(), parts.next()) else {
+            return Err("expected KEEPER:CEILING_BYTES[:ROOM+ROOM]".to_owned());
+        };
+        let rooms = parts.next();
+        if parts.next().is_some() {
+            return Err("expected KEEPER:CEILING_BYTES[:ROOM+ROOM]".to_owned());
+        }
+        let key = |value: &str| {
+            (value.len() == 64
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+            .then(|| value.to_owned())
+        };
+        let keeper = key(keeper).ok_or("the keeper must be 64 lower-case hex characters")?;
+        let ceiling = ceiling
+            .parse::<u64>()
+            .ok()
+            .filter(|ceiling| (1..=i64::MAX as u64).contains(ceiling))
+            .ok_or("the group ceiling must be a positive number of bytes")?;
+        let rooms = match rooms {
+            None => BTreeSet::new(),
+            Some(rooms) => rooms
+                .split('+')
+                .map(|room| key(room).ok_or("a room id must be 64 lower-case hex characters"))
+                .collect::<Result<BTreeSet<_>, _>>()?,
+        };
+        Ok(Self(grants::Enrolment {
+            keeper,
+            ceiling,
+            rooms,
+        }))
+    }
+}
+
 #[derive(Debug, Parser)]
 #[command(
     name = "wildbloomd",
@@ -170,6 +214,23 @@ struct Cli {
     #[arg(long, env = "WILDBLOOM_TURN_SECRET_FILE", requires = "turn_issuer")]
     turn_secret_file: Option<PathBuf>,
 
+    /// Run as a closed group storage node: only keys with an active group
+    /// grant may use it, and every read needs a token.  Refuses --open-shelter,
+    /// --service-profile and --checkout-profile.
+    #[arg(long, env = "WILDBLOOM_GROUP_MODE")]
+    group_mode: bool,
+
+    /// Enrol a group keeper as KEEPER:CEILING_BYTES[:ROOM+ROOM] (repeatable, or
+    /// comma-separated).  The ceiling is per group; rooms optionally limit
+    /// which room ids that keeper may open here.
+    #[arg(
+        long = "group-keeper",
+        env = "WILDBLOOM_GROUP_KEEPERS",
+        value_delimiter = ',',
+        requires = "group_mode"
+    )]
+    group_keepers: Vec<GroupKeeperArg>,
+
     /// Accept signed BUD-04 mirrors from unknown keys as evictable guest data.
     /// Direct unknown uploads remain denied.
     #[arg(long, env = "WILDBLOOM_OPEN_SHELTER")]
@@ -245,6 +306,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await
             .map_err(|error| error.to_string().into());
     }
+    let group = group_mode_config(&cli)?;
     #[cfg(target_os = "linux")]
     configure_parent_death(cli.parent_pid)?;
     let data_dir = match cli.data_dir {
@@ -342,8 +404,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .as_ref()
         .map(|path| services::Profile::read(path))
         .transpose()?;
-    let device_grants = if cli.device_grants || grants::has_database(&data_dir) {
-        Some(grants::Grants::open(
+    let device_grants = if cli.device_grants || cli.group_mode || grants::has_database(&data_dir) {
+        let opened = grants::Grants::open(
             &data_dir,
             grants::GrantsConfig {
                 owners: cli.allowed_pubkeys.clone(),
@@ -356,7 +418,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .collect(),
             },
             grants::system_clock(),
-        )?)
+        )?;
+        if let Some(group) = group {
+            opened.enable_group(&data_dir, group)?;
+        }
+        Some(opened)
     } else {
         None
     };
@@ -551,6 +617,40 @@ async fn repair_loop(state: AppState, interval: std::time::Duration) {
             }
         }
     }
+}
+
+/// The group mode configuration, or an error when the flags contradict a
+/// closed service.  Group mode serves only the members of enrolled groups, so
+/// it never runs beside open shelter (the guest tier), service discovery
+/// (kind 31402) or paid profiles.
+fn group_mode_config(cli: &Cli) -> Result<Option<grants::GroupConfig>, Box<dyn std::error::Error>> {
+    if !cli.group_mode {
+        if cli.group_keepers.is_empty() {
+            return Ok(None);
+        }
+        return Err("--group-keeper needs --group-mode".into());
+    }
+    if cli.open_shelter {
+        return Err("--group-mode refuses --open-shelter: a group node has no guest tier".into());
+    }
+    if cli.service_profile.is_some() {
+        return Err("--group-mode refuses --service-profile: a group node is not listed".into());
+    }
+    if cli.checkout_profile.is_some() {
+        return Err(
+            "--group-mode refuses --checkout-profile: a group node sells no storage".into(),
+        );
+    }
+    if cli.group_keepers.is_empty() {
+        return Err("--group-mode needs at least one --group-keeper".into());
+    }
+    Ok(Some(grants::GroupConfig {
+        enrolments: cli
+            .group_keepers
+            .iter()
+            .map(|keeper| keeper.0.clone())
+            .collect(),
+    }))
 }
 
 fn validate_public_url(url: &Url) -> Result<(), Box<dyn std::error::Error>> {
@@ -777,6 +877,74 @@ mod tests {
             ]
         );
         assert!(grants::turn::ice_urls(&cli.turn_urls).is_ok());
+    }
+
+    const KEEPER: &str = "ab0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd";
+    const ROOM: &str = "cd0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd";
+
+    #[test]
+    fn the_group_keeper_flag_takes_a_key_a_ceiling_and_optional_rooms() {
+        let cli = Cli::try_parse_from([
+            "wildbloomd",
+            "--group-mode",
+            "--group-keeper",
+            &format!("{KEEPER}:10737418240"),
+            "--group-keeper",
+            &format!("{ROOM}:1048576:{KEEPER}+{ROOM}"),
+        ])
+        .unwrap();
+        let config = group_mode_config(&cli).unwrap().unwrap();
+        assert_eq!(config.enrolments.len(), 2);
+        assert_eq!(config.enrolments[0].keeper, KEEPER);
+        assert_eq!(config.enrolments[0].ceiling, 10_737_418_240);
+        assert!(config.enrolments[0].rooms.is_empty());
+        assert_eq!(config.enrolments[1].rooms.len(), 2);
+        for refused in [
+            "short:1024".to_owned(),
+            KEEPER.to_owned(),
+            format!("{KEEPER}:0"),
+            format!("{KEEPER}:-1"),
+            format!("{KEEPER}:1.5"),
+            format!("{KEEPER}:9223372036854775808"),
+            format!("{KEEPER}:1024:short"),
+            format!("{KEEPER}:1024:{ROOM}:extra"),
+            format!("{}:1024", KEEPER.to_ascii_uppercase()),
+        ] {
+            assert!(
+                Cli::try_parse_from(["wildbloomd", "--group-mode", "--group-keeper", &refused])
+                    .is_err(),
+                "{refused}"
+            );
+        }
+    }
+
+    #[test]
+    fn group_mode_refuses_the_guest_tier_discovery_and_paid_profiles() {
+        let keeper = format!("{KEEPER}:1024");
+        let base = ["wildbloomd", "--group-mode", "--group-keeper", &keeper];
+        assert!(
+            group_mode_config(&Cli::try_parse_from(base).unwrap())
+                .unwrap()
+                .is_some()
+        );
+        for refused in ["--open-shelter", "--service-profile", "--checkout-profile"] {
+            let mut args = base.to_vec();
+            args.push(refused);
+            if refused != "--open-shelter" {
+                args.push("/var/lib/example/profile.json");
+            }
+            if refused == "--checkout-profile" {
+                args.push("--no-tor");
+            }
+            let cli = Cli::try_parse_from(args).unwrap();
+            assert!(group_mode_config(&cli).is_err(), "{refused}");
+        }
+        // Without group mode nothing changes, and a keeper alone is an error.
+        let cli = Cli::try_parse_from(["wildbloomd", "--open-shelter"]).unwrap();
+        assert!(group_mode_config(&cli).unwrap().is_none());
+        assert!(Cli::try_parse_from(["wildbloomd", "--group-keeper", &keeper]).is_err());
+        let cli = Cli::try_parse_from(["wildbloomd", "--group-mode"]).unwrap();
+        assert!(group_mode_config(&cli).is_err());
     }
 
     #[test]

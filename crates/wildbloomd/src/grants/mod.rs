@@ -50,10 +50,16 @@ mod claims;
 mod db;
 mod device_auth;
 pub mod event;
+mod group;
+mod group_db;
+#[cfg(test)]
+mod group_tests;
 pub mod issuer;
 #[cfg(test)]
 mod tests;
 pub mod turn;
+
+pub use group::{Enrolment, GroupConfig};
 
 /// Environment variables that may carry an issuer secret.  Tor and the
 /// replica signer are started without them.
@@ -174,6 +180,8 @@ struct Inner {
     /// delete the gate completes itself.
     delete_auth: AuthPolicy,
     app: OnceLock<AppState>,
+    /// Group mode state; unset unless the node runs with `--group-mode`.
+    group: OnceLock<group::GroupState>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -188,6 +196,8 @@ pub enum GrantsError {
         "a persisted device or recovery key is now also a configured owner, friend or service key; remove the conflicting configuration"
     )]
     Conflict,
+    #[error("group mode configuration was refused: {0}")]
+    Group(&'static str),
 }
 
 #[derive(Debug)]
@@ -326,6 +336,7 @@ impl Grants {
                 ),
                 delete_auth: AuthPolicy::new(config.server_names.clone()).with_public_writes(true),
                 app: OnceLock::new(),
+                group: OnceLock::new(),
             }),
         };
         grants.reload()?;
@@ -365,6 +376,7 @@ impl Grants {
                 grant_id: core_grant_id(key),
                 issuer: Some(member.issuer.clone()),
             }))
+            .chain(self.group_friend_grants())
             .collect()
     }
 
@@ -669,6 +681,11 @@ impl Grants {
             {
                 return Err(ApiError::conflict(
                     "a delegated key cannot be an owner, friend or service key",
+                ));
+            }
+            if self.group_claims_key(key) {
+                return Err(ApiError::conflict(
+                    "a delegated key cannot be a group keeper or group device",
                 ));
             }
             if snapshot
