@@ -535,9 +535,29 @@ All three paths use `POST /groups/v1/events`:
 1. **The keeper pushes** every grant, revocation and reset it signs to the node
    it names, over the transport it already uses for that node (Tor or HTTPS),
    and keeps a journal entry until that node answers `200`, `201` or `409`.
-   `429` (`rate`) and `503` are retryable: the keeper keeps the entry and tries
-   again later.  Any other answer (a node that no longer enrols the keeper,
-   say) stops the retries for that node and is reported to the room's hosts.
+   Events for one device at one node are pushed in the order they were signed,
+   and a reset goes before anything signed after it.  For each answer:
+   - `429` (`rate`), `502`, `503`, `504`, a network error, and `403`
+     (`future`), which means the node's clock is behind: the keeper keeps the
+     entry and tries again later with backoff, never sooner than any
+     `Retry-After`.  A gateway in front of a restarting node answers `502` or
+     `504`, which is why those are retried too.
+   - Any other `5xx` for a revocation or a reset: retried in the same way until
+     the event expires.  Giving up on one would leave an ended grant in force at
+     that node.
+   - `409` (`stale`), `409` (`revoked`) for a revocation, or `409` with no
+     reason: done, since the node holds this event or a newer one.  `403`
+     (`expired`): done, since the event has ended anyway.
+   - `409` (`scope-taken`, `floor`, `key-conflict` or `scope-changed`), or `409`
+     (`revoked`) for a grant: that grant is not in force at that node.  This is
+     about one device, so the keeper stops signing for that device at that node
+     for a while (KithMoot waits an hour, doubling to a day) and goes on serving
+     the room's other devices there.
+   - Anything else (`403` (`keeper`) from a node that no longer enrols the
+     keeper, `403` (`server`), another `4xx` or `5xx`, or a grant answered `500`
+     three times in a row): retries stop for that node and the room's hosts are
+     told once.  The keeper signs no new grants for that node, and tries one
+     device's grant there once a day to see whether it has been put right.
 2. **The device posts its own grant** on first contact with a node, after a
    renewal, and after any `403`.
 3. **Every member device carries revocations and resets.**  Before its first
