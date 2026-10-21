@@ -119,7 +119,7 @@ identifies the owner's own Wildbloom use.  The authority key is better:
 The cost is one enrolment per room on a node, since each KithMoot room has its
 own authority key.  A dedicated per-room grant key would hide the link between
 a node and the room's public rekeys from the node, at the price of an
-announcement op and a key to back up.  That is open question O1.
+announcement op and a key to back up.  The owner chose the authority key (O1).
 
 ## 4. The grant event
 
