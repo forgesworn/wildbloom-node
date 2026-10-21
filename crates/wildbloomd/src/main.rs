@@ -516,6 +516,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if cli.device_grants {
             routes = routes.merge(device_grants.router());
         }
+        if device_grants.group_enabled() {
+            routes = routes.merge(device_grants.group_router());
+        }
         if let (Some(token), Some(relay_url)) = (pairing_issuer_token, &cli.pairing_relay_url) {
             let issuer = grants::issuer::Issuer::new(device_grants.clone(), relay_url, token)?;
             routes = routes.merge(issuer.router());

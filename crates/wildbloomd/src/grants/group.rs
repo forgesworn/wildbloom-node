@@ -6,18 +6,32 @@
 //! and the far-future sentinel expiry that device grants use); the real expiry
 //! and scopes are enforced by a gate in front of the core router.
 use super::{
-    CORE_GRANT_SENTINEL, Grants, GrantsError,
+    CORE_GRANT_SENTINEL, Grants, GrantsError, cors,
     event::is_canonical_key,
-    group_db::{self, GroupRows},
+    group_db::{self, Floor, GroupGrantRow, GroupId, GroupKey, GroupRows},
+    group_event::{self, Body, FUTURE_SKEW, GroupEvent, Refusal},
+};
+use axum::{
+    Json, Router,
+    body::{Body as HttpBody, to_bytes},
+    extract::{Request, State},
+    http::{HeaderValue, Method, StatusCode, header},
+    response::{IntoResponse, Response},
+    routing::post,
 };
 use rusqlite::Connection;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, RwLock},
     time::Duration,
 };
 use wildbloom_core::FriendGrant;
+
+/// Posts to the event route allowed in any one minute, across all callers:
+/// every request over Tor arrives from loopback, so a per-address limit
+/// would mean nothing.
+const EVENTS_PER_MINUTE: usize = 120;
 
 const GROUP_DATABASE_FILE: &str = "group-grants.sqlite3";
 
@@ -37,10 +51,36 @@ pub struct GroupConfig {
 }
 
 pub(super) struct GroupState {
-    #[allow(dead_code)] // read by the event route and the gate
     pub db: Mutex<Connection>,
     pub enrolments: BTreeMap<String, Enrolment>,
+    /// The node's own host names, lower case, as a grant's `server` names them.
+    pub hosts: BTreeSet<String>,
     pub snapshot: RwLock<Arc<GroupRows>>,
+    /// Serialises grant, revocation and reset commits.  Never held while
+    /// verifying a signature, serving a request or waiting for the core.
+    pub updates: tokio::sync::Mutex<()>,
+    /// Clock seconds of recent posts to the event route.
+    pub posts: Mutex<VecDeque<u64>>,
+}
+
+/// A host name as a grant or token names it: bare, or the host of an
+/// `http(s)` origin.
+pub(super) fn host_of(value: &str) -> Option<String> {
+    let value = value.to_ascii_lowercase();
+    if group_event::is_host_name(&value) {
+        return Some(value);
+    }
+    let url = url::Url::parse(&value).ok()?;
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || !matches!(url.path(), "" | "/")
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return None;
+    }
+    url.host_str().map(str::to_owned)
 }
 
 /// The core grant id shared by every key of one group.
@@ -100,7 +140,15 @@ impl Grants {
         let state = GroupState {
             db: Mutex::new(connection),
             enrolments,
+            hosts: self
+                .inner
+                .server_names
+                .iter()
+                .filter_map(|name| host_of(name))
+                .collect(),
             snapshot: RwLock::new(Arc::new(rows)),
+            updates: tokio::sync::Mutex::new(()),
+            posts: Mutex::new(VecDeque::new()),
         };
         self.inner
             .group
@@ -154,5 +202,416 @@ impl Grants {
                 })
             })
             .collect()
+    }
+}
+
+/// A grant event the node recorded, or already held exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Accepted {
+    pub created: bool,
+    pub state: &'static str,
+}
+
+struct Plan {
+    accepted: Accepted,
+    grant: Option<GroupGrantRow>,
+    floor: Option<(GroupId, Floor)>,
+    key: Option<(String, GroupKey)>,
+}
+
+impl Plan {
+    fn unchanged(state: &'static str) -> Self {
+        Self {
+            accepted: Accepted {
+                created: false,
+                state,
+            },
+            grant: None,
+            floor: None,
+            key: None,
+        }
+    }
+}
+
+/// What a failed core push must put back.
+struct Previous {
+    grant: Option<GroupGrantRow>,
+    key: Option<GroupKey>,
+}
+
+impl Grants {
+    pub fn group_enabled(&self) -> bool {
+        self.inner.group.get().is_some()
+    }
+
+    fn group_state(&self) -> Result<&GroupState, Refusal> {
+        self.inner.group.get().ok_or_else(Refusal::unavailable)
+    }
+
+    fn reload_group(&self, state: &GroupState) -> Result<(), Refusal> {
+        let next = {
+            let db = state.db.lock().map_err(|_| Refusal::unavailable())?;
+            group_db::read_rows(&db).map_err(|_| Refusal::unavailable())?
+        };
+        if let Ok(mut guard) = state.snapshot.write() {
+            *guard = Arc::new(next);
+        }
+        Ok(())
+    }
+
+    /// A route-wide limit on posted events, on the node's own clock.
+    fn allow_group_post(&self, state: &GroupState) -> Result<(), Refusal> {
+        let now = self.now();
+        let mut posts = state.posts.lock().map_err(|_| Refusal::unavailable())?;
+        while posts
+            .front()
+            .is_some_and(|at| now.saturating_sub(*at) >= 60)
+        {
+            posts.pop_front();
+        }
+        if posts.len() >= EVENTS_PER_MINUTE {
+            return Err(Refusal::new(StatusCode::TOO_MANY_REQUESTS, "rate"));
+        }
+        posts.push_back(now);
+        Ok(())
+    }
+
+    /// Submit one kind 27541 event.  Rules 1 to 7 of section 4.4 need no
+    /// state and run before the database is touched; rules 8 to 11 run
+    /// against the node's state under the update lock.
+    pub async fn post_group_event(&self, body: &[u8]) -> Result<Accepted, Refusal> {
+        let state = self.group_state()?;
+        self.allow_group_post(state)?;
+        let event = group_event::parse(body)?;
+        // 5: a keeper the node owner enrolled, for a room they expect.
+        state
+            .enrolments
+            .get(&event.keeper)
+            .filter(|enrolment| {
+                enrolment.rooms.is_empty() || enrolment.rooms.contains(event.room())
+            })
+            .ok_or(Refusal::forbidden("keeper"))?;
+        // 6 and 7: this node, and an event neither from the future nor over.
+        if !state.hosts.contains(event.server()) {
+            return Err(Refusal::forbidden("server"));
+        }
+        let now = self.now();
+        if event.created_at > now.saturating_add(FUTURE_SKEW) {
+            return Err(Refusal::forbidden("future"));
+        }
+        if event.expiration <= now {
+            return Err(Refusal::forbidden("expired"));
+        }
+
+        let update = state.updates.lock().await;
+        let now = self.now();
+        let rows = self.group_snapshot().ok_or_else(Refusal::unavailable)?;
+        let plan = self.evaluate_group_event(state, &rows, &event, now)?;
+        if plan.grant.is_none() && plan.floor.is_none() {
+            return Ok(plan.accepted);
+        }
+        let previous = Previous {
+            grant: plan.grant.as_ref().and_then(|row| {
+                rows.grants
+                    .get(&(row.keeper.clone(), row.grant_id.clone()))
+                    .cloned()
+            }),
+            key: plan
+                .key
+                .as_ref()
+                .and_then(|(device, _)| rows.keys.get(device).cloned()),
+        };
+        let before = self.group_friend_grants();
+        {
+            let mut db = state.db.lock().map_err(|_| Refusal::unavailable())?;
+            let tx = db.transaction().map_err(|_| Refusal::unavailable())?;
+            if let Some(row) = &plan.grant {
+                group_db::write_grant(&tx, row).map_err(|_| Refusal::unavailable())?;
+            }
+            if let Some((group, floor)) = &plan.floor {
+                group_db::write_floor(&tx, group, floor).map_err(|_| Refusal::unavailable())?;
+            }
+            if let Some((device, key)) = &plan.key {
+                group_db::write_key(&tx, device, key).map_err(|_| Refusal::unavailable())?;
+            }
+            tx.commit().map_err(|_| Refusal::unavailable())?;
+        }
+        self.reload_group(state)?;
+        drop(update);
+        // Revocations, resets and expiry never change the core's friend set,
+        // so they never wait on a core push; only a new upload key or a new
+        // ceiling does.  The push waits for in-flight core writes, so it runs
+        // outside the update lock.
+        if before != self.group_friend_grants()
+            && let Err(error) = self.push_core_policy().await
+        {
+            tracing::error!(reason = %error, "core refused the group friend set; reverting");
+            let _update = state.updates.lock().await;
+            if let Some(row) = &plan.grant
+                && self
+                    .group_snapshot()
+                    .and_then(|rows| {
+                        rows.grants
+                            .get(&(row.keeper.clone(), row.grant_id.clone()))
+                            .cloned()
+                    })
+                    .as_ref()
+                    == Some(row)
+            {
+                self.revert_group(state, row, previous, plan.key.as_ref())?;
+            }
+            drop(_update);
+            let _ = self.push_core_policy().await;
+            return Err(Refusal::unavailable());
+        }
+        Ok(plan.accepted)
+    }
+
+    fn revert_group(
+        &self,
+        state: &GroupState,
+        written: &GroupGrantRow,
+        previous: Previous,
+        key: Option<&(String, GroupKey)>,
+    ) -> Result<(), Refusal> {
+        {
+            let mut db = state.db.lock().map_err(|_| Refusal::unavailable())?;
+            let tx = db.transaction().map_err(|_| Refusal::unavailable())?;
+            match previous.grant {
+                Some(row) => group_db::write_grant(&tx, &row),
+                None => {
+                    group_db::delete_grant(&tx, &(written.keeper.clone(), written.grant_id.clone()))
+                }
+            }
+            .map_err(|_| Refusal::unavailable())?;
+            if let Some((device, _)) = key {
+                match previous.key {
+                    Some(key) => group_db::write_key(&tx, device, &key),
+                    None => group_db::delete_key(&tx, device),
+                }
+                .map_err(|_| Refusal::unavailable())?;
+            }
+            tx.commit().map_err(|_| Refusal::unavailable())?;
+        }
+        self.reload_group(state)
+    }
+
+    fn group_key_conflict(
+        &self,
+        state: &GroupState,
+        rows: &GroupRows,
+        group: &GroupId,
+        device: &str,
+    ) -> bool {
+        self.other_authority_keys().contains(device)
+            || state.enrolments.contains_key(device)
+            || rows
+                .keys
+                .get(device)
+                .is_some_and(|key| (&key.keeper, &key.room) != (&group.0, &group.1))
+            || rows
+                .rows_for(device)
+                .any(|row| (&row.keeper, &row.room) != (&group.0, &group.1))
+    }
+
+    /// Rules 8 to 11 of section 4.4, and the state each outcome writes.
+    fn evaluate_group_event(
+        &self,
+        state: &GroupState,
+        rows: &GroupRows,
+        event: &GroupEvent,
+        now: u64,
+    ) -> Result<Plan, Refusal> {
+        let group = (event.keeper.clone(), event.room().to_owned());
+        let enrolled = |keeper: &str| state.enrolments.contains_key(keeper);
+        let (grant_id, device, server, scopes, bytes, revoked) = match &event.body {
+            Body::Reset { .. } => {
+                if let Some(floor) = rows.floors.get(&group) {
+                    if floor.event_id == event.id {
+                        return Ok(Plan::unchanged("reset"));
+                    }
+                    if event.created_at <= floor.created_at {
+                        return Err(Refusal::conflict("stale"));
+                    }
+                }
+                return Ok(Plan {
+                    accepted: Accepted {
+                        created: true,
+                        state: "reset",
+                    },
+                    grant: None,
+                    floor: Some((
+                        group,
+                        Floor {
+                            created_at: event.created_at,
+                            expires_at: event.created_at.saturating_add(group_db::FLOOR_RETENTION),
+                            event_id: event.id.clone(),
+                        },
+                    )),
+                    key: None,
+                });
+            }
+            Body::Grant {
+                grant_id,
+                device,
+                server,
+                scopes,
+                bytes,
+                revoked,
+                ..
+            } => (grant_id, device, server, *scopes, *bytes, *revoked),
+        };
+        // 8: a device is one kind of key, in one group.
+        if self.group_key_conflict(state, rows, &group, device) {
+            return Err(Refusal::conflict("key-conflict"));
+        }
+        // 9: nothing at or before a reset lands again.
+        if rows
+            .floors
+            .get(&group)
+            .is_some_and(|floor| event.created_at <= floor.created_at)
+        {
+            return Err(Refusal::conflict("floor"));
+        }
+        // 10: one id, one room, device and node; strictly newer; revoked is final.
+        let existing = rows.grants.get(&(event.keeper.clone(), grant_id.clone()));
+        if let Some(row) = existing {
+            if row.event_id == event.id {
+                return Ok(Plan::unchanged(if row.active {
+                    "active"
+                } else {
+                    "revoked"
+                }));
+            }
+            if (&row.room, &row.device, &row.server) != (&group.1, device, server) {
+                return Err(Refusal::conflict("scope-changed"));
+            }
+            if event.created_at <= row.created_at {
+                return Err(Refusal::conflict("stale"));
+            }
+            if !row.active && !revoked {
+                return Err(Refusal::conflict("revoked"));
+            }
+        }
+        // 11: one active grant per device in a group.
+        if !revoked
+            && rows.rows_for(device).any(|other| {
+                other.grant_id != *grant_id
+                    && (&other.keeper, &other.room) == (&group.0, &group.1)
+                    && rows.is_active(other, enrolled, now)
+            })
+        {
+            return Err(Refusal::conflict("scope-taken"));
+        }
+        let row = GroupGrantRow {
+            keeper: event.keeper.clone(),
+            grant_id: grant_id.clone(),
+            room: group.1.clone(),
+            device: device.clone(),
+            server: server.clone(),
+            scopes,
+            bytes,
+            active: !revoked,
+            created_at: event.created_at,
+            expiration: event.expiration,
+            retain_until: existing.map_or(event.expiration, |row| {
+                row.retain_until.max(event.expiration)
+            }),
+            revoked_at: revoked.then(|| {
+                existing
+                    .and_then(|row| row.revoked_at)
+                    .unwrap_or(event.created_at)
+            }),
+            event_id: event.id.clone(),
+        };
+        // A key joins its group on its first active grant and keeps the
+        // ceiling of the newest one that carried an upload scope.
+        let known = rows.keys.get(device);
+        let key = (!revoked)
+            .then(|| GroupKey {
+                keeper: group.0.clone(),
+                room: group.1.clone(),
+                byte_limit: bytes.or(known.and_then(|key| key.byte_limit)),
+            })
+            .filter(|key| known != Some(key))
+            .map(|key| (device.clone(), key));
+        Ok(Plan {
+            accepted: Accepted {
+                created: true,
+                state: if revoked { "revoked" } else { "active" },
+            },
+            grant: Some(row),
+            floor: None,
+            key,
+        })
+    }
+
+    /// `POST /groups/v1/events`.  The signature is the authority, so the
+    /// route needs no `Authorization` and anyone may post.
+    pub fn group_router(&self) -> Router {
+        Router::new()
+            .route("/groups/v1/events", post(post_event))
+            .with_state(self.clone())
+            .layer(cors(&[Method::POST]))
+    }
+}
+
+async fn post_event(State(grants): State<Grants>, request: Request<HttpBody>) -> Response {
+    let body = match to_bytes(request.into_body(), group_event::MAX_EVENT_BYTES).await {
+        Ok(body) => body,
+        Err(_) => return Refusal::new(StatusCode::PAYLOAD_TOO_LARGE, "too-large").into_response(),
+    };
+    match grants.post_group_event(&body).await {
+        Ok(accepted) => {
+            let mut response = (
+                if accepted.created {
+                    StatusCode::CREATED
+                } else {
+                    StatusCode::OK
+                },
+                Json(serde_json::json!({ "state": accepted.state })),
+            )
+                .into_response();
+            let headers = response.headers_mut();
+            headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            headers.insert(
+                "x-reason",
+                HeaderValue::from_static(if accepted.created {
+                    "accepted"
+                } else {
+                    "unchanged"
+                }),
+            );
+            response
+        }
+        Err(refusal) => refusal.into_response(),
+    }
+}
+
+impl Grants {
+    /// Forget what no event or token could still need (see `group_db::prune`).
+    pub(super) fn prune_group(&self, now: u64) {
+        if let Some(state) = self.inner.group.get()
+            && let Ok(db) = state.db.lock()
+        {
+            let _ = group_db::prune(&db, now);
+        }
+    }
+}
+
+#[cfg(test)]
+impl Grants {
+    /// Whether `key` holds an active grant with the scope bit, right now.
+    pub(crate) fn group_granted(&self, key: &str, scope: u8) -> bool {
+        let Some(state) = self.inner.group.get() else {
+            return false;
+        };
+        let enrolled = |keeper: &str| state.enrolments.contains_key(keeper);
+        self.group_snapshot()
+            .and_then(|rows| {
+                rows.active_for(key, &enrolled, self.now())
+                    .map(|row| row.scopes & scope != 0)
+            })
+            .unwrap_or(false)
     }
 }

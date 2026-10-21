@@ -52,6 +52,7 @@ mod device_auth;
 pub mod event;
 mod group;
 mod group_db;
+mod group_event;
 #[cfg(test)]
 mod group_tests;
 pub mod issuer;
@@ -510,6 +511,7 @@ impl Grants {
         if let Ok(db) = self.inner.db.lock() {
             let _ = db::prune(&db, now, OWNER_WRITE_WINDOW);
         }
+        self.prune_group(now);
     }
 
     /// Record an owner's own write of these hashes before it reaches the
