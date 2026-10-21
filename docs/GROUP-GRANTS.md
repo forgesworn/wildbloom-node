@@ -1,9 +1,9 @@
 # Group grants
 
-Status: draft profile `group-grants/1`, 21 October 2026.  Specified only:
-nothing here is built in `wildbloomd`, KithMoot or Bothy yet.  This is phase
-S2 of KithMoot's group-hosted design; S3 to S9 consume it.  It is an
-experimental profile, not a NIP, and not legal advice.
+Status: draft profile `group-grants/1`, 21 October 2026.  Phase S3, the
+`wildbloomd` group mode of section 12, is built; KithMoot and Bothy are not.
+This is phase S2 of KithMoot's group-hosted design; S3 to S9 consume it.  It
+is an experimental profile, not a NIP, and not legal advice.
 
 The phases and decision this document refers to:
 
@@ -350,6 +350,10 @@ Reasons are the names the vectors use; the wire carries the status and a
 short `X-Reason` text.  Responses carry `Cache-Control: no-store`.  The node
 verifies the signature before touching its database, and limits the rate of
 this route as a whole, since every request over Tor arrives from loopback.
+Only an event that parses, verifies and names an enrolled keeper spends that
+keeper's budget, and only a grant that changes the node's state does; junk has
+a budget of its own, and a revocation, a reset or a replay of an event the node
+already holds is never refused for rate.
 
 A device may ask about its own grant with `GET /groups/v1/self`, signed with
 NIP-98 by that device, to show how much of its ceiling is used.  It is
@@ -531,8 +535,9 @@ All three paths use `POST /groups/v1/events`:
 1. **The keeper pushes** every grant, revocation and reset it signs to the node
    it names, over the transport it already uses for that node (Tor or HTTPS),
    and keeps a journal entry until that node answers `200`, `201` or `409`.
-   Any other answer (a node that no longer enrols the keeper, say) stops the
-   retries for that node and is reported to the room's hosts.
+   `429` (`rate`) and `503` are retryable: the keeper keeps the entry and tries
+   again later.  Any other answer (a node that no longer enrols the keeper,
+   say) stops the retries for that node and is reported to the room's hosts.
 2. **The device posts its own grant** on first contact with a node, after a
    renewal, and after any `403`.
 3. **Every member device carries revocations and resets.**  Before its first
@@ -641,19 +646,60 @@ When a group node will not do what it asks, it says so plainly:
 
 ## 12. wildbloomd mapping (for S3)
 
+Built in S3.  The names and shapes S3 settled are in the right-hand column.
+
 | Element | In `wildbloomd` |
 |---|---|
-| Group mode | A start flag, `--group-mode`.  Refuses `--open-shelter`, the guest tier, service discovery (kind 31402) and paid profiles; makes every read need a token; sets the cache headers in 6.6 |
-| Enrolment | A repeatable `--group-keeper <hex>:<ceiling bytes>` (or a file), checked at start like `--friend-grant`.  Names and shape are S3's to settle |
-| Event route | `POST /groups/v1/events`, beside `/grants/v1` |
-| State | A private `0600` SQLite file beside the store, like `device-grants.sqlite3`: grant rows by keeper and grant id, floors, key to group, spent delete ids.  Part of retention state: back it up with the store |
-| Claims | Each group key is a core friend grant while it holds claims, with a core grant id per group and the far-future sentinel expiry, as device grants use.  The real expiry and scopes are enforced by a gate in front of the core router |
-| Reads | The main new code: a check in that gate for `GET` and `HEAD`, before the core serves the bytes.  Today `wildbloomd` serves reads without a token |
+| Group mode | A start flag, `--group-mode` (`WILDBLOOM_GROUP_MODE`).  Refuses `--open-shelter`, the guest tier, service discovery (kind 31402, `--service-profile`) and paid profiles (`--checkout-profile`) at start-up, and needs at least one keeper.  Makes every read need a token; sets the cache headers in 6.6 |
+| Enrolment | A repeatable `--group-keeper <hex>:<ceiling bytes>[:<room>+<room>]` (`WILDBLOOM_GROUP_KEEPERS`, comma-separated), checked at start like `--friend-grant`.  The keeper is 64 lower-case hex, the ceiling is bytes per group, and the optional rooms (64 lower-case hex, joined with `+`) limit which room ids that keeper may open here.  A keeper listed twice, or also an owner, friend, device-grant, recovery, service or group device key, stops the node starting.  There is no enrolment file in S3 |
+| Event route | `POST /groups/v1/events`, beside `/grants/v1`.  At most 120 new or changed grants a minute from enrolled keepers and 600 refused posts a minute from anyone, across all callers; revocations, resets and replays are never counted.  A reason is the response's `X-Reason`.  `GET /groups/v1/self` is not built (optional in S3) |
+| State | A private `0600` SQLite file `group-grants.sqlite3` beside the store, like `device-grants.sqlite3`: grant rows by keeper and grant id, reset floors, the key to group map, and the spent delete token ids (the `used_events` table and `consume_event` of the device grants, in this file).  Grant rows are kept until their latest expiration plus the seven-day delete grace, floors for 90 days, spent ids until the token expires; a key stays in its group for good.  Part of retention state: back it up with the store |
+| Claims | Each group key that ever had an `upload` grant is a core friend grant with core grant id `wildbloom-group:<keeper>:<room>`, the far-future sentinel expiry device grants use, and the ceiling of its newest upload grant.  Its claims are ordinary friend claims in the store.  The real expiry and scopes are enforced by a gate in front of the core router |
+| Reads | The gate's check for `GET` and `HEAD`, before the core serves the bytes.  A blob counts as held by a group while any key of the group claims it.  The gate keeps that view in memory and rebuilds it from the store's claims after a restart |
+| Uploads, preflights, deletes | Completed by the gate through the store, not by the core router: the core checks a token against the machine clock and has no `get` verifier, so a group token (which the gate verifies on the node's clock) cannot go through it.  `PUT /mirror` is allowed by the gate and then made by the core.  A key whose group does not hold a blob gets a claim on it only once the whole body has been read and hashed; the core drops a mirror's fetched bytes when it already has the blob, so such a mirror is taken back and answers `409` `wrong-blob` |
 | Ended keys | Stay in the core's friend set while they hold claims; the gate refuses them.  Their claims are not moved to an owner, unlike device grants |
-| Spent ids | The device grants' `consume_event` table, keyed by token id until its expiry |
-| TURN | `device_auth` accepts a key with an active `turn` group grant (S9) |
+| Spent ids | The device grants' `consume_event` table shape, keyed by token id until its expiry, in the group file |
+| TURN | `device_auth` accepts a key with an active `turn` group grant (S9, not built) |
 | Pairing issuer | Not open to group keys |
-| Device grants | Keep working; a key cannot be in both |
+| Device grants | Keep working; a key cannot be in both.  A device grant refuses a group key, and a group grant refuses a device-grant key |
+
+What S3 chose where the profile is silent or an open question applies (section 15):
+
+- The owner's own keys, friends and device-grant keys need a token to read too
+  (O11, the stated default), and a valid `get` token shows them only the blobs
+  they hold themselves.  Their uploads, mirrors, deletes and lists reach the
+  core as before.  An enrolled keeper is not a user and is refused `403`.
+- A room the enrolment does not list is refused `403 keeper`.
+- A length is judged as for a blob the node has never seen (the per-blob
+  limit, the key's own ceiling, the group ceiling, the node quota) before any
+  byte is read, whenever the key, or for a group key its group, does not hold
+  the hash; only then are the bytes read and hashed.  A stored hash and an
+  unknown one answer alike at every length, on `PUT` and `HEAD /upload`, for
+  group keys and for owner, friend and device-grant keys.
+- A mirror by an owner, friend or device-grant key for a blob it does not hold
+  is not refused up front, because that would show whether the node contacts
+  the source and so whether the blob exists.  The core makes the claim, the key
+  cannot read the blob while the gate vouches for it, and the claim is taken
+  back with the answer a wrong-bytes mirror of a new hash gets.
+- A new upload key is pushed to the core while only the push lock is held, so
+  a revocation or a reset never waits on a core write in flight.  A keeper's
+  grant budget is its own.
+- `/healthz` in group mode says `{"status":"ok"}` and nothing about storage.
+  The desktop app reads storage figures from it, so it must not run its
+  `wildbloomd` in group mode.
+- `--storage-proofs` is refused with `--group-mode`: its proofs answer any key
+  whether a blob is stored.  `/healthz` answers liveness only and `/` is
+  never cached by a shared cache.
+- Per-key request-rate and read-byte limits (O13) are not built; the only
+  limits are the ceilings, the per-blob limit, and a cap on concurrent group
+  upload streams (`--max-concurrent-writes`, counted apart from the core's).
+- Retention from last fetch (O7) is not built: a group's files stay until a
+  holder deletes them or the node owner removes them.
+- A mirror's size is unknown until the core has fetched it, so the group
+  ceiling is checked after it: a mirror that would pass the ceiling is taken
+  back and answers `507`.
+- A delete token is spent by any permitted attempt, including one that finds
+  nothing to delete.
 
 ## 13. Bothy mapping (proposal; needs decented's agreement)
 
@@ -765,7 +811,13 @@ Still open:
   reads of their own files?  Proposed: no, every read needs a token.
 - **O12.** Grants visible to all members on the control channel (chosen), or
   sealed to each device under a new kind?
-- **O13.** Per-key rate and read limits for a home node.
+- **O13.** Per-key rate and read limits for a home node.  S3 builds none.
+  One consequence: the proofs of owner, friend and device-grant keys (reading
+  an upload's bytes before a claim on a blob they do not hold) take the same
+  write permits as group uploads, so one such key can hold every permit for
+  as long as it trickles a body, and group uploads then answer `429`.  Group
+  members can do the same.  The remedy is a separate permit pool for proofs,
+  or per-key limits on concurrent streams and read bytes.
 - **O14.** Register kind 27541 upstream after a relay scan, or keep it a
   project kind?
 

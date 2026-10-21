@@ -55,7 +55,7 @@ fn friend_spec(
 }
 
 /// Read-only walk over every claim in one listing view.
-fn each_claim(
+pub(super) fn each_claim(
     store: &Store,
     key: &str,
     grant_id: Option<&str>,

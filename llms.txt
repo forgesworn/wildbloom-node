@@ -86,6 +86,10 @@ Key CLI flags (each also has a `WILDBLOOM_*` environment variable; see
 - `--open-shelter`: admit unknown signed mirrors as guest data.
 - `--device-grants`: accept owner-signed device grants on `/grants/v1`; needs
   `--allow-pubkey`.
+- `--group-mode`: closed group storage node; refuses `--open-shelter`,
+  `--service-profile` and `--checkout-profile`; needs `--group-keeper`.
+- `--group-keeper <KEEPER:CEILING_BYTES[:ROOM+ROOM]>`: enrol a room authority
+  key and its per-group byte ceiling, repeatable.
 - `--pairing-issuer`: issue one-use Foregather live grants to devices; needs
   `--device-grants` and `--pairing-relay-url`.
 - `--pairing-relay-url <URL>`: Foregather resolver API base for

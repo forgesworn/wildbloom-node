@@ -50,10 +50,20 @@ mod claims;
 mod db;
 mod device_auth;
 pub mod event;
+mod group;
+mod group_db;
+mod group_event;
+mod group_gate;
+#[cfg(test)]
+mod group_tests;
+mod group_token;
 pub mod issuer;
 #[cfg(test)]
 mod tests;
 pub mod turn;
+
+pub use group::{Enrolment, GroupConfig};
+pub use group_gate::group_gate;
 
 /// Environment variables that may carry an issuer secret.  Tor and the
 /// replica signer are started without them.
@@ -174,6 +184,11 @@ struct Inner {
     /// delete the gate completes itself.
     delete_auth: AuthPolicy,
     app: OnceLock<AppState>,
+    /// Group mode state; unset unless the node runs with `--group-mode`.
+    group: OnceLock<group::GroupState>,
+    /// Makes the next group push fail, to test that a refused push records nothing.
+    #[cfg(test)]
+    fail_push: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -188,6 +203,8 @@ pub enum GrantsError {
         "a persisted device or recovery key is now also a configured owner, friend or service key; remove the conflicting configuration"
     )]
     Conflict,
+    #[error("group mode configuration was refused: {0}")]
+    Group(&'static str),
 }
 
 #[derive(Debug)]
@@ -326,6 +343,9 @@ impl Grants {
                 ),
                 delete_auth: AuthPolicy::new(config.server_names.clone()).with_public_writes(true),
                 app: OnceLock::new(),
+                group: OnceLock::new(),
+                #[cfg(test)]
+                fail_push: std::sync::atomic::AtomicBool::new(false),
             }),
         };
         grants.reload()?;
@@ -353,6 +373,11 @@ impl Grants {
     /// CLI friend grants plus every delegated key the core must currently
     /// hold.  Supply this as `BlossomConfig::friend_grants`.
     pub fn core_friend_grants(&self) -> Vec<FriendGrant> {
+        self.core_friend_grants_with(self.group_friend_grants())
+    }
+
+    /// The same set with `group` standing in for the group keys.
+    fn core_friend_grants_with(&self, group: Vec<FriendGrant>) -> Vec<FriendGrant> {
         let snapshot = self.snapshot();
         self.inner
             .cli_friend_grants
@@ -365,6 +390,7 @@ impl Grants {
                 grant_id: core_grant_id(key),
                 issuer: Some(member.issuer.clone()),
             }))
+            .chain(group)
             .collect()
     }
 
@@ -498,6 +524,7 @@ impl Grants {
         if let Ok(db) = self.inner.db.lock() {
             let _ = db::prune(&db, now, OWNER_WRITE_WINDOW);
         }
+        self.prune_group(now);
     }
 
     /// Record an owner's own write of these hashes before it reaches the
@@ -669,6 +696,11 @@ impl Grants {
             {
                 return Err(ApiError::conflict(
                     "a delegated key cannot be an owner, friend or service key",
+                ));
+            }
+            if self.group_claims_key(key) {
+                return Err(ApiError::conflict(
+                    "a delegated key cannot be a group keeper or group device",
                 ));
             }
             if snapshot
