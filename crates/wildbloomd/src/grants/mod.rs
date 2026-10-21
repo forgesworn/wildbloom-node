@@ -53,14 +53,17 @@ pub mod event;
 mod group;
 mod group_db;
 mod group_event;
+mod group_gate;
 #[cfg(test)]
 mod group_tests;
+mod group_token;
 pub mod issuer;
 #[cfg(test)]
 mod tests;
 pub mod turn;
 
 pub use group::{Enrolment, GroupConfig};
+pub use group_gate::group_gate;
 
 /// Environment variables that may carry an issuer secret.  Tor and the
 /// replica signer are started without them.

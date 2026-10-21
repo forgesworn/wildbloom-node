@@ -125,7 +125,6 @@ impl GroupRows {
 
     /// The first of: revocation, covering reset, expiration.  `None` while
     /// the grant is still running.
-    #[allow(dead_code)] // used by the gate
     pub fn ended_at(&self, row: &GroupGrantRow, now: u64) -> Option<u64> {
         let floor = self
             .floors
@@ -137,7 +136,6 @@ impl GroupRows {
     }
 
     /// The one active grant at this node that names `device`.
-    #[allow(dead_code)] // used by the gate
     pub fn active_for<'a>(
         &'a self,
         device: &str,
@@ -149,7 +147,6 @@ impl GroupRows {
     }
 
     /// Whether `device` ended a grant with `scope` less than seven days ago.
-    #[allow(dead_code)] // used by the gate
     pub fn in_grace(
         &self,
         device: &str,
@@ -371,4 +368,37 @@ pub(super) fn prune(connection: &Connection, now: u64) -> rusqlite::Result<()> {
     connection.execute("DELETE FROM group_floors WHERE expires_at < ?1", [int(now)])?;
     connection.execute("DELETE FROM used_events WHERE expires_at < ?1", [int(now)])?;
     Ok(())
+}
+
+impl GroupRows {
+    /// The group a device key belongs to at this node: where its first
+    /// active grant put it, or where a retained grant row names it.
+    pub fn group_of(&self, device: &str) -> Option<GroupId> {
+        self.keys
+            .get(device)
+            .map(|key| (key.keeper.clone(), key.room.clone()))
+            .or_else(|| {
+                self.rows_for(device)
+                    .next()
+                    .map(|row| (row.keeper.clone(), row.room.clone()))
+            })
+    }
+
+    /// Every device key of one group.
+    pub fn devices_of(&self, group: &GroupId) -> Vec<String> {
+        self.keys
+            .iter()
+            .filter(|(_, key)| (&key.keeper, &key.room) == (&group.0, &group.1))
+            .map(|(device, _)| device.clone())
+            .collect()
+    }
+}
+
+/// Record a single-use token id; `false` when it was already spent.
+pub(super) fn spend_token(
+    connection: &Connection,
+    token_id: &str,
+    expires_at: u64,
+) -> rusqlite::Result<bool> {
+    super::db::consume_event(connection, token_id, expires_at)
 }

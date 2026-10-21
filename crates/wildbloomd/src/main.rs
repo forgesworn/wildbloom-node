@@ -513,6 +513,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             device_grants.clone(),
             grants::gate,
         ));
+        if device_grants.group_enabled() {
+            // Outermost: it judges every request before the device gate and
+            // the core see it.
+            routes = routes.layer(axum::middleware::from_fn_with_state(
+                device_grants.clone(),
+                grants::group_gate,
+            ));
+        }
         if cli.device_grants {
             routes = routes.merge(device_grants.router());
         }
@@ -653,6 +661,7 @@ fn group_mode_config(cli: &Cli) -> Result<Option<grants::GroupConfig>, Box<dyn s
             .iter()
             .map(|keeper| keeper.0.clone())
             .collect(),
+        max_concurrent_writes: cli.max_concurrent_writes,
     }))
 }
 

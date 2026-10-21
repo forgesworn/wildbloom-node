@@ -9,7 +9,7 @@ use super::{
     CORE_GRANT_SENTINEL, Grants, GrantsError, cors,
     event::is_canonical_key,
     group_db::{self, Floor, GroupGrantRow, GroupId, GroupKey, GroupRows},
-    group_event::{self, Body, FUTURE_SKEW, GroupEvent, Refusal},
+    group_event::{self, Body, FUTURE_SKEW, GroupEvent, Refusal, Scope},
 };
 use axum::{
     Json, Router,
@@ -21,7 +21,7 @@ use axum::{
 };
 use rusqlite::Connection;
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, RwLock},
     time::Duration,
@@ -48,6 +48,8 @@ pub struct Enrolment {
 #[derive(Debug, Clone)]
 pub struct GroupConfig {
     pub enrolments: Vec<Enrolment>,
+    /// Simultaneous group upload streams.
+    pub max_concurrent_writes: usize,
 }
 
 pub(super) struct GroupState {
@@ -61,6 +63,44 @@ pub(super) struct GroupState {
     pub updates: tokio::sync::Mutex<()>,
     /// Clock seconds of recent posts to the event route.
     pub posts: Mutex<VecDeque<u64>>,
+    /// Blobs each group holds, built from the store's claims on first use
+    /// and kept current by the gate.  An absent entry is rebuilt, never
+    /// guessed.
+    pub holdings: Mutex<HashMap<GroupId, Arc<Mutex<Option<Holdings>>>>>,
+    /// Bytes of group uploads that have been admitted and not yet committed.
+    pub reserved: Mutex<HashMap<GroupId, u64>>,
+    pub writes: Arc<tokio::sync::Semaphore>,
+}
+
+/// The distinct blobs one group holds, with their sizes: a blob counts once
+/// against the group ceiling however many of its keys claim it.
+#[derive(Debug, Default)]
+pub(super) struct Holdings {
+    blobs: HashMap<String, u64>,
+    total: u64,
+}
+
+impl Holdings {
+    pub fn contains(&self, hash: &str) -> bool {
+        self.blobs.contains_key(hash)
+    }
+
+    pub fn total(&self) -> u64 {
+        self.total
+    }
+
+    pub fn insert(&mut self, hash: &str, size: u64) {
+        if let Some(old) = self.blobs.insert(hash.to_owned(), size) {
+            self.total = self.total.saturating_sub(old);
+        }
+        self.total = self.total.saturating_add(size);
+    }
+
+    pub fn remove(&mut self, hash: &str) {
+        if let Some(old) = self.blobs.remove(hash) {
+            self.total = self.total.saturating_sub(old);
+        }
+    }
 }
 
 /// A host name as a grant or token names it: bare, or the host of an
@@ -149,6 +189,11 @@ impl Grants {
             snapshot: RwLock::new(Arc::new(rows)),
             updates: tokio::sync::Mutex::new(()),
             posts: Mutex::new(VecDeque::new()),
+            holdings: Mutex::new(HashMap::new()),
+            reserved: Mutex::new(HashMap::new()),
+            writes: Arc::new(tokio::sync::Semaphore::new(
+                config.max_concurrent_writes.max(1),
+            )),
         };
         self.inner
             .group
@@ -244,7 +289,7 @@ impl Grants {
         self.inner.group.get().is_some()
     }
 
-    fn group_state(&self) -> Result<&GroupState, Refusal> {
+    pub(super) fn group_state(&self) -> Result<&GroupState, Refusal> {
         self.inner.group.get().ok_or_else(Refusal::unavailable)
     }
 
@@ -613,5 +658,200 @@ impl Grants {
                     .map(|row| row.scopes & scope != 0)
             })
             .unwrap_or(false)
+    }
+}
+
+/// An active grant, as the gate needs it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ActiveGrant {
+    pub scopes: u8,
+    pub bytes: Option<u64>,
+}
+
+impl ActiveGrant {
+    pub fn allows(&self, scope: Scope) -> bool {
+        self.scopes & scope.bit() != 0
+    }
+}
+
+/// Who a token's signer is to this node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Who {
+    /// A device of a group, with its grant while one is active.
+    Member {
+        group: GroupId,
+        active: Option<ActiveGrant>,
+    },
+    /// An owner, CLI friend, service or device-grant key: the core's own
+    /// rules apply to it, and it reads only what it holds itself.
+    Authority,
+    /// Anyone else.
+    Stranger,
+}
+
+/// Admitted upload bytes, released when dropped.
+pub(super) struct Reservation {
+    grants: Grants,
+    group: GroupId,
+    bytes: u64,
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        if let Some(state) = self.grants.inner.group.get()
+            && let Ok(mut reserved) = state.reserved.lock()
+            && let Some(held) = reserved.get_mut(&self.group)
+        {
+            *held = held.saturating_sub(self.bytes);
+            if *held == 0 {
+                reserved.remove(&self.group);
+            }
+        }
+    }
+}
+
+impl Grants {
+    fn enrolled_keeper(&self) -> impl Fn(&str) -> bool + '_ {
+        move |keeper| {
+            self.inner
+                .group
+                .get()
+                .is_some_and(|state| state.enrolments.contains_key(keeper))
+        }
+    }
+
+    /// The ceiling the node owner set for the keeper's groups.
+    pub(super) fn group_ceiling(&self, keeper: &str) -> Option<u64> {
+        self.inner
+            .group
+            .get()?
+            .enrolments
+            .get(keeper)
+            .map(|enrolment| enrolment.ceiling)
+    }
+
+    fn is_other_authority(&self, key: &str) -> bool {
+        self.inner.owners.contains(key)
+            || self.inner.reserved.contains(key)
+            || self
+                .inner
+                .cli_friend_grants
+                .iter()
+                .any(|grant| grant.pubkey == key)
+            || self.snapshot().knows(key)
+    }
+
+    /// Who `signer` is, and which grant is active for it, right now.
+    pub(super) fn group_who(&self, signer: &str) -> Who {
+        let now = self.now();
+        let enrolled = self.enrolled_keeper();
+        if let Some(rows) = self.group_snapshot()
+            && let Some(group) = rows.group_of(signer)
+        {
+            let active = rows
+                .active_for(signer, &enrolled, now)
+                .map(|row| ActiveGrant {
+                    scopes: row.scopes,
+                    bytes: row.bytes,
+                });
+            return Who::Member { group, active };
+        }
+        if self.is_other_authority(signer) {
+            Who::Authority
+        } else {
+            Who::Stranger
+        }
+    }
+
+    /// Whether `signer` ended a grant with `scope` less than seven days ago.
+    pub(super) fn group_in_grace(&self, signer: &str, scope: Scope) -> bool {
+        self.group_snapshot().is_some_and(|rows| {
+            rows.in_grace(signer, scope.bit(), &self.enrolled_keeper(), self.now())
+        })
+    }
+
+    /// Every device key of `group`.
+    pub(super) fn group_devices(&self, group: &GroupId) -> Vec<String> {
+        self.group_snapshot()
+            .map(|rows| rows.devices_of(group))
+            .unwrap_or_default()
+    }
+
+    /// Run `f` on what `group` holds.  Blocking: it may walk the store's
+    /// claims for every key of the group the first time it is used.
+    pub(super) fn with_holdings<R>(
+        &self,
+        group: &GroupId,
+        f: impl FnOnce(&mut Holdings) -> R,
+    ) -> Result<R, Refusal> {
+        let state = self.group_state()?;
+        let store = self
+            .inner
+            .app
+            .get()
+            .ok_or_else(Refusal::unavailable)?
+            .store()
+            .clone();
+        let cell = state
+            .holdings
+            .lock()
+            .map_err(|_| Refusal::unavailable())?
+            .entry(group.clone())
+            .or_default()
+            .clone();
+        let mut cell = cell.lock().map_err(|_| Refusal::unavailable())?;
+        if cell.is_none() {
+            let grant_id = core_group_grant_id(&group.0, &group.1);
+            let mut holdings = Holdings::default();
+            for device in self.group_devices(group) {
+                super::claims::each_claim(&store, &device, Some(&grant_id), |claim| {
+                    holdings.insert(&claim.sha256, claim.size);
+                })
+                .map_err(|_| Refusal::unavailable())?;
+            }
+            *cell = Some(holdings);
+        }
+        Ok(f(cell.as_mut().expect("holdings were just built")))
+    }
+
+    /// Admit `need` more bytes into `group` or say the group is full.  The
+    /// bytes count against the ceiling until the reservation is dropped, so
+    /// concurrent uploads cannot jointly pass it.  Blocking.
+    pub(super) fn reserve_group_bytes(
+        &self,
+        group: &GroupId,
+        ceiling: u64,
+        need: u64,
+    ) -> Result<Option<Reservation>, Refusal> {
+        let state = self.group_state()?;
+        let mut reserved = state.reserved.lock().map_err(|_| Refusal::unavailable())?;
+        let total = self.with_holdings(group, |holdings| holdings.total())?;
+        let current = reserved.get(group).copied().unwrap_or(0);
+        if need > 0 && total.saturating_add(current).saturating_add(need) > ceiling {
+            return Ok(None);
+        }
+        if need > 0 {
+            *reserved.entry(group.clone()).or_default() += need;
+        }
+        Ok(Some(Reservation {
+            grants: self.clone(),
+            group: group.clone(),
+            bytes: need,
+        }))
+    }
+
+    /// Spend a delete token id.  `false` when it was spent already.
+    pub(super) fn spend_group_token(
+        &self,
+        token_id: &str,
+        expires_at: u64,
+    ) -> Result<bool, Refusal> {
+        let state = self.group_state()?;
+        let db = state.db.lock().map_err(|_| Refusal::unavailable())?;
+        group_db::spend_token(&db, token_id, expires_at).map_err(|_| Refusal::unavailable())
+    }
+
+    pub(super) fn group_writes(&self) -> Option<Arc<tokio::sync::Semaphore>> {
+        self.inner.group.get().map(|state| state.writes.clone())
     }
 }
