@@ -1,0 +1,14 @@
+{
+  "name": "wildbloom-group-grants-vectors",
+  "private": true,
+  "type": "module",
+  "description": "Generates and checks vectors/group-grants-v1.json. Not part of any build.",
+  "scripts": {
+    "write": "node vectors.mjs --write",
+    "check": "node vectors.mjs --check"
+  },
+  "devDependencies": {
+    "@noble/curves": "2.0.1",
+    "nostr-tools": "2.25.2"
+  }
+}

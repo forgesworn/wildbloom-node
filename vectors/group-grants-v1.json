@@ -1,0 +1,3265 @@
+{
+  "profile": "group-grants/1",
+  "syntheticOnly": true,
+  "generatedBy": "scripts/group-grants/vectors.mjs: @noble/curves 2.0.1 BIP-340 signatures with 32 zero bytes of auxiliary randomness, node:crypto SHA-256 and HKDF, every outcome checked against a reference model of docs/GROUP-GRANTS.md, every id and signature re-checked with nostr-tools 2.25.2 verifyEvent",
+  "spec": "docs/GROUP-GRANTS.md",
+  "kind": 27541,
+  "limits": {
+    "eventBytes": 16384,
+    "eventTags": 16,
+    "futureSkew": 30,
+    "grantLifetime": 7776000,
+    "stateRetention": 7776000,
+    "getLifetime": 300,
+    "uploadLifetime": 300,
+    "listLifetime": 300,
+    "deleteLifetime": 604801,
+    "selfDeleteGrace": 604800,
+    "authValuesPerTag": 32,
+    "authContentBytes": 1024
+  },
+  "scopes": ["upload", "get", "delete", "purge", "turn", "relay-read", "relay-write"],
+  "time": {
+    "t0": 1800000000,
+    "note": "Each case carries its own node clock in `now`."
+  },
+  "keys": {
+    "nodeOwner": {
+      "secret": "9cae4825debbe953cbadd8e0c9913e623a0fe1cfdbe8364c4cb4a6a26e3b45cd",
+      "pubkey": "eefddc2de33925ff8a6d09f13787841d353ce5872941d4cb922ee23e0a84c049"
+    },
+    "authorityA": {
+      "secret": "08a9c0ffd6bd40fec3f16be58165eed25d8aba1efbdd501b7b9f0dc02e5efce6",
+      "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8"
+    },
+    "authorityB": {
+      "secret": "cb25e920dd10c57fb0d14ceff938f3649c2ca567664254cf24ea2c0d0b387a05",
+      "pubkey": "b848cd989d099f2b52fb1ebb3ad689fbd081b53b511f272b3a500ddce8fab9d5"
+    },
+    "authorityC": {
+      "secret": "f6b49e98a73db1794a05fbec2d353eab18baa5b1f45e787a5c00a8cbd514aad6",
+      "pubkey": "776f3db1aa944062d26531419ac2fb3b03298b5e0bae143366afe93cfdd7c0c4"
+    },
+    "alicePhone": {
+      "secret": "25524056af46f5d468ad48cff239af0ae16b96e5f2207719d1fc1c53a82fffb5",
+      "pubkey": "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"
+    },
+    "bobLaptop": {
+      "secret": "2858e2751762172a7d251aad0910756ff4b28de2fa84e8d8b950439a33d12667",
+      "pubkey": "64e8b9a29d0be4417d7197d509c8a0ef637034dcd421208670c62fc2c0887002"
+    },
+    "coordinatorA": {
+      "secret": "9e5608732b4a199f92954b1e7dae3e29fa8d9973c174e157e5cc1ff0bcf00940",
+      "pubkey": "491ebfdd8cbcb0039d0b5149d517fee5fd25420232ab4ecc2d7fd4f091d868d5"
+    },
+    "carolPhone": {
+      "secret": "8bf0e3b1a55380c5063ca1f09ca4bbabb42cfa53d9153357dffccd236ecbc629",
+      "pubkey": "96f1e22c3caa1e6c8d499f819cd334d987639a2f680c09ee6f00e7b6dedd2219"
+    },
+    "stranger": {
+      "secret": "094a822623bda6b954b58408027da5a1c7e99289b50b8cefc8679fb9f6e984a8",
+      "pubkey": "659de2221116f504306989a926ba1f598c0ef0808f52b478a84145121b224d01"
+    }
+  },
+  "rooms": {
+    "a": {
+      "secretHex": "3235bdb7cf4e08d8eb9f1441bd2158825c0e84150ac0fc123a106455130eeecf",
+      "roomId": "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b",
+      "from": "kithmoot vectors/kithmoot-vectors.json roomDerivation typical-secret-1"
+    },
+    "b": {
+      "secretHex": "d65ea38d656270d9eebcb949759dec4599cade320bd53cf2bce301e2c23fd72d",
+      "roomId": "fcdc853ddc1be7f7d978367e1a5156b55f11e4c22a49db949f5bb939a303762a",
+      "from": "kithmoot vectors/kithmoot-vectors.json roomDerivation typical-secret-2"
+    }
+  },
+  "node": {
+    "servers": ["grove.example.net"],
+    "otherServer": "heath.example.net",
+    "owners": ["eefddc2de33925ff8a6d09f13787841d353ce5872941d4cb922ee23e0a84c049"],
+    "enrolments": [
+      {
+        "keeper": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "ceiling": 10737418240
+      },
+      {
+        "keeper": "b848cd989d099f2b52fb1ebb3ad689fbd081b53b511f272b3a500ddce8fab9d5",
+        "ceiling": 1073741824
+      }
+    ]
+  },
+  "blobs": {
+    "blob1": {
+      "text": "group-grants/1 synthetic blob1\n",
+      "sha256": "9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd"
+    },
+    "blob2": {
+      "text": "group-grants/1 synthetic blob2\n",
+      "sha256": "473b70953f14d3ca9cf138e90a37bd7adc3862061cd980113217f4d769ed7b1c"
+    },
+    "blob3": {
+      "text": "group-grants/1 synthetic blob3\n",
+      "sha256": "633586d300e8d6c5ed25f444213fd9c7edea735bd9d19be249688e0d50d1d1d8"
+    },
+    "blob4": {
+      "text": "group-grants/1 synthetic blob4\n",
+      "sha256": "9048cece9c03f4d0feab75a639d875f5761cc8e60274dad9c02c3d3a024c11aa"
+    }
+  },
+  "grantEvents": [
+    {
+      "name": "good-grant",
+      "note": "A keeper-signed grant for a device with the three storage scopes and a byte ceiling.",
+      "now": 1800000000,
+      "event": {
+        "id": "84193e037af4c15e383404a0cd0b9aedf601783fa52ee4ca8e332693a811fe49",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "grove.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["bytes", "1073741824"],
+          ["status", "active"],
+          ["expiration", "1802592000"]
+        ],
+        "content": "",
+        "sig": "420ec29db8fb18e3f69c45c4788edd2d1c6fc9eed4bee70323824ad428f2c695e1b4cd26fd746718725c5367a3af738fc1e1a66476b741aeb0fb1ed44f55844f"
+      },
+      "expect": {
+        "status": 201,
+        "reason": "accepted",
+        "state": "active"
+      }
+    },
+    {
+      "name": "good-grant-get-only",
+      "note": "Read only: no `bytes` tag, because there is no `upload` scope.",
+      "now": 1800000000,
+      "event": {
+        "id": "2479170691e635e7407de87953e920f341ecfcb0b3181eb95b3100d913cb86eb",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "847fc938da23190e3685ad6b78fc13ce"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "64e8b9a29d0be4417d7197d509c8a0ef637034dcd421208670c62fc2c0887002"],
+          ["server", "grove.example.net"],
+          ["scope", "get"],
+          ["status", "active"],
+          ["expiration", "1802592000"]
+        ],
+        "content": "",
+        "sig": "4614c2beb127e0184fc3626b9d2f296920bb5dd54f5620f3801c42d9bb15dfbc82f876fa87654e2c12f6db3f70f79e1f13e28193ee8aea85fdc41e68d6a06509"
+      },
+      "expect": {
+        "status": 201,
+        "reason": "accepted",
+        "state": "active"
+      }
+    },
+    {
+      "name": "good-grant-every-scope",
+      "note": "Every scope at once. A node accepts scopes it does not serve (turn, relays) and ignores them.",
+      "now": 1800000000,
+      "event": {
+        "id": "dc417e57d3c323a77f0e19f195724ed0a720cfabc60207e681d999fc424207fe",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "1c58229b505b1f225caa7a9623abb047"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "grove.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["scope", "purge"],
+          ["scope", "turn"],
+          ["scope", "relay-read"],
+          ["scope", "relay-write"],
+          ["bytes", "1073741824"],
+          ["status", "active"],
+          ["expiration", "1802592000"]
+        ],
+        "content": "",
+        "sig": "16b84d8b913c3953481a45c84a618eadd82315b806108cdeba791e57ced610de309e97a86fedf56db25c00db02f048c5c4670e360da0dbb5c5e2da6ed5d185d0"
+      },
+      "expect": {
+        "status": 201,
+        "reason": "accepted",
+        "state": "active"
+      }
+    },
+    {
+      "name": "good-revocation-first",
+      "note": "A revocation for a grant id this node has never seen is recorded, so the grant cannot land later.",
+      "now": 1800000000,
+      "event": {
+        "id": "c9c0ccde81e8bd8d9ea3a16701de0565113737b75219f2bb288b72f91ef243de",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "grove.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["bytes", "1073741824"],
+          ["status", "revoked"],
+          ["expiration", "1802592000"]
+        ],
+        "content": "",
+        "sig": "847e81f6f03ca9bcebe172769d29209090dbdad0bc5b0353d18e77086fff8ae54f7d58fac891aba669f16e19b039c14d9118ee07d2791ffda15148e2224d83dc"
+      },
+      "expect": {
+        "status": 201,
+        "reason": "accepted",
+        "state": "revoked"
+      }
+    },
+    {
+      "name": "good-reset",
+      "note": "A reset for one room at one node.",
+      "now": 1800000000,
+      "event": {
+        "id": "161647994a9d99de8f5c92eeb5fc95096ed22e776cde09f55f5aa588fc149033",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "reset"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["server", "grove.example.net"],
+          ["expiration", "1807776000"]
+        ],
+        "content": "",
+        "sig": "1b3cda6d52c5136d3d6a923211c316f7aa0f571ca7b3beb6b024e0c964331af79fdc3bb431db0111d72725adb6f9dc815796063de5dfde506b1a1d52cd72e330"
+      },
+      "expect": {
+        "status": 201,
+        "reason": "accepted",
+        "state": "reset"
+      }
+    },
+    {
+      "name": "good-created-at-skew-limit",
+      "note": "`created_at` exactly 30 seconds ahead of the node clock is accepted.",
+      "now": 1800000000,
+      "event": {
+        "id": "abdb2c4772d1f02fa9b482eabe3be683f450c562dd1202bdd4c1f8593d9fe110",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000030,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "grove.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["bytes", "1073741824"],
+          ["status", "active"],
+          ["expiration", "1802592030"]
+        ],
+        "content": "",
+        "sig": "bf34a04f877901efda885335e28170ffd37a83415067cd893120afb0daa88cc5381754d3b8e1c8ff898fab6253611a5d825d7adf95fdfcb9e98ace69c85a1cfb"
+      },
+      "expect": {
+        "status": 201,
+        "reason": "accepted",
+        "state": "active"
+      }
+    },
+    {
+      "name": "good-lifetime-limit",
+      "note": "`expiration` exactly 90 days after `created_at`.",
+      "now": 1800000000,
+      "event": {
+        "id": "28244551343abb4add000efaf1f9b6461282e2c038ddf83db028742886ea3abe",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "grove.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["bytes", "1073741824"],
+          ["status", "active"],
+          ["expiration", "1807776000"]
+        ],
+        "content": "",
+        "sig": "21974031d1b63120d408b55e3e913185732b4a5018a9fc22442fc2a9dffb919a2ebe6436cdb3a60db127d49cc5738c2ab9ecf5cf2539b756ffd2f4f75c9caaca"
+      },
+      "expect": {
+        "status": 201,
+        "reason": "accepted",
+        "state": "active"
+      }
+    },
+    {
+      "name": "expired",
+      "note": "`expiration` equal to the node clock is expired.",
+      "now": 1802592000,
+      "event": {
+        "id": "84193e037af4c15e383404a0cd0b9aedf601783fa52ee4ca8e332693a811fe49",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "grove.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["bytes", "1073741824"],
+          ["status", "active"],
+          ["expiration", "1802592000"]
+        ],
+        "content": "",
+        "sig": "420ec29db8fb18e3f69c45c4788edd2d1c6fc9eed4bee70323824ad428f2c695e1b4cd26fd746718725c5367a3af738fc1e1a66476b741aeb0fb1ed44f55844f"
+      },
+      "expect": {
+        "status": 403,
+        "reason": "expired"
+      }
+    },
+    {
+      "name": "created-at-beyond-skew",
+      "note": "`created_at` 31 seconds ahead of the node clock.",
+      "now": 1800000000,
+      "event": {
+        "id": "ac28a074ed0d4cd10d517cf9226bb2f94f158a394fb585bf9718db4cbd0b8a6b",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000031,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "grove.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["bytes", "1073741824"],
+          ["status", "active"],
+          ["expiration", "1802592031"]
+        ],
+        "content": "",
+        "sig": "50fd3e7fc5811aa16541cfdfa7952deaa0e9af9203cdae539746b0244a3cfca39f65d2d5ebe3447b71874bd7a768a91fc5fb10519127705335ac3331f4deefb6"
+      },
+      "expect": {
+        "status": 403,
+        "reason": "future"
+      }
+    },
+    {
+      "name": "wrong-node",
+      "note": "Signed for another node.",
+      "now": 1800000000,
+      "event": {
+        "id": "8ab322aa1a7c4d60c3448df13bd257dde381a70f3384c5dbfcfcb8fc39933993",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "heath.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["bytes", "1073741824"],
+          ["status", "active"],
+          ["expiration", "1802592000"]
+        ],
+        "content": "",
+        "sig": "e07af1d200e248e10f36b8d0d455e4e2fc413d9ab4277fb527836ef9f316f44c96aa796b95e90c8ece057bf5f0270c7714ef764a1953a4d1f0ed54217bd11bae"
+      },
+      "expect": {
+        "status": 403,
+        "reason": "server"
+      }
+    },
+    {
+      "name": "unenrolled-keeper",
+      "note": "Signed by a key the node owner has not enrolled.",
+      "now": 1800000000,
+      "event": {
+        "id": "614d80e05edb035483d1de803577ddbd28636ab0d2d6eb16accde689f02c9240",
+        "pubkey": "776f3db1aa944062d26531419ac2fb3b03298b5e0bae143366afe93cfdd7c0c4",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "grove.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["bytes", "1073741824"],
+          ["status", "active"],
+          ["expiration", "1802592000"]
+        ],
+        "content": "",
+        "sig": "0e04d64f539d52441adf6141637c9eaa69dee36a092dca585aeabae061ef6511d563a022c5ab092c737513625244817fb60e4213b1ed7e30025f5841d11fad78"
+      },
+      "expect": {
+        "status": 403,
+        "reason": "keeper"
+      }
+    },
+    {
+      "name": "bad-signature",
+      "note": "The last hex digit of `sig` changed.",
+      "now": 1800000000,
+      "event": {
+        "id": "84193e037af4c15e383404a0cd0b9aedf601783fa52ee4ca8e332693a811fe49",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "grove.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["bytes", "1073741824"],
+          ["status", "active"],
+          ["expiration", "1802592000"]
+        ],
+        "content": "",
+        "sig": "420ec29db8fb18e3f69c45c4788edd2d1c6fc9eed4bee70323824ad428f2c695e1b4cd26fd746718725c5367a3af738fc1e1a66476b741aeb0fb1ed44f558440"
+      },
+      "expect": {
+        "status": 401,
+        "reason": "signature"
+      }
+    },
+    {
+      "name": "id-mismatch",
+      "note": "A tag changed after signing, so `id` no longer matches.",
+      "now": 1800000000,
+      "event": {
+        "id": "84193e037af4c15e383404a0cd0b9aedf601783fa52ee4ca8e332693a811fe49",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "grove.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["bytes", "2147483648"],
+          ["status", "active"],
+          ["expiration", "1802592000"]
+        ],
+        "content": "",
+        "sig": "420ec29db8fb18e3f69c45c4788edd2d1c6fc9eed4bee70323824ad428f2c695e1b4cd26fd746718725c5367a3af738fc1e1a66476b741aeb0fb1ed44f55844f"
+      },
+      "expect": {
+        "status": 401,
+        "reason": "signature"
+      }
+    },
+    {
+      "name": "lifetime-too-long",
+      "note": "`expiration` one second more than 90 days after `created_at`.",
+      "now": 1800000000,
+      "event": {
+        "id": "6dc5cd865ad4b26ba4922f24a418dcada4c65e9c45a54379bb0a07ab402533fe",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "grove.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["bytes", "1073741824"],
+          ["status", "active"],
+          ["expiration", "1807776001"]
+        ],
+        "content": "",
+        "sig": "8a78f72fa458a4bf9f178f4ccf073765f0b80eb86b6ec8254e174ac83f300b7fddfd9c042a462d043c03b8144162708d088ffa4fd16ff0ef668574936198cf05"
+      },
+      "expect": {
+        "status": 400,
+        "reason": "lifetime"
+      }
+    },
+    {
+      "name": "expiration-before-created-at",
+      "note": "`expiration` not after `created_at`.",
+      "now": 1799999990,
+      "event": {
+        "id": "9842227f01280901eb8578cda3fec63f5c7a9b170e420e5e352dadcb16ce77f3",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "grove.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["bytes", "1073741824"],
+          ["status", "active"],
+          ["expiration", "1800000000"]
+        ],
+        "content": "",
+        "sig": "61960a2f767b1a7ab4da8e9fdb54ee0125cd8ade1f9c88d71f5e098e28806f781e5b73aac9288dd80abf0a4adc27b60f319a40fc5d8ba053f98c89eda5767ff1"
+      },
+      "expect": {
+        "status": 400,
+        "reason": "lifetime"
+      }
+    },
+    {
+      "name": "upload-without-bytes",
+      "note": "An `upload` scope needs a `bytes` ceiling.",
+      "now": 1800000000,
+      "event": {
+        "id": "ca14ed5d5cd967bd738e68fe15620d5175c6ccb6e65f5ca10a74fbdf2a25e7af",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "grove.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["status", "active"],
+          ["expiration", "1802592000"]
+        ],
+        "content": "",
+        "sig": "497d15cf60248e3263d5ee07e3244aceeaa7efc00b9e9b1b29e3372f187e97673a2cb18966fdd4f84d35f58213cb521dc03803624454a2e2d29103339f20583f"
+      },
+      "expect": {
+        "status": 400,
+        "reason": "malformed"
+      }
+    },
+    {
+      "name": "bytes-without-upload",
+      "note": "A `bytes` tag without an `upload` scope.",
+      "now": 1800000000,
+      "event": {
+        "id": "18880ad9aa2d295639d62298e048abdd8c52de67f274a10c589762857045786d",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "847fc938da23190e3685ad6b78fc13ce"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "64e8b9a29d0be4417d7197d509c8a0ef637034dcd421208670c62fc2c0887002"],
+          ["server", "grove.example.net"],
+          ["scope", "get"],
+          ["bytes", "1073741824"],
+          ["status", "active"],
+          ["expiration", "1802592000"]
+        ],
+        "content": "",
+        "sig": "185f9d22a2790f182ff4902d246db175e71a84cff409cc82cefed34a7799251101c058252cb13117dc06b8211673b1dc2910283f248170d39846538d450bdccb"
+      },
+      "expect": {
+        "status": 400,
+        "reason": "malformed"
+      }
+    },
+    {
+      "name": "bytes-zero",
+      "note": "A zero ceiling.",
+      "now": 1800000000,
+      "event": {
+        "id": "5ca08d5edbcd204b9d2260dc5c17f01834c2e859dee2e7fc868972a7e9390983",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "grove.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["bytes", "0"],
+          ["status", "active"],
+          ["expiration", "1802592000"]
+        ],
+        "content": "",
+        "sig": "9fa43127d91417e47ebfebaa127082c3fded564766856a4023bba98511f0eaf8b5c33217e9aa8ac053c6f59f2dc9ec0de2e16ee1b3052423786025c3d6f01553"
+      },
+      "expect": {
+        "status": 400,
+        "reason": "malformed"
+      }
+    },
+    {
+      "name": "bytes-leading-zero",
+      "note": "Decimals are canonical: no leading zero.",
+      "now": 1800000000,
+      "event": {
+        "id": "c064503896216e5914a4ae17462e4d74680763a3c18a8256c239e30ca195671c",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "grove.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["bytes", "01073741824"],
+          ["status", "active"],
+          ["expiration", "1802592000"]
+        ],
+        "content": "",
+        "sig": "45321448215ae3407308fb9c27eff3abf2ca3b1a34c2f7018fd24271589563fcfedcdcc4b4f1d5ae075fbbaadfea0dcf43500eb6f1b8e0397ed7fb003577b07e"
+      },
+      "expect": {
+        "status": 400,
+        "reason": "malformed"
+      }
+    },
+    {
+      "name": "unknown-scope",
+      "note": "A scope outside the table.",
+      "now": 1800000000,
+      "event": {
+        "id": "a9bc5e5f1b1da01d7e6145c866119d3877cf31b1209b7a65af6e4bd44e26ea1b",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "grove.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["bytes", "1073741824"],
+          ["status", "active"],
+          ["expiration", "1802592000"],
+          ["scope", "list"]
+        ],
+        "content": "",
+        "sig": "47c560a168d035c309024e8fb433cab42cb47e08790f3a22027ce87b9348fd5b58829436cbdff434d936dba709adf2d1c2ed93ee22d9f4b005a3b4708833d323"
+      },
+      "expect": {
+        "status": 400,
+        "reason": "malformed"
+      }
+    },
+    {
+      "name": "duplicate-scope",
+      "note": "The same scope twice.",
+      "now": 1800000000,
+      "event": {
+        "id": "b46c6e38cf697c92319eea377cc7d70bc7be27ee7eb41ac40cdada6cabf0b79f",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "grove.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["bytes", "1073741824"],
+          ["status", "active"],
+          ["expiration", "1802592000"],
+          ["scope", "get"]
+        ],
+        "content": "",
+        "sig": "2176e7cedfaa939f9663a78623adee06bbf800d1359bceba2de67ee278f22bc1256d3c919a811a2e1b6d2f8706741c4c74d69b76088a03e3b0d50bf7596c75f4"
+      },
+      "expect": {
+        "status": 400,
+        "reason": "malformed"
+      }
+    },
+    {
+      "name": "duplicate-device",
+      "note": "Two `device` tags.",
+      "now": 1800000000,
+      "event": {
+        "id": "0b865caa67c21c31479f1deb27d1360b123e5e6b77be727a05e4ed5d87599402",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "grove.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["bytes", "1073741824"],
+          ["status", "active"],
+          ["expiration", "1802592000"],
+          ["device", "64e8b9a29d0be4417d7197d509c8a0ef637034dcd421208670c62fc2c0887002"]
+        ],
+        "content": "",
+        "sig": "6079b66996ee79c69eb3b6ef843b101e073cdaa3cea28de428037a5b6e949db06bb8ab3ff96c5972a29f87862506a9f9bc55c674b3dc9c62854cadecdd2bc71c"
+      },
+      "expect": {
+        "status": 400,
+        "reason": "malformed"
+      }
+    },
+    {
+      "name": "persona-tag",
+      "note": "A Bothy-style `p` persona tag. Group grants never name the participant.",
+      "now": 1800000000,
+      "event": {
+        "id": "7d89b6412431960b4f220c7a6b032abaed21d9c0fc871d3a23ab316d40099b9f",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "grove.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["bytes", "1073741824"],
+          ["status", "active"],
+          ["expiration", "1802592000"],
+          ["p", "659de2221116f504306989a926ba1f598c0ef0808f52b478a84145121b224d01"]
+        ],
+        "content": "",
+        "sig": "9ad17c6dfbcd00e03c68e0f8c7c59115b3732f0ece294eb860966d578f83d491b365a623f97142355d78b1f9659b161c2bed3e9ea83b976f1afcae13730a5cfb"
+      },
+      "expect": {
+        "status": 400,
+        "reason": "malformed"
+      }
+    },
+    {
+      "name": "recovery-tag",
+      "note": "A device-grant-style `recovery` tag. Group grants have no recovery identity.",
+      "now": 1800000000,
+      "event": {
+        "id": "c65dfe45064632160b726dba14ea9a0864068fe3fc9a23837375082bd63ca5ca",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "grove.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["bytes", "1073741824"],
+          ["status", "active"],
+          ["expiration", "1802592000"],
+          ["recovery", "659de2221116f504306989a926ba1f598c0ef0808f52b478a84145121b224d01"]
+        ],
+        "content": "",
+        "sig": "81b6ec41b5b22121bc7d78c3bc233111c7b4f026eea006962b6e6342b50b0cb5cf55453e97135e16a39a7cfc9d5826e5372375fa53b12a33ec9912e4d3a067d4"
+      },
+      "expect": {
+        "status": 400,
+        "reason": "malformed"
+      }
+    },
+    {
+      "name": "tag-with-three-values",
+      "note": "Every tag has exactly one value.",
+      "now": 1800000000,
+      "event": {
+        "id": "216c5e93e8e24ed1d23ed67ca2acfb9cdc672aad984b335c84c7e25573a72682",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "grove.example.net", "wss"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["bytes", "1073741824"],
+          ["status", "active"],
+          ["expiration", "1802592000"]
+        ],
+        "content": "",
+        "sig": "3cfdb2cca4cfe2edeede54f73241b4b4a48c0391002e6785e5d86a0e3353a383f3130f0b2eb022a154e97924be49b01886afba7617512e20488937cfb34ee3a5"
+      },
+      "expect": {
+        "status": 400,
+        "reason": "malformed"
+      }
+    },
+    {
+      "name": "content-not-empty",
+      "note": "Content must be empty.",
+      "now": 1800000000,
+      "event": {
+        "id": "f680ab24afd46abb3513f65db8b468589430ed8cac0fbba712e94efec47d227c",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "grove.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["bytes", "1073741824"],
+          ["status", "active"],
+          ["expiration", "1802592000"]
+        ],
+        "content": "grant",
+        "sig": "2a4c8fe958ef79a378df14d7fee916f07d8c7dcc5bf6c366031dd47e796d3f98cdca919e27598247a19447c88a9dbe81f25241a663553d5db3665d8f88f867cc"
+      },
+      "expect": {
+        "status": 400,
+        "reason": "malformed"
+      }
+    },
+    {
+      "name": "uppercase-device",
+      "note": "Keys are lower-case hex.",
+      "now": 1800000000,
+      "event": {
+        "id": "de7b58f2fa82a30ba1145b0c2140d52fac45ac4b09391548e905a774a7c703c8",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9A5A162931BA0E9935885AF724AFC213DE2031302644B67208924419CC910350"],
+          ["server", "grove.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["bytes", "1073741824"],
+          ["status", "active"],
+          ["expiration", "1802592000"]
+        ],
+        "content": "",
+        "sig": "44255733ce02205bf01b6705342e9945b057bbb3c4c537d0ff80c93b868fbecfa43780decf90c3a346319cb5ffdd5d71b46fcddc028bbd2ed0ce5897a411f5e9"
+      },
+      "expect": {
+        "status": 400,
+        "reason": "malformed"
+      }
+    },
+    {
+      "name": "short-room",
+      "note": "`d` must be 64 hex characters.",
+      "now": 1800000000,
+      "event": {
+        "id": "ff09c9a134a8be3a5ca477489f4b2cd0464f51aa482ce6604e4a79353f407093",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e6945"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "grove.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["bytes", "1073741824"],
+          ["status", "active"],
+          ["expiration", "1802592000"]
+        ],
+        "content": "",
+        "sig": "ee853b8090493077e5687dd4d29f1f2ed25677c7b275665103b48114f7f869fadee253257478005a0c082e932beee26ac58e2720d0b102732bb832606ed5a905"
+      },
+      "expect": {
+        "status": 400,
+        "reason": "malformed"
+      }
+    },
+    {
+      "name": "short-grant-id",
+      "note": "`grant` must be 32 hex characters.",
+      "now": 1800000000,
+      "event": {
+        "id": "243b7097b734c5b3fc0096cc880be48f9c49fadc405ae08917f828d63453ddf3",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "grove.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["bytes", "1073741824"],
+          ["status", "active"],
+          ["expiration", "1802592000"]
+        ],
+        "content": "",
+        "sig": "a7afec5d2f675e2940b22508d8eff0a6fca2c5a77a746bc6dfca3d35f1be87e420ec3d5f155f2ff20df8509fede7a65599155925735c7deb649583a3e7c2fd41"
+      },
+      "expect": {
+        "status": 400,
+        "reason": "malformed"
+      }
+    },
+    {
+      "name": "device-is-signer",
+      "note": "A keeper cannot grant its own key.",
+      "now": 1800000000,
+      "event": {
+        "id": "158ea52ede87aeaf58bd8fe8031860b5d0e5ea283f0317486c56bcadd53ce536",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "08ddc59528699b6e91dea7bf542a6716"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8"],
+          ["server", "grove.example.net"],
+          ["scope", "get"],
+          ["status", "active"],
+          ["expiration", "1802592000"]
+        ],
+        "content": "",
+        "sig": "06a783dbb39869c98ec1532eae981ca9c227fe2fad9d090290148bc52a6022759b1fc79b373eab89727047f22a0091d01fe1905ed0a8a1426dc6b1333c9e78a7"
+      },
+      "expect": {
+        "status": 400,
+        "reason": "malformed"
+      }
+    },
+    {
+      "name": "wrong-kind",
+      "note": "The same tags under the device grant kind 27540.",
+      "now": 1800000000,
+      "event": {
+        "id": "623086cf91a95dd7af2e7cc6365b8caa5c0338850648d69c4a9147efbe26b2fe",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27540,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "grove.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["bytes", "1073741824"],
+          ["status", "active"],
+          ["expiration", "1802592000"]
+        ],
+        "content": "",
+        "sig": "34079f658ab707bf2801b560a40b18a274a27a4e63cbe0668a94414f754d5030b699341046682ebf1ad16c776b53ed31edf32ea6175bd7970d50da6d20476c23"
+      },
+      "expect": {
+        "status": 400,
+        "reason": "malformed"
+      }
+    },
+    {
+      "name": "unknown-status",
+      "note": "Status is `active` or `revoked`.",
+      "now": 1800000000,
+      "event": {
+        "id": "e701294ee566514f6b08d8dc22c68ed528c9cfbb360bb55f234bde589e22edbc",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "grove.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["bytes", "1073741824"],
+          ["status", "paused"],
+          ["expiration", "1802592000"]
+        ],
+        "content": "",
+        "sig": "7c0ec87bd1f5918cfd3e7f8854b06fac3b9d6f212c54e5aaba5386dad065fe5dcead785831673d534d5e69f82623f2078e3830d0d37f54da30fbc0eb9b0a413a"
+      },
+      "expect": {
+        "status": 400,
+        "reason": "malformed"
+      }
+    },
+    {
+      "name": "server-with-scheme",
+      "note": "`server` is a bare lower-case host name.",
+      "now": 1800000000,
+      "event": {
+        "id": "fd2c3b3757e422cd90f308cf35a6b6444faf47d2d9d88e656ce44906dde8ec4e",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "https://grove.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["bytes", "1073741824"],
+          ["status", "active"],
+          ["expiration", "1802592000"]
+        ],
+        "content": "",
+        "sig": "ca6dbb33ee0609875f522459e447f4acf569e5382ceed4a0bc835dd683e8e1a21de1b4a27f00f2115e28e32a10a805f0f9246285a50a389f0904a52f0512f7c8"
+      },
+      "expect": {
+        "status": 400,
+        "reason": "malformed"
+      }
+    },
+    {
+      "name": "reset-with-device",
+      "note": "A reset names no device.",
+      "now": 1800000000,
+      "event": {
+        "id": "6dddab6dd5b668767de6cc106c8f7c70a82969142410e2912a7b1148e495ab9c",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "reset"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["server", "grove.example.net"],
+          ["expiration", "1807776000"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"]
+        ],
+        "content": "",
+        "sig": "ba4766a7110f6f7aaac28567e2436197b12ae0c270844f5d384458a26706cacfd84f5301f4366e50ce1e5501a2dd5ced18956d9c55da67679fb1014e17a3969d"
+      },
+      "expect": {
+        "status": 400,
+        "reason": "malformed"
+      }
+    },
+    {
+      "name": "extra-event-field",
+      "note": "An event field outside NIP-01 is refused, so what is verified is what is read.",
+      "now": 1800000000,
+      "event": {
+        "id": "84193e037af4c15e383404a0cd0b9aedf601783fa52ee4ca8e332693a811fe49",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+          ["server", "grove.example.net"],
+          ["scope", "upload"],
+          ["scope", "get"],
+          ["scope", "delete"],
+          ["bytes", "1073741824"],
+          ["status", "active"],
+          ["expiration", "1802592000"]
+        ],
+        "content": "",
+        "sig": "420ec29db8fb18e3f69c45c4788edd2d1c6fc9eed4bee70323824ad428f2c695e1b4cd26fd746718725c5367a3af738fc1e1a66476b741aeb0fb1ed44f55844f",
+        "relay": "wss://relay.example.net/"
+      },
+      "expect": {
+        "status": 400,
+        "reason": "malformed"
+      }
+    },
+    {
+      "name": "device-is-node-owner",
+      "note": "The node owner's key can never be a group device.",
+      "now": 1800000000,
+      "event": {
+        "id": "bd1825f736799da3db7fd776457fe8e2ff07886fa3087512a8f604d6cd3f4e88",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "073bff54ccf6f582582949befadb04d6"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "eefddc2de33925ff8a6d09f13787841d353ce5872941d4cb922ee23e0a84c049"],
+          ["server", "grove.example.net"],
+          ["scope", "get"],
+          ["status", "active"],
+          ["expiration", "1802592000"]
+        ],
+        "content": "",
+        "sig": "6740c79767ce08685cb0702556e92843f4b99393bcfac1cbc56d237168ec4c49831d244f6408abeeed21a2a69681cf71193187816771b34c1f55386f9b61bab1"
+      },
+      "expect": {
+        "status": 409,
+        "reason": "key-conflict"
+      }
+    },
+    {
+      "name": "device-is-enrolled-keeper",
+      "note": "An enrolled keeper key can never be a group device.",
+      "now": 1800000000,
+      "event": {
+        "id": "5ee345045dff5803a2055ec2b11bc8e9c6fe37b7cee90569f744647fc5460e29",
+        "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+        "created_at": 1800000000,
+        "kind": 27541,
+        "tags": [
+          ["t", "grant"],
+          ["grant", "60c08ef1805c09c97b23466acc214c6c"],
+          ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+          ["device", "b848cd989d099f2b52fb1ebb3ad689fbd081b53b511f272b3a500ddce8fab9d5"],
+          ["server", "grove.example.net"],
+          ["scope", "get"],
+          ["status", "active"],
+          ["expiration", "1802592000"]
+        ],
+        "content": "",
+        "sig": "3477599b73967e5bde97b43bb078d4a4793e954fcedb2b8c2ed8d81c269e20a86f7a0a1142dc2f88e0a8d78f4dafd6511543a8bb3b571b36f9a14f29fc60bd23"
+      },
+      "expect": {
+        "status": 409,
+        "reason": "key-conflict"
+      }
+    }
+  ],
+  "requestFixture": {
+    "note": "Applied in order to a node with the fixture enrolments before each request case. Each request case starts again from this state.",
+    "steps": [
+      {
+        "now": 1800000000,
+        "post": {
+          "id": "84193e037af4c15e383404a0cd0b9aedf601783fa52ee4ca8e332693a811fe49",
+          "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+          "created_at": 1800000000,
+          "kind": 27541,
+          "tags": [
+            ["t", "grant"],
+            ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+            ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+            ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+            ["server", "grove.example.net"],
+            ["scope", "upload"],
+            ["scope", "get"],
+            ["scope", "delete"],
+            ["bytes", "1073741824"],
+            ["status", "active"],
+            ["expiration", "1802592000"]
+          ],
+          "content": "",
+          "sig": "420ec29db8fb18e3f69c45c4788edd2d1c6fc9eed4bee70323824ad428f2c695e1b4cd26fd746718725c5367a3af738fc1e1a66476b741aeb0fb1ed44f55844f"
+        },
+        "expect": {
+          "status": 201,
+          "reason": "accepted",
+          "state": "active"
+        }
+      },
+      {
+        "now": 1800000000,
+        "post": {
+          "id": "2479170691e635e7407de87953e920f341ecfcb0b3181eb95b3100d913cb86eb",
+          "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+          "created_at": 1800000000,
+          "kind": 27541,
+          "tags": [
+            ["t", "grant"],
+            ["grant", "847fc938da23190e3685ad6b78fc13ce"],
+            ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+            ["device", "64e8b9a29d0be4417d7197d509c8a0ef637034dcd421208670c62fc2c0887002"],
+            ["server", "grove.example.net"],
+            ["scope", "get"],
+            ["status", "active"],
+            ["expiration", "1802592000"]
+          ],
+          "content": "",
+          "sig": "4614c2beb127e0184fc3626b9d2f296920bb5dd54f5620f3801c42d9bb15dfbc82f876fa87654e2c12f6db3f70f79e1f13e28193ee8aea85fdc41e68d6a06509"
+        },
+        "expect": {
+          "status": 201,
+          "reason": "accepted",
+          "state": "active"
+        }
+      },
+      {
+        "now": 1800000000,
+        "post": {
+          "id": "d6cef9cda2fdfe88e2bc48ca2406cb9d364314ae03cd5b9ae105e3e92aa55b08",
+          "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+          "created_at": 1800000000,
+          "kind": 27541,
+          "tags": [
+            ["t", "grant"],
+            ["grant", "be0df4dd6e9225bcdf11efd5860d0daf"],
+            ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+            ["device", "491ebfdd8cbcb0039d0b5149d517fee5fd25420232ab4ecc2d7fd4f091d868d5"],
+            ["server", "grove.example.net"],
+            ["scope", "upload"],
+            ["scope", "get"],
+            ["scope", "purge"],
+            ["bytes", "10737418240"],
+            ["status", "active"],
+            ["expiration", "1802592000"]
+          ],
+          "content": "",
+          "sig": "c394f68a51a6a57ceaa6b8716b4df84fa2aecc49cde7cde9b476864b3adbf64e90766492d37ba275161db80cc348d0d61c4a0830898b49c93b2e994e1548b363"
+        },
+        "expect": {
+          "status": 201,
+          "reason": "accepted",
+          "state": "active"
+        }
+      },
+      {
+        "now": 1800000000,
+        "post": {
+          "id": "e34ff5051aaab5db2e3e797334d3e05b4df9b5838a3a0539f94df42d1558ad41",
+          "pubkey": "b848cd989d099f2b52fb1ebb3ad689fbd081b53b511f272b3a500ddce8fab9d5",
+          "created_at": 1800000000,
+          "kind": 27541,
+          "tags": [
+            ["t", "grant"],
+            ["grant", "392d741537232575da61737d27b2cbd5"],
+            ["d", "fcdc853ddc1be7f7d978367e1a5156b55f11e4c22a49db949f5bb939a303762a"],
+            ["device", "96f1e22c3caa1e6c8d499f819cd334d987639a2f680c09ee6f00e7b6dedd2219"],
+            ["server", "grove.example.net"],
+            ["scope", "upload"],
+            ["scope", "get"],
+            ["scope", "delete"],
+            ["bytes", "1073741824"],
+            ["status", "active"],
+            ["expiration", "1802592000"]
+          ],
+          "content": "",
+          "sig": "e0b6cdc99281d400a3c1637392c99376decd6a01ef17bee4633b24ed4f510df70f1c278d8e6b5ea56cad42de662347f30e408f06687efc74308db4b10c5b619e"
+        },
+        "expect": {
+          "status": 201,
+          "reason": "accepted",
+          "state": "active"
+        }
+      },
+      {
+        "now": 1800000060,
+        "request": {
+          "method": "PUT",
+          "path": "/upload",
+          "headers": [
+            ["Authorization", "Nostr eyJpZCI6IjQ3NWQxODI3M2JiYmQxY2Q0ODY1YzM3MDA0ZGM0ODZiMWNlMDE2M2M4NmFkYWFiOTQ0Mzc2NDZiMDk3ZjFhMjEiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMDA1OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJ1cGxvYWQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAwMTE5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgdXBsb2FkIiwic2lnIjoiN2RjNDllNDk0NjI3MTJlM2IxNGJhMTIyYWYwY2M0NzI3OWFiNGNkMGUwMmM4ZGQ4YzcyOGFjNjg3YmU3NWQwOGFjYmJhNGE5YjRlMzkyYzBlOGYxYTA3NDAxOWM5YTI3YzI4MjE1ZDIxZjg2YTI1MTkyYWVmYWEwZTA1N2EyZWEifQ=="],
+            ["X-SHA-256", "9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd"],
+            ["Content-Length", "31"]
+          ],
+          "body": "blob1"
+        },
+        "expect": {
+          "status": 201,
+          "reason": "created"
+        }
+      },
+      {
+        "now": 1800000060,
+        "request": {
+          "method": "PUT",
+          "path": "/upload",
+          "headers": [
+            ["Authorization", "Nostr eyJpZCI6IjQ3YzNiMzViZDg5ZTUzYjQxMGE0MWFjMDFiODc0YTRhMTUyYmE1YjRmYzg0ZDBjYmFhYzE0ODIxMzY5YjI3ZWMiLCJwdWJrZXkiOiI5NmYxZTIyYzNjYWExZTZjOGQ0OTlmODE5Y2QzMzRkOTg3NjM5YTJmNjgwYzA5ZWU2ZjAwZTdiNmRlZGQyMjE5IiwiY3JlYXRlZF9hdCI6MTgwMDAwMDA1OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJ1cGxvYWQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAwMTE5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjQ3M2I3MDk1M2YxNGQzY2E5Y2YxMzhlOTBhMzdiZDdhZGMzODYyMDYxY2Q5ODAxMTMyMTdmNGQ3NjllZDdiMWMiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgdXBsb2FkIiwic2lnIjoiYzBjMmI5MmFmNzE0NTk1YmRjYTllMTRjYzI0MjIxNzlmYzY0NzczYTA5ODYwYzIwMjAwZDY5YmNhMTBlZWU3Y2NkM2UwMmZkZmFjZDJlNGU4M2M4MjgwZDQ4OTA2MTU3NGE2ZDZhMWY0MjZiNTIwMzkzMDQ5Nzc1ZDk1ZTIxOTAifQ=="],
+            ["X-SHA-256", "473b70953f14d3ca9cf138e90a37bd7adc3862061cd980113217f4d769ed7b1c"],
+            ["Content-Length", "31"]
+          ],
+          "body": "blob2"
+        },
+        "expect": {
+          "status": 201,
+          "reason": "created"
+        }
+      },
+      {
+        "now": 1800000060,
+        "request": {
+          "method": "PUT",
+          "path": "/upload",
+          "headers": [
+            ["Authorization", "Nostr eyJpZCI6ImU4NGY5MWI3NGVkMTBkOWFlMzM1NDgxNGQwNDBjMmEzOWI2MGY5ODkzMWJkYjRjZGRlMjA1MTIxNDYxMmM2MzUiLCJwdWJrZXkiOiJlZWZkZGMyZGUzMzkyNWZmOGE2ZDA5ZjEzNzg3ODQxZDM1M2NlNTg3Mjk0MWQ0Y2I5MjJlZTIzZTBhODRjMDQ5IiwiY3JlYXRlZF9hdCI6MTgwMDAwMDA1OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJ1cGxvYWQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAwMTE5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjYzMzU4NmQzMDBlOGQ2YzVlZDI1ZjQ0NDIxM2ZkOWM3ZWRlYTczNWJkOWQxOWJlMjQ5Njg4ZTBkNTBkMWQxZDgiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgdXBsb2FkIiwic2lnIjoiZjYzOGRhNWIwNDJmY2QzMGNlYzI3NTlkYTA5YzE3NDllZjU0MTMwNWIwM2YyODVjOTk0OGM3NTJlNzVjMTViMjhjY2I5OGU5MjIyOTFhYWQ2YWVlZTExMjdhNDlmOGI4MDA5ZTYyMzMzMDQ2M2U4YTcwZGFiNjNhZWM3ZjM5NDkifQ=="],
+            ["X-SHA-256", "633586d300e8d6c5ed25f444213fd9c7edea735bd9d19be249688e0d50d1d1d8"],
+            ["Content-Length", "31"]
+          ],
+          "body": "blob3"
+        },
+        "expect": {
+          "status": 201,
+          "reason": "created"
+        }
+      }
+    ]
+  },
+  "requests": [
+    {
+      "name": "get",
+      "note": "A granted device reads a blob its group holds.",
+      "now": 1800003600,
+      "request": {
+        "method": "GET",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6IjljYTdjMDU1NjJmZGJlYTk5ZTFhNDU1ODE1MWFhOWU2NjllZjNiMWU2NGIxZWE4OTY1YjI1MWM1MzIyYzA1Y2YiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJnZXQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZ2V0Iiwic2lnIjoiYTU3YWIwZGVjM2ViNTIzYzEzNGJhNGFhOTY0YTRkMGM3NjcyNTgxMTU5OTZlYzJiYjA0MDNlZTRjY2ZiNzFjY2IxN2MxMzY4N2QyOGEyZTllYzM2YTAwNDE2ZjRkZWQ3N2I1ODU2ZjMzMDhlZjAzODBkNzBjNzJkMGVmZDFlNzIifQ=="]
+        ]
+      },
+      "expect": {
+        "status": 200,
+        "reason": "ok"
+      }
+    },
+    {
+      "name": "get-range",
+      "note": "A range read is authorised exactly as a full read.",
+      "now": 1800003600,
+      "request": {
+        "method": "GET",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6IjljYTdjMDU1NjJmZGJlYTk5ZTFhNDU1ODE1MWFhOWU2NjllZjNiMWU2NGIxZWE4OTY1YjI1MWM1MzIyYzA1Y2YiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJnZXQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZ2V0Iiwic2lnIjoiYTU3YWIwZGVjM2ViNTIzYzEzNGJhNGFhOTY0YTRkMGM3NjcyNTgxMTU5OTZlYzJiYjA0MDNlZTRjY2ZiNzFjY2IxN2MxMzY4N2QyOGEyZTllYzM2YTAwNDE2ZjRkZWQ3N2I1ODU2ZjMzMDhlZjAzODBkNzBjNzJkMGVmZDFlNzIifQ=="],
+          ["Range", "bytes=0-9"]
+        ]
+      },
+      "expect": {
+        "status": 206,
+        "reason": "partial"
+      }
+    },
+    {
+      "name": "head",
+      "note": "HEAD uses `t=get` too.",
+      "now": 1800003600,
+      "request": {
+        "method": "HEAD",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6IjljYTdjMDU1NjJmZGJlYTk5ZTFhNDU1ODE1MWFhOWU2NjllZjNiMWU2NGIxZWE4OTY1YjI1MWM1MzIyYzA1Y2YiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJnZXQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZ2V0Iiwic2lnIjoiYTU3YWIwZGVjM2ViNTIzYzEzNGJhNGFhOTY0YTRkMGM3NjcyNTgxMTU5OTZlYzJiYjA0MDNlZTRjY2ZiNzFjY2IxN2MxMzY4N2QyOGEyZTllYzM2YTAwNDE2ZjRkZWQ3N2I1ODU2ZjMzMDhlZjAzODBkNzBjNzJkMGVmZDFlNzIifQ=="]
+        ]
+      },
+      "expect": {
+        "status": 200,
+        "reason": "ok"
+      }
+    },
+    {
+      "name": "get-other-member",
+      "note": "Any device of the group with `get` reads what another member uploaded.",
+      "now": 1800003600,
+      "request": {
+        "method": "GET",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6IjBhYTI0YmU0MGYyN2EyMjdlOTRhODBiYTU0ZWM3Zjc1OGE1YzQwMGUxOGI3YjM2ZDFiMDcwMWI0NjYxYjc2ZDMiLCJwdWJrZXkiOiI2NGU4YjlhMjlkMGJlNDQxN2Q3MTk3ZDUwOWM4YTBlZjYzNzAzNGRjZDQyMTIwODY3MGM2MmZjMmMwODg3MDAyIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJnZXQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZ2V0Iiwic2lnIjoiMTVlMjA1Yzg4NTMzNjU0NjFjNTZmMTZkNGE2MTQwZDVjNGNjODEwOWZiMjg5Y2FlMjM2MzA0ZTY3NGMzNWIxOTllNjUyODI5ZmZmMWRlNzY3MTU2MDI4Y2NjY2IyZWM4YTQzYTFlMTRjNDU2ZWQ1ODY4NjVjNTkxM2I2OTZhZjkifQ=="]
+        ]
+      },
+      "expect": {
+        "status": 200,
+        "reason": "ok"
+      }
+    },
+    {
+      "name": "get-coordinator",
+      "note": "The keeper's coordinator reads for verification.",
+      "now": 1800003600,
+      "request": {
+        "method": "GET",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6IjA0MWQyMzIzMTgxZWYxNjRmMDhkODA1ZDAwODQ2Mjk0NjExYTc3MDlmZTAxYTI5NDg4ZDRlMDYyYzEyODZmNjAiLCJwdWJrZXkiOiI0OTFlYmZkZDhjYmNiMDAzOWQwYjUxNDlkNTE3ZmVlNWZkMjU0MjAyMzJhYjRlY2MyZDdmZDRmMDkxZDg2OGQ1IiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJnZXQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZ2V0Iiwic2lnIjoiYjI0MWQxZTZmYjI1N2IyZGVhZWJjNTk5YzVlM2E4NDkyZmJkODU3MTU0MTUyMjg3NGRmOWI3MjE1ZDAwNzhmYjI1ZjJjZmNkYjU3MjA4M2U2Y2RkYTc5YzE1ZDQ1MGE5ZDE3NTdhMzU5ZTM1ODAzYmM5ZjZhMTUwMjIxZDZmMTMifQ=="]
+        ]
+      },
+      "expect": {
+        "status": 200,
+        "reason": "ok"
+      }
+    },
+    {
+      "name": "get-base64url",
+      "note": "BUD-11 base64url without padding decodes as well as standard base64.",
+      "now": 1800003600,
+      "request": {
+        "method": "GET",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6IjljYTdjMDU1NjJmZGJlYTk5ZTFhNDU1ODE1MWFhOWU2NjllZjNiMWU2NGIxZWE4OTY1YjI1MWM1MzIyYzA1Y2YiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJnZXQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZ2V0Iiwic2lnIjoiYTU3YWIwZGVjM2ViNTIzYzEzNGJhNGFhOTY0YTRkMGM3NjcyNTgxMTU5OTZlYzJiYjA0MDNlZTRjY2ZiNzFjY2IxN2MxMzY4N2QyOGEyZTllYzM2YTAwNDE2ZjRkZWQ3N2I1ODU2ZjMzMDhlZjAzODBkNzBjNzJkMGVmZDFlNzIifQ"]
+        ]
+      },
+      "expect": {
+        "status": 200,
+        "reason": "ok"
+      }
+    },
+    {
+      "name": "get-anonymous",
+      "note": "No Authorization header: knowing the hash is not enough.",
+      "now": 1800003600,
+      "request": {
+        "method": "GET",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": []
+      },
+      "expect": {
+        "status": 401,
+        "reason": "missing"
+      }
+    },
+    {
+      "name": "get-two-headers",
+      "note": "Exactly one Authorization header.",
+      "now": 1800003600,
+      "request": {
+        "method": "GET",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6IjljYTdjMDU1NjJmZGJlYTk5ZTFhNDU1ODE1MWFhOWU2NjllZjNiMWU2NGIxZWE4OTY1YjI1MWM1MzIyYzA1Y2YiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJnZXQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZ2V0Iiwic2lnIjoiYTU3YWIwZGVjM2ViNTIzYzEzNGJhNGFhOTY0YTRkMGM3NjcyNTgxMTU5OTZlYzJiYjA0MDNlZTRjY2ZiNzFjY2IxN2MxMzY4N2QyOGEyZTllYzM2YTAwNDE2ZjRkZWQ3N2I1ODU2ZjMzMDhlZjAzODBkNzBjNzJkMGVmZDFlNzIifQ=="],
+          ["Authorization", "Nostr eyJpZCI6IjBhYTI0YmU0MGYyN2EyMjdlOTRhODBiYTU0ZWM3Zjc1OGE1YzQwMGUxOGI3YjM2ZDFiMDcwMWI0NjYxYjc2ZDMiLCJwdWJrZXkiOiI2NGU4YjlhMjlkMGJlNDQxN2Q3MTk3ZDUwOWM4YTBlZjYzNzAzNGRjZDQyMTIwODY3MGM2MmZjMmMwODg3MDAyIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJnZXQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZ2V0Iiwic2lnIjoiMTVlMjA1Yzg4NTMzNjU0NjFjNTZmMTZkNGE2MTQwZDVjNGNjODEwOWZiMjg5Y2FlMjM2MzA0ZTY3NGMzNWIxOTllNjUyODI5ZmZmMWRlNzY3MTU2MDI4Y2NjY2IyZWM4YTQzYTFlMTRjNDU2ZWQ1ODY4NjVjNTkxM2I2OTZhZjkifQ=="]
+        ]
+      },
+      "expect": {
+        "status": 401,
+        "reason": "missing"
+      }
+    },
+    {
+      "name": "get-stranger",
+      "note": "A valid signature from a key with no grant at this node.",
+      "now": 1800003600,
+      "request": {
+        "method": "GET",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6IjFiOTE4YTc2MjgxMGJhMTgwOWNlYmE4MjVhZjNmN2NjNGIwNjU0YTkyY2JhZjRmMGQ4NWMzNGZlOWQ3MzUyYTkiLCJwdWJrZXkiOiI2NTlkZTIyMjExMTZmNTA0MzA2OTg5YTkyNmJhMWY1OThjMGVmMDgwOGY1MmI0NzhhODQxNDUxMjFiMjI0ZDAxIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJnZXQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZ2V0Iiwic2lnIjoiZmQyZjU1NzY1ZDZiYzZiN2YzOWE4YzQxNjg5YWMxNTA5ODAwMWJlODlmNDc5NjZlMzAyYjQ0NGQ0Mjg5NjQxN2UxZmFhZTkzYWViNzY2YTMzYTA4NTVjMGM3NTJiZWIxOWViMjYxMDc4ZGNlNzI5OWU2Njk4YTdhNGU5NjExZjQifQ=="]
+        ]
+      },
+      "expect": {
+        "status": 403,
+        "reason": "not-granted"
+      }
+    },
+    {
+      "name": "get-wrong-room",
+      "note": "A device granted for room B asks for a blob only room A holds: indistinguishable from absent.",
+      "now": 1800003600,
+      "request": {
+        "method": "GET",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6IjYyNjBlN2YzMjViNTE3NmI4MTAzOTdkMDAyZTM5Y2ExM2NmZjE0YmFiOWZlODUzNWQ2NTFmZjE2MGVkM2QyMjciLCJwdWJrZXkiOiI5NmYxZTIyYzNjYWExZTZjOGQ0OTlmODE5Y2QzMzRkOTg3NjM5YTJmNjgwYzA5ZWU2ZjAwZTdiNmRlZGQyMjE5IiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJnZXQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZ2V0Iiwic2lnIjoiODkwZmZkZjhmNzkyM2VlYTk0NmUyNDU0ODAwMTc3ZjllMTdhNDU5MWNmOGFiMWExYjhhYjAzNGMxZGVhNWQzN2EwMmVlNTNjY2UwMzNkYTgyNDU3YzhjYzYwOTQxNzY5YTQ0YWRjOTA4Mjk5OWY3Zjk2MmFiODliYWNmYzhmNDcifQ=="]
+        ]
+      },
+      "expect": {
+        "status": 404,
+        "reason": "absent"
+      }
+    },
+    {
+      "name": "get-other-room-blob",
+      "note": "Room A's device asks for room B's blob.",
+      "now": 1800003600,
+      "request": {
+        "method": "GET",
+        "path": "/473b70953f14d3ca9cf138e90a37bd7adc3862061cd980113217f4d769ed7b1c",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6ImJjMGU2ZmQ2ODRmMzgxNGRkYjE2OWU4NjUyY2IxZWQyMmUwZTI5OTM0YTRlMGU2ZGZjOTYzNmI5YzRhOWZiN2IiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJnZXQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjQ3M2I3MDk1M2YxNGQzY2E5Y2YxMzhlOTBhMzdiZDdhZGMzODYyMDYxY2Q5ODAxMTMyMTdmNGQ3NjllZDdiMWMiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZ2V0Iiwic2lnIjoiNTE0NjU0N2VkNTNkYTVjMTA4Njg2MGEyYjljZWEwMDBkMzljZjE1ZjI3NDRjMWQwMGZiOGFkYjc1NGNhMGRmMTI4MDkyOGUwMGM2Nzc5YjRkY2RmNWI0YzAxZDM1NjNhYjY1YmI2NGMzMGFjY2QxNDRlYjdiYjlmMDRmMDdmYTUifQ=="]
+        ]
+      },
+      "expect": {
+        "status": 404,
+        "reason": "absent"
+      }
+    },
+    {
+      "name": "get-owner-blob",
+      "note": "A group device cannot read the node owner's own files.",
+      "now": 1800003600,
+      "request": {
+        "method": "GET",
+        "path": "/633586d300e8d6c5ed25f444213fd9c7edea735bd9d19be249688e0d50d1d1d8",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6IjExYWY0ZjBhNWE2ZDQ0OGIwZjY1ODgxNDMxM2JjMmE1ZjZkNjQyYTc0ZTk5MTM2N2FlZDFlYjZkZDc3MGRhMmIiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJnZXQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjYzMzU4NmQzMDBlOGQ2YzVlZDI1ZjQ0NDIxM2ZkOWM3ZWRlYTczNWJkOWQxOWJlMjQ5Njg4ZTBkNTBkMWQxZDgiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZ2V0Iiwic2lnIjoiYWE3Yjk0MTVjY2ZmYTA1OWEyYTY5YzE1NGFkZDEwMDNkZGY5MzAwNWYxZTQ3NGQxYjI3MThkNjNhNjI2YWNmYjlmZWRhZTliNzcwZmViZDgwN2IwMzZiMDA2Y2VhYjUyYjEyODU0ODYxMjY4NmJhNjdlNWU3ZDk5MDRmYjg4YjYifQ=="]
+        ]
+      },
+      "expect": {
+        "status": 404,
+        "reason": "absent"
+      }
+    },
+    {
+      "name": "get-absent",
+      "note": "A hash nobody holds.",
+      "now": 1800003600,
+      "request": {
+        "method": "GET",
+        "path": "/9048cece9c03f4d0feab75a639d875f5761cc8e60274dad9c02c3d3a024c11aa",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6IjRkOTk0Njg4ODIzZDA0NTJiZDU5Njc2MTYyYzQ4OTgwMTE2MTE4OGIzYmU3MjVhMDRiOWYxNWJlNDM1NDg2NDMiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJnZXQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjkwNDhjZWNlOWMwM2Y0ZDBmZWFiNzVhNjM5ZDg3NWY1NzYxY2M4ZTYwMjc0ZGFkOWMwMmMzZDNhMDI0YzExYWEiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZ2V0Iiwic2lnIjoiODk2ZjgyZGY0YjFhMWNhY2EyMzBjOTcxMTE3ZDJhZGE0MDhiMWRhYzljOWIyNzJjMmQ4Y2FhMDliNjI3YmE1OTQ5N2Q0YmFlZGM4MjRkOTY4Mzk3MTdiZjg2NTI4MzczYjBlMmUwOWJkOTI4NzJhODgxZTA5NGFjMDYxNmRlY2EifQ=="]
+        ]
+      },
+      "expect": {
+        "status": 404,
+        "reason": "absent"
+      }
+    },
+    {
+      "name": "get-hash-not-covered",
+      "note": "The `x` tags do not include the requested hash.",
+      "now": 1800003600,
+      "request": {
+        "method": "GET",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6ImJjMGU2ZmQ2ODRmMzgxNGRkYjE2OWU4NjUyY2IxZWQyMmUwZTI5OTM0YTRlMGU2ZGZjOTYzNmI5YzRhOWZiN2IiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJnZXQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjQ3M2I3MDk1M2YxNGQzY2E5Y2YxMzhlOTBhMzdiZDdhZGMzODYyMDYxY2Q5ODAxMTMyMTdmNGQ3NjllZDdiMWMiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZ2V0Iiwic2lnIjoiNTE0NjU0N2VkNTNkYTVjMTA4Njg2MGEyYjljZWEwMDBkMzljZjE1ZjI3NDRjMWQwMGZiOGFkYjc1NGNhMGRmMTI4MDkyOGUwMGM2Nzc5YjRkY2RmNWI0YzAxZDM1NjNhYjY1YmI2NGMzMGFjY2QxNDRlYjdiYjlmMDRmMDdmYTUifQ=="]
+        ]
+      },
+      "expect": {
+        "status": 401,
+        "reason": "hash"
+      }
+    },
+    {
+      "name": "get-without-x",
+      "note": "BUD-11 makes `x` optional for get; group mode requires it.",
+      "now": 1800003600,
+      "request": {
+        "method": "GET",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6IjVhM2ZmOTcwNmI3OGJmZjNhNDQxZjNmNmQxMWYxNjQ3ZjkzNGZhNDk4YTVkY2U4YzBkMzk0MTU3YTRlOTg2M2UiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJnZXQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdXSwiY29udGVudCI6Imdyb3VwLWdyYW50cy8xIHN5bnRoZXRpYyBnZXQiLCJzaWciOiJkNDhkOTMxZjcxOTI2ZGJjOTJmYzU0ZGFlOWNmOGJiZjZlNDI4YWZmYzY3MmY2ZTI4MDRkOTkwOTEwYzJlNjE4ZjQ0YmFiZDNkMWE1ZDY5OWNiMzA2NWE2N2I2ZjA3MGIwNzRiOGZhNWY1MWFmZDBmMDZkYjNiNmMyMjg2MmJkYSJ9"]
+        ]
+      },
+      "expect": {
+        "status": 401,
+        "reason": "hash"
+      }
+    },
+    {
+      "name": "get-wrong-server",
+      "note": "Scoped to another node only.",
+      "now": 1800003600,
+      "request": {
+        "method": "GET",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6IjhkYTE4MTRlMmViYjZjNDQ3YTdlYzYxOTlkMDE2MTg3NWMxMjYwODA1YWJkYWY3NDdmODNjYWFhZWRlMmRlZGQiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJnZXQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJoZWF0aC5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZ2V0Iiwic2lnIjoiNmJkOTY1NDhhYzZkZGNjMTZmNTllNTQ5ZTJmMzcxOGQzODIwM2YzZjYwZWFjYjc2NzE4Mjc1YWJlYjE4MTI3ZDYwOTEzMmE4OGUwYmVlMWYxMjEzZWVkOWFhOTIzYjg5MWVhNTcyNmUwYWNiNmUyYjI4MjVmOGU0ZWVjYzA0ZWEifQ=="]
+        ]
+      },
+      "expect": {
+        "status": 401,
+        "reason": "server"
+      }
+    },
+    {
+      "name": "get-without-server",
+      "note": "BUD-11 allows an unscoped token; group mode refuses it.",
+      "now": 1800003600,
+      "request": {
+        "method": "GET",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6IjYwN2ZkODI3N2NhMTI1YmFmMDEwOGM4MjcwMDMzZmFlYzg4YmY0Mjk3ODkwNWJhNzNjYjNhNjljZDI5MzYzOGUiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJnZXQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJ4IiwiOWM4ODQ5OTQwNDUxZDM3MTZmMTA0MjQwNTY2NGQ3NzUxYmZlZGQ5ZDQ2ZjQ0ZTYwMWY3ZDE4NzllYmQ4YzZkZCJdXSwiY29udGVudCI6Imdyb3VwLWdyYW50cy8xIHN5bnRoZXRpYyBnZXQiLCJzaWciOiJlMjYzZTQ1M2IzZTM4ZmY2ZjYxN2FkYjRlN2U3YmViYTUxN2JjNWEwNDNmYzAyMDgwZmVlZWNhYzM1ZTA5NTIyZGVkOGI3ZWU4YWNkMmJmMzE5ZmY1NzYxYjFmNDEzYWIwM2ZmMTlmOWU0MDBlMzQ0MWE2Y2E0MjA0ODBkYTM4ZiJ9"]
+        ]
+      },
+      "expect": {
+        "status": 401,
+        "reason": "server"
+      }
+    },
+    {
+      "name": "get-two-servers",
+      "note": "A token scoped to two nodes, this one among them.",
+      "now": 1800003600,
+      "request": {
+        "method": "GET",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6IjUwYjgwYzlmNWUxMWFkMGJmODI2YTJhZjNiOTdmNTZhMTUwNGNiNWIxNGIzMDczMTQxYjVhZmRmMGI3MTVmOGQiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJnZXQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJoZWF0aC5leGFtcGxlLm5ldCJdLFsic2VydmVyIiwiZ3JvdmUuZXhhbXBsZS5uZXQiXSxbIngiLCI5Yzg4NDk5NDA0NTFkMzcxNmYxMDQyNDA1NjY0ZDc3NTFiZmVkZDlkNDZmNDRlNjAxZjdkMTg3OWViZDhjNmRkIl1dLCJjb250ZW50IjoiZ3JvdXAtZ3JhbnRzLzEgc3ludGhldGljIGdldCIsInNpZyI6ImIzYzU0NzgxNjlmMWZiOTQzMWVmM2JjODUzNWRjNjQ4YWE2MTA0MWFkNjhkYjA2ZTQ1ODU5YjYwZTUzNzk0ZjAzZWQ4M2I1NDMyYzZlNjNjMzVkODIwY2U1NGQ5Y2I0MzBmZjE1NTAyZTNiYTFjNmM2OTRjNjVlZTM2ZDcwNGE3In0="]
+        ]
+      },
+      "expect": {
+        "status": 200,
+        "reason": "ok"
+      }
+    },
+    {
+      "name": "get-expired",
+      "note": "`expiration` equal to the node clock.",
+      "now": 1800003600,
+      "request": {
+        "method": "GET",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6ImYwMTYyZjliNWMwZDRkMjRmYzQ2YTgwMzE3Njk4YmM2MjViZmRmMDA0YTRmMDgxN2RlZWIwYWIyZGYxN2RmMWMiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU0MCwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJnZXQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjAwIl0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZ2V0Iiwic2lnIjoiMzMzZTAwYmRjYjk2NzFhOTkxOWQ2OGFlNjgxNGViZjY2ZDc1YTE0OGE3NGJlMjhhMGY1MjY3OWUwY2MwZTZkMzIzZmViYTYxNmFmZjM4OTAyYzU4YTU0YTNjYWQ0ZmU3ZGFlZDQ4ZThkYWUyZjJjNzdkZjhjYmVhMzYyM2EyMmEifQ=="]
+        ]
+      },
+      "expect": {
+        "status": 401,
+        "reason": "expired"
+      }
+    },
+    {
+      "name": "get-skew-limit",
+      "note": "`created_at` exactly 30 seconds ahead is accepted.",
+      "now": 1800003600,
+      "request": {
+        "method": "GET",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6Ijk3YzkxNzQxMTAyYzUyOGUyZWEyNzQ1N2YxMzdlMmIxZDJiYzI2NTk2Zjg1MWIyMjA2OThiZWMyOTNhNmEwZDYiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzYzMCwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJnZXQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjkwIl0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZ2V0Iiwic2lnIjoiNGQ2NmI4MDEwMDdiNTU1N2JjZGQ2MjRlZjkyODliZWZlNmJjYWNkOTcwMDVhYWNiOWI3MzdhY2E0ZDFmZWFjMGIzYzNlNzEyMmY4MjRlNmNlY2M3YjA2YjBkY2Q4ODk2NTE3Y2E1OGVhOGM0ODM0MzkyNjA1NDM3NWUzMTg5NDMifQ=="]
+        ]
+      },
+      "expect": {
+        "status": 200,
+        "reason": "ok"
+      }
+    },
+    {
+      "name": "get-beyond-skew",
+      "note": "`created_at` 31 seconds ahead.",
+      "now": 1800003600,
+      "request": {
+        "method": "GET",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6IjQ3N2E0MmVhNTk4ZTY5ZGE0NzI5OTYwZDZhMWU3MzQ3MTRkYjQwNDUxNjg2ZGIzODkxYTA0ZjEzMjk2Mjg2YzciLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzYzMSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJnZXQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjkxIl0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZ2V0Iiwic2lnIjoiYjFiMmViNmI0NWRkMzRjNjZkMzk0MDhmZjc3Mjk3NDIzYzAzYjUwOGQ5NjQ1ZWJiODBmZTBjZGM0YmU0NmFmMWYzMTg2YjgwZjY2MDNiYjY3NDg2MDkwYTUzMWZhNGRhMTZiYTA4NTUzMTdmZTQyMGI4YmMyYzdiNTBiOWNmYTMifQ=="]
+        ]
+      },
+      "expect": {
+        "status": 401,
+        "reason": "future"
+      }
+    },
+    {
+      "name": "get-lifetime-limit",
+      "note": "A read token may live 300 seconds.",
+      "now": 1800003600,
+      "request": {
+        "method": "GET",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6IjM5OTVkMzU1OTZiZGM4OTY5ODgyMmY5MTMwMjJmOGY4M2MxYjY2NjVhOWE4YWRhODM2ZjY5OTRkNDk2NjE1OTUiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJnZXQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzODk5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZ2V0Iiwic2lnIjoiODFhNzUyYTQ3Y2IxNDcyOTFkOTI2NTgxNWEwMzY4ZmRiYWI2NjM3ZDA3NGZmOTRmOGFkY2ZlMWVmYmFhNGFmYjU4NThiNDA0MmM3Mjc0ZGRhZDU3M2ZiMTJkOWQ3YzI3MTNiZWI4ODA4Y2Y4MTY2ODBmZDBjMDBkMTJkYTRjYzAifQ=="]
+        ]
+      },
+      "expect": {
+        "status": 200,
+        "reason": "ok"
+      }
+    },
+    {
+      "name": "get-lifetime-too-long",
+      "note": "A read token of 301 seconds.",
+      "now": 1800003600,
+      "request": {
+        "method": "GET",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6IjY1NTM5NWFmODZjZDljMDI1MzI1MzVjZWIyNjkyOTcxZmE5NWU0M2FkYzkyNDg1YmU3MjU4MDgxYWM0MzAwZGMiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJnZXQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzOTAwIl0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZ2V0Iiwic2lnIjoiNmNhOTllYjRiY2RkNDIzMDZmNDAwNWEzYjRlYWZlODE5NzYyZDM1MWI2NjNkZTE0YTIzNWY5OWZmYzA2YTkzMzAwZDgwYzAyYmQ4YTE2MDc2YzhkODhiZmEzMGUxMWNjZTQxZmNkMmRmYzM2YmRlNmNjODcyYTcxYzE2NzgzOTEifQ=="]
+        ]
+      },
+      "expect": {
+        "status": 401,
+        "reason": "lifetime"
+      }
+    },
+    {
+      "name": "get-wrong-verb",
+      "note": "An upload token presented for a read.",
+      "now": 1800003600,
+      "request": {
+        "method": "GET",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6ImM5YzJkNTExZDljZDdiMjRkMWJmZDZhNGVmOGIwNGQwM2VjM2ZlZTk5ZTI1NjljNGJjYzkyYmI5OGQyMTVmMjYiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJ1cGxvYWQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgdXBsb2FkIiwic2lnIjoiZWI4MTIxOGUwMzJhYjY5NjA3NTZlZGZlZTliNGRmOWJhN2MwZTBhYjBkMmU4MWMyNmZkYzZjMzE1ZThhNTg3ZTM1MzdiOWExMjNmYTg3Njk2ZTNkMTRlNWQ4MjVlNjhlYTZlZTFiOTVlMjJjODE2NjZhOWU2YTAzMDgyZTI0OTAifQ=="]
+        ]
+      },
+      "expect": {
+        "status": 401,
+        "reason": "verb"
+      }
+    },
+    {
+      "name": "get-bad-signature",
+      "note": "The token signature does not verify.",
+      "now": 1800003600,
+      "request": {
+        "method": "GET",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6IjljYTdjMDU1NjJmZGJlYTk5ZTFhNDU1ODE1MWFhOWU2NjllZjNiMWU2NGIxZWE4OTY1YjI1MWM1MzIyYzA1Y2YiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJnZXQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZ2V0Iiwic2lnIjoiYTU3YWIwZGVjM2ViNTIzYzEzNGJhNGFhOTY0YTRkMGM3NjcyNTgxMTU5OTZlYzJiYjA0MDNlZTRjY2ZiNzFjY2IxN2MxMzY4N2QyOGEyZTllYzM2YTAwNDE2ZjRkZWQ3N2I1ODU2ZjMzMDhlZjAzODBkNzBjNzJkMGVmZDFlNzAifQ=="]
+        ]
+      },
+      "expect": {
+        "status": 401,
+        "reason": "signature"
+      }
+    },
+    {
+      "name": "get-grant-event-as-token",
+      "note": "A kind 27541 grant presented as a Blossom token is refused: the kinds do not mix.",
+      "now": 1800003600,
+      "request": {
+        "method": "GET",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6Ijg0MTkzZTAzN2FmNGMxNWUzODM0MDRhMGNkMGI5YWVkZjYwMTc4M2ZhNTJlZTRjYThlMzMyNjkzYTgxMWZlNDkiLCJwdWJrZXkiOiJmYmYwYjk4ZjhkOGI5MjYwY2UxYzU0ODVmMDlmMjI0YTYxNzRmMjMwZDAyMjhhZmM5OGRmMDYzNWQ1MzhkYmU4IiwiY3JlYXRlZF9hdCI6MTgwMDAwMDAwMCwia2luZCI6Mjc1NDEsInRhZ3MiOltbInQiLCJncmFudCJdLFsiZ3JhbnQiLCJhNjgzYmU3ZmZkYzlhNWNkYWI0MThhMWQzZGQzYTlkZCJdLFsiZCIsIjI4NDhiZGQ1YzYwYTc5ZTJkZmU2NjdhZTk2MTZjMTEwN2Y2MTcwOTAzMmI2NmU1NTZlMjhmNGE5NmU2OTQ1MGIiXSxbImRldmljZSIsIjlhNWExNjI5MzFiYTBlOTkzNTg4NWFmNzI0YWZjMjEzZGUyMDMxMzAyNjQ0YjY3MjA4OTI0NDE5Y2M5MTAzNTAiXSxbInNlcnZlciIsImdyb3ZlLmV4YW1wbGUubmV0Il0sWyJzY29wZSIsInVwbG9hZCJdLFsic2NvcGUiLCJnZXQiXSxbInNjb3BlIiwiZGVsZXRlIl0sWyJieXRlcyIsIjEwNzM3NDE4MjQiXSxbInN0YXR1cyIsImFjdGl2ZSJdLFsiZXhwaXJhdGlvbiIsIjE4MDI1OTIwMDAiXV0sImNvbnRlbnQiOiIiLCJzaWciOiI0MjBlYzI5ZGI4ZmIxOGUzZjY5YzQ1YzQ3ODhlZGQyZDFjNmZjOWVlZDRiZWU3MDMyMzgyNGFkNDI4ZjJjNjk1ZTFiNGNkMjZmZDc0NjcxODcyNWM1MzY3YTNhZjczOGZjMWUxYTY2NDc2Yjc0MWFlYjBmYjFlZDQ0ZjU1ODQ0ZiJ9"]
+        ]
+      },
+      "expect": {
+        "status": 401,
+        "reason": "event"
+      }
+    },
+    {
+      "name": "get-empty-content",
+      "note": "BUD-11 content must say what the token is for.",
+      "now": 1800003600,
+      "request": {
+        "method": "GET",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6IjEzY2JlMTFmMDg5MDJjOTdhYTBlYzEwODc4ZmRiN2E5ZGM2MWY5NWE2ZjUwMDJhNjVhMjA2NjA3MjdkMzMzMzUiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJnZXQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiIiLCJzaWciOiJlNTZiYmRhNGRhOTNiNTU4N2ExYjhjOTc2ODJlNTA1NWNlMjlmMDg2YmZkODA3MTg5MTI3NzJlZWNhOGVhNGVjNDkxNWU2NDYxYjA4ZjI4OTFiMTQ5ZjZmMWFiMjliNzZlODAxZDU1NjZhZTc5MGYzMDBmZGZmZTAxNzVlZTRkZCJ9"]
+        ]
+      },
+      "expect": {
+        "status": 401,
+        "reason": "event"
+      }
+    },
+    {
+      "name": "upload",
+      "note": "A device with `upload` stores a new blob for its group.",
+      "now": 1800003600,
+      "request": {
+        "method": "PUT",
+        "path": "/upload",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6IjA0OTY5NTgwZmI4ZjE2MTZiZjBhY2JhOGMyMzQ3OWVkOTk5ZTQ0MTA4MjVhMjBkYjVjYmZmNTJmNDJkNDA5OTMiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJ1cGxvYWQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjkwNDhjZWNlOWMwM2Y0ZDBmZWFiNzVhNjM5ZDg3NWY1NzYxY2M4ZTYwMjc0ZGFkOWMwMmMzZDNhMDI0YzExYWEiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgdXBsb2FkIiwic2lnIjoiZWRkMTg2ZmUzOWMzZjMzN2M4YjU3ODI1NDZkNmI1YjcxYzRkYmEzNTYyYjc5ZTliOTlkYzhkMWE0MWY3OTVjMjBkMWE2MTYzZTZhNTUzYzFlN2VkMmFhZmE4ZDBhYTg1NDMwZTZmMWNkZTg1OTRiOTQ5YTA5OWUzOGVjOTBmZjcifQ=="],
+          ["X-SHA-256", "9048cece9c03f4d0feab75a639d875f5761cc8e60274dad9c02c3d3a024c11aa"],
+          ["Content-Length", "31"]
+        ],
+        "body": "blob4"
+      },
+      "expect": {
+        "status": 201,
+        "reason": "created"
+      }
+    },
+    {
+      "name": "upload-group-already-holds",
+      "note": "Another device uploads what its group already holds.",
+      "now": 1800003600,
+      "request": {
+        "method": "PUT",
+        "path": "/upload",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6ImIzNWFiYjlmNzg4ZDA3NWMxZmY1OTFiYjc3OGUxY2FmZTRmOGY0NTRjZDdiMmFlNDU4ZmYyN2E2NDFjYjk2YjciLCJwdWJrZXkiOiI0OTFlYmZkZDhjYmNiMDAzOWQwYjUxNDlkNTE3ZmVlNWZkMjU0MjAyMzJhYjRlY2MyZDdmZDRmMDkxZDg2OGQ1IiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJ1cGxvYWQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgdXBsb2FkIiwic2lnIjoiMTIzMmQwNGYzNGI1NjVmNjgzMTBmZTdiMjhiNjk4ZGFjYzk0MmU4YjVhNjVlN2Q3M2YzMjg2YzUzMDZjNGM2MDc1MjcyMjBmYTcxNzgyZGZkZGZmOWQ3OWFkZmIyM2QxNTkwMzg5MGJkOTI3NjYwZDFlMDE0ZmYxNjEyZmJkYjYifQ=="],
+          ["X-SHA-256", "9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd"],
+          ["Content-Length", "31"]
+        ],
+        "body": "blob1"
+      },
+      "expect": {
+        "status": 200,
+        "reason": "ok"
+      }
+    },
+    {
+      "name": "upload-other-group-holds",
+      "note": "Room A uploads bytes only room B holds: 201, so the status says nothing about another group.",
+      "now": 1800003600,
+      "request": {
+        "method": "PUT",
+        "path": "/upload",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6IjQxOGM0NzliN2Y0YmZlYTA0ZGMxMTI3ODM4NDUxNGU2MDYzMjA3NGM1ZWEzY2U5MjkyY2MyZDFlYzA5ZmZhNDIiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJ1cGxvYWQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjQ3M2I3MDk1M2YxNGQzY2E5Y2YxMzhlOTBhMzdiZDdhZGMzODYyMDYxY2Q5ODAxMTMyMTdmNGQ3NjllZDdiMWMiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgdXBsb2FkIiwic2lnIjoiMzRiYzQ0OGQyZWNjY2ZiZGNkOWRjNmE3YzQ3ZTdiYTIwNDEwOGFlMjMxMGE3NTIzN2YzMDQ2ZjkwYzg1Y2U1ZTkwZmI0ZWNhNDFlYjNkZGUzZWM4NzMzNzI2OGQyYjkyMGRhOTQzOGQzYTVkNWRmZmMxNmVkNmZjNDdlMTlmNmIifQ=="],
+          ["X-SHA-256", "473b70953f14d3ca9cf138e90a37bd7adc3862061cd980113217f4d769ed7b1c"],
+          ["Content-Length", "31"]
+        ],
+        "body": "blob2"
+      },
+      "expect": {
+        "status": 201,
+        "reason": "created"
+      }
+    },
+    {
+      "name": "upload-without-scope",
+      "note": "A read-only device cannot upload.",
+      "now": 1800003600,
+      "request": {
+        "method": "PUT",
+        "path": "/upload",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6ImFhYTBlN2ViMDkwYTdmMDBlYjhmYjg1NGQwNTNlZDU0NGQ4MDQ5Mzk5NGE5NTNkNTVkNWFhZWM1MTk3YzdjN2EiLCJwdWJrZXkiOiI2NGU4YjlhMjlkMGJlNDQxN2Q3MTk3ZDUwOWM4YTBlZjYzNzAzNGRjZDQyMTIwODY3MGM2MmZjMmMwODg3MDAyIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJ1cGxvYWQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjkwNDhjZWNlOWMwM2Y0ZDBmZWFiNzVhNjM5ZDg3NWY1NzYxY2M4ZTYwMjc0ZGFkOWMwMmMzZDNhMDI0YzExYWEiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgdXBsb2FkIiwic2lnIjoiNTQ3ZGFhM2JlOTFlMmJhMThhZjdmMDhiNzM3NTMwZDZlYjQ2ZTNlMWY4OWNmNmMxN2ZiM2U1MTY5Njc3Y2U1MjNmM2JiMzNlODllNDg4M2RlZTk5OGU5OWZhMzkyYTM4ZTMwMDgzZTMxOTViOGE3YWE2Y2FhMDE0ZDk3ZjI3NmMifQ=="],
+          ["X-SHA-256", "9048cece9c03f4d0feab75a639d875f5761cc8e60274dad9c02c3d3a024c11aa"],
+          ["Content-Length", "31"]
+        ],
+        "body": "blob4"
+      },
+      "expect": {
+        "status": 403,
+        "reason": "not-granted"
+      }
+    },
+    {
+      "name": "upload-stranger",
+      "note": "No grant, no upload.",
+      "now": 1800003600,
+      "request": {
+        "method": "PUT",
+        "path": "/upload",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6ImI4ZDZlOWY5ODVlM2RkMjVmZDRhM2Q5N2Y0YzU3OTVlNThjZjI2NGVkODIzMjRmMDlkYTQyZjBjYWY3YzcyNDUiLCJwdWJrZXkiOiI2NTlkZTIyMjExMTZmNTA0MzA2OTg5YTkyNmJhMWY1OThjMGVmMDgwOGY1MmI0NzhhODQxNDUxMjFiMjI0ZDAxIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJ1cGxvYWQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjkwNDhjZWNlOWMwM2Y0ZDBmZWFiNzVhNjM5ZDg3NWY1NzYxY2M4ZTYwMjc0ZGFkOWMwMmMzZDNhMDI0YzExYWEiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgdXBsb2FkIiwic2lnIjoiNWJiNDlhZTUzNDJmMzRjMjllNDY4MjdhYTgzM2Y3MzU4YzE2OGQ3MTkyOTE4ZGYyMmI0YmNmNDRjNDRjNTNmOTQwYTc0YzAxZDdiZDg1NmY2YjI4YTQ0YWJhNmMzYTk0M2MxNWIwZTQzOTBlZTYzYjFmYzI3NTg4YzlhNmJiMWIifQ=="],
+          ["X-SHA-256", "9048cece9c03f4d0feab75a639d875f5761cc8e60274dad9c02c3d3a024c11aa"],
+          ["Content-Length", "31"]
+        ],
+        "body": "blob4"
+      },
+      "expect": {
+        "status": 403,
+        "reason": "not-granted"
+      }
+    },
+    {
+      "name": "delete-own",
+      "note": "The uploader deletes its own claim.",
+      "now": 1800003600,
+      "request": {
+        "method": "DELETE",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6IjNlNGQyOGUwMGYyOTc4YjAxOGNkMzAwMmUzNGUxZjJhNDZjZmYwMzJmY2M1YTk4ZGE5ZjFjY2QxZmJlMDliZDMiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJkZWxldGUiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZGVsZXRlIiwic2lnIjoiNGY1MTFiNWEwOTA4N2RhMWEzZWFhMGQyYzk2MmNmMzcwMTAzMTMzNGRjZGE5NTc3ZDcwOWI2YTUzNjVhOTVmMTBlNGEyZGQ4MjM5YzVhZjFiYTJhZjE4NWQ1Y2M4MGZlZmQzOWU2NjY1MjY5YjhmYjFlOTk0ZWNkMjlhY2M0NDQifQ=="]
+        ]
+      },
+      "expect": {
+        "status": 200,
+        "reason": "ok"
+      }
+    },
+    {
+      "name": "delete-journal-week",
+      "note": "A delete token may live a week and a second, matching KithMoot's retry journal.",
+      "now": 1800003600,
+      "request": {
+        "method": "DELETE",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6IjE3NWIyZGYxMTJhMTkzNDRhZTYxNzdlNWZmYmI0MjAzOGM5ZWY5MDUwZDgyODE2NDY1ODc2NzUxYmZjZGQ2OWEiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJkZWxldGUiXSxbImV4cGlyYXRpb24iLCIxODAwNjA4NDAwIl0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZGVsZXRlIiwic2lnIjoiYmVkYTBjMjkyOTgyNDZmODQwZWFmNjkyZmU0NzdjM2UxZmJhMGZjYTI0ZWYwYzhiMmIxMDEzYWQyMTliYWNjMjNmZWIwNDkyMDk1M2QyM2RkZThlZDM4YzlkZWViMGVlYzczNDljZGRmZGMwYWY3MTM5MDU4MjI4MDNmZDU2ZGQifQ=="]
+        ]
+      },
+      "expect": {
+        "status": 200,
+        "reason": "ok"
+      }
+    },
+    {
+      "name": "delete-lifetime-too-long",
+      "note": "One second more than the delete limit.",
+      "now": 1800003600,
+      "request": {
+        "method": "DELETE",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6IjdlNDY5ZmE5OTQyN2I3NjkzYmNmYWE3N2EwNjQ1OTZlMjFiODVhM2IyNDVhMDUwNmVkYjk4MTUzNWU3N2FkNTIiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJkZWxldGUiXSxbImV4cGlyYXRpb24iLCIxODAwNjA4NDAxIl0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZGVsZXRlIiwic2lnIjoiMzQ4ZTE1MjBiNTk2MDMzMTc4OTQ4M2Y2MGFjMmUzNDFiMTAyYjczYTFhM2EwNzE2NzQ3NWU5MDQzMWQ2MjNkMGQ4NzQ4MmQzOTQwMjUyNTRiZDM5NjAwYjNhZDFjMGVmNzNkNzUyODY0ZWQyMzAwYzczMDM5OTMwODI0MGE5YWIifQ=="]
+        ]
+      },
+      "expect": {
+        "status": 401,
+        "reason": "lifetime"
+      }
+    },
+    {
+      "name": "delete-without-scope",
+      "note": "A read-only device cannot delete.",
+      "now": 1800003600,
+      "request": {
+        "method": "DELETE",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6IjliZTgzZDkzODBhMzU2ZDNkNTI5M2NkMmQ0Njc2MmQzZjU2YzI5ZTMwNWNlM2FmNjkyNjFjYjdhNWRhNGI2ZmIiLCJwdWJrZXkiOiI2NGU4YjlhMjlkMGJlNDQxN2Q3MTk3ZDUwOWM4YTBlZjYzNzAzNGRjZDQyMTIwODY3MGM2MmZjMmMwODg3MDAyIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJkZWxldGUiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZGVsZXRlIiwic2lnIjoiMGZmNzZiNGI5YmZmYzk3M2M3OTI5ODNmMjhkMmQ5MmVkMGE1YjM3MjVjMDcyMWI3YjUzMTkwM2U5MGQxMDQ0MmY3NDBiNzIzMmJjMWQ4MDlhODU4NmNlMWJiZWU0ZGY3MzE1ZjAzYWVkYjNhZjc1MTUwNDA1ZmNlMzBlNGUwMjgifQ=="]
+        ]
+      },
+      "expect": {
+        "status": 403,
+        "reason": "not-granted"
+      }
+    },
+    {
+      "name": "delete-not-own",
+      "note": "Carol's device has `delete` but holds no claim in room A's group.",
+      "now": 1800003600,
+      "request": {
+        "method": "DELETE",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6ImNlOWQ3YWZiZGJjZmQ0ZDlkMjMwNWU3OTA4NzkwMzRkODA1MTBkZjYxNGM1MzU5NzhmODRiODRjYjQ1ZDgzOGUiLCJwdWJrZXkiOiI5NmYxZTIyYzNjYWExZTZjOGQ0OTlmODE5Y2QzMzRkOTg3NjM5YTJmNjgwYzA5ZWU2ZjAwZTdiNmRlZGQyMjE5IiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJkZWxldGUiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZGVsZXRlIiwic2lnIjoiMzI5N2NjYWY3ODY4NGJmZTc1MjZmNjJkZGQwODBiNDQwYjBiYWJjM2NmOTE3MmZjNTZjMDM5YzkyNTJiYmFiNDc4YmIyMTNjYThjYWFhM2RlMjU3YTE5NjdmNDI2OTMyYzhkOTU4NzA1NzZmOWNkZGMwZTRkOGYxYzFmODRiM2IifQ=="]
+        ]
+      },
+      "expect": {
+        "status": 404,
+        "reason": "absent"
+      }
+    },
+    {
+      "name": "purge",
+      "note": "The keeper's coordinator removes the group's claims on a blob another device uploaded.",
+      "now": 1800003600,
+      "request": {
+        "method": "DELETE",
+        "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6ImQzMDE1NTRkZmU5ZTQwZGNmMDhmYWI2NTFlODg0NzM5YjlhNGE0MjE1MGFhM2MyYzAyNTY4NWUxMGQ0M2I4ZjQiLCJwdWJrZXkiOiI0OTFlYmZkZDhjYmNiMDAzOWQwYjUxNDlkNTE3ZmVlNWZkMjU0MjAyMzJhYjRlY2MyZDdmZDRmMDkxZDg2OGQ1IiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJkZWxldGUiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZGVsZXRlIiwic2lnIjoiNTc3NjYzOTM2ZjFhZjczMjFjM2UzMWJhMDE4YjZhM2QxMTQzZmY2MDUyMTY2OTBlYWY3Mjg2MDkyNTQzMDhhMGM4NDlkYTI0YjE3ODBhMGIyMWQ1N2Q4N2Q4ZjVhYTYzMmEwMGM1YTZhNThjODg0OTBiNjc0ZGJhMmI4OTM2OTgifQ=="]
+        ]
+      },
+      "expect": {
+        "status": 200,
+        "reason": "ok"
+      }
+    },
+    {
+      "name": "purge-other-group",
+      "note": "Purge reaches only the coordinator's own group.",
+      "now": 1800003600,
+      "request": {
+        "method": "DELETE",
+        "path": "/473b70953f14d3ca9cf138e90a37bd7adc3862061cd980113217f4d769ed7b1c",
+        "headers": [
+          ["Authorization", "Nostr eyJpZCI6IjU0ZmFjYTVlZDM1YmY0ZTJkMjU5NTg3ZmNhOTU0YmNlMjU2OTZkMjYzOTA4YWU2NWUxM2I3MWI4YmU5ODE3MDAiLCJwdWJrZXkiOiI0OTFlYmZkZDhjYmNiMDAzOWQwYjUxNDlkNTE3ZmVlNWZkMjU0MjAyMzJhYjRlY2MyZDdmZDRmMDkxZDg2OGQ1IiwiY3JlYXRlZF9hdCI6MTgwMDAwMzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJkZWxldGUiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjQ3M2I3MDk1M2YxNGQzY2E5Y2YxMzhlOTBhMzdiZDdhZGMzODYyMDYxY2Q5ODAxMTMyMTdmNGQ3NjllZDdiMWMiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZGVsZXRlIiwic2lnIjoiNTI4N2NjMjUzMDU2Y2RiODhjYjQ2M2JlM2ViYjU4ZTUzYjYzZmE0YTIwNDZhNjNkZjEzYjQ5NmM1YjE3ZDJkOTlhNDA0NTFjOGIxNTE0M2RiYmUwNWExZDhkNjM0Y2E4YWI5YWNmMzI3ZTY5ZTQ2MWVhOGRmOWFlMTQyYTY3NjUifQ=="]
+        ]
+      },
+      "expect": {
+        "status": 404,
+        "reason": "absent"
+      }
+    }
+  ],
+  "sequences": [
+    {
+      "name": "renew-revoke-readmit",
+      "note": "Renewal reuses the grant id with a later created_at; revocation is terminal for that id; re-admission uses a new id.",
+      "steps": [
+        {
+          "now": 1800000000,
+          "post": {
+            "id": "84193e037af4c15e383404a0cd0b9aedf601783fa52ee4ca8e332693a811fe49",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1800000000,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+              ["server", "grove.example.net"],
+              ["scope", "upload"],
+              ["scope", "get"],
+              ["scope", "delete"],
+              ["bytes", "1073741824"],
+              ["status", "active"],
+              ["expiration", "1802592000"]
+            ],
+            "content": "",
+            "sig": "420ec29db8fb18e3f69c45c4788edd2d1c6fc9eed4bee70323824ad428f2c695e1b4cd26fd746718725c5367a3af738fc1e1a66476b741aeb0fb1ed44f55844f"
+          },
+          "expect": {
+            "status": 201,
+            "reason": "accepted",
+            "state": "active"
+          }
+        },
+        {
+          "now": 1800000001,
+          "post": {
+            "id": "84193e037af4c15e383404a0cd0b9aedf601783fa52ee4ca8e332693a811fe49",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1800000000,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+              ["server", "grove.example.net"],
+              ["scope", "upload"],
+              ["scope", "get"],
+              ["scope", "delete"],
+              ["bytes", "1073741824"],
+              ["status", "active"],
+              ["expiration", "1802592000"]
+            ],
+            "content": "",
+            "sig": "420ec29db8fb18e3f69c45c4788edd2d1c6fc9eed4bee70323824ad428f2c695e1b4cd26fd746718725c5367a3af738fc1e1a66476b741aeb0fb1ed44f55844f"
+          },
+          "expect": {
+            "status": 200,
+            "reason": "unchanged"
+          }
+        },
+        {
+          "now": 1800864000,
+          "post": {
+            "id": "4ef6dfe6f2874809f89e1f73dd6172122244b758667512d7e571220a8d8a2ee8",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1800864000,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+              ["server", "grove.example.net"],
+              ["scope", "upload"],
+              ["scope", "get"],
+              ["scope", "delete"],
+              ["bytes", "1073741824"],
+              ["status", "active"],
+              ["expiration", "1803456000"]
+            ],
+            "content": "",
+            "sig": "5e0d0920b7f2adfa8061aeb4fbdf791e38da3ddfe8f5f9ecca56f690d1e2376e911bf854bd8ede370a2f4e84a8e81c6542e70b661181d8decf9c83dc9a400d94"
+          },
+          "expect": {
+            "status": 201,
+            "reason": "accepted",
+            "state": "active"
+          }
+        },
+        {
+          "now": 1800864000,
+          "post": {
+            "id": "84193e037af4c15e383404a0cd0b9aedf601783fa52ee4ca8e332693a811fe49",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1800000000,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+              ["server", "grove.example.net"],
+              ["scope", "upload"],
+              ["scope", "get"],
+              ["scope", "delete"],
+              ["bytes", "1073741824"],
+              ["status", "active"],
+              ["expiration", "1802592000"]
+            ],
+            "content": "",
+            "sig": "420ec29db8fb18e3f69c45c4788edd2d1c6fc9eed4bee70323824ad428f2c695e1b4cd26fd746718725c5367a3af738fc1e1a66476b741aeb0fb1ed44f55844f"
+          },
+          "expect": {
+            "status": 409,
+            "reason": "stale"
+          }
+        },
+        {
+          "now": 1800864000,
+          "check": {
+            "key": "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350",
+            "scope": "get"
+          },
+          "expect": {
+            "granted": true
+          }
+        },
+        {
+          "now": 1800950400,
+          "post": {
+            "id": "f2461470ed11832d9febfe7535b5cbbea87a57236a846da03eab6cd60c2fb248",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1800950400,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+              ["server", "grove.example.net"],
+              ["scope", "upload"],
+              ["scope", "get"],
+              ["scope", "delete"],
+              ["bytes", "1073741824"],
+              ["status", "revoked"],
+              ["expiration", "1803456000"]
+            ],
+            "content": "",
+            "sig": "e2e7adbb5dad46e8b6929b8dde453d90f7a9b92bbffa4b72420d22fe775f8e199a7392ee36cb0cf3fee2ec507deb74819d5945671a2e3b01eea2d0faa3cb966f"
+          },
+          "expect": {
+            "status": 201,
+            "reason": "accepted",
+            "state": "revoked"
+          }
+        },
+        {
+          "now": 1800950400,
+          "check": {
+            "key": "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350",
+            "scope": "get"
+          },
+          "expect": {
+            "granted": false
+          }
+        },
+        {
+          "now": 1800950400,
+          "post": {
+            "id": "4ef6dfe6f2874809f89e1f73dd6172122244b758667512d7e571220a8d8a2ee8",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1800864000,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+              ["server", "grove.example.net"],
+              ["scope", "upload"],
+              ["scope", "get"],
+              ["scope", "delete"],
+              ["bytes", "1073741824"],
+              ["status", "active"],
+              ["expiration", "1803456000"]
+            ],
+            "content": "",
+            "sig": "5e0d0920b7f2adfa8061aeb4fbdf791e38da3ddfe8f5f9ecca56f690d1e2376e911bf854bd8ede370a2f4e84a8e81c6542e70b661181d8decf9c83dc9a400d94"
+          },
+          "expect": {
+            "status": 409,
+            "reason": "stale"
+          }
+        },
+        {
+          "now": 1801036800,
+          "post": {
+            "id": "204dd9ef1b9d6a1a28c362914ddccbce8b2423944871bc70af2d3cb21da329f2",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1801036800,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+              ["server", "grove.example.net"],
+              ["scope", "upload"],
+              ["scope", "get"],
+              ["scope", "delete"],
+              ["bytes", "1073741824"],
+              ["status", "active"],
+              ["expiration", "1803628800"]
+            ],
+            "content": "",
+            "sig": "24b4a4a8dbd7ac38888f03fb033cb0e3a1193ee101f6271eea93bec7fc0ad7830a6af02e5bce54a38d8e80921082550a562f4fdab3118fb39018d6b46caf52ca"
+          },
+          "expect": {
+            "status": 409,
+            "reason": "revoked"
+          }
+        },
+        {
+          "now": 1801036800,
+          "post": {
+            "id": "2ee42e5129ff24c2c40e184653e4303cdf0f7fdffe12c35e014c2f3c7daa59a8",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1801036800,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "952328078c33d597945510ac046abc96"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+              ["server", "grove.example.net"],
+              ["scope", "upload"],
+              ["scope", "get"],
+              ["scope", "delete"],
+              ["bytes", "1073741824"],
+              ["status", "active"],
+              ["expiration", "1803628800"]
+            ],
+            "content": "",
+            "sig": "273516bf2826f9559fff71f02320602c6a18fde224bedfe15112af79798f6eb2869e4e7370364241c5ef82ae6670ae6c8d8d907c93a77c637b98fc0462d6f67a"
+          },
+          "expect": {
+            "status": 201,
+            "reason": "accepted",
+            "state": "active"
+          }
+        },
+        {
+          "now": 1801036800,
+          "check": {
+            "key": "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350",
+            "scope": "get"
+          },
+          "expect": {
+            "granted": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "revocation-before-grant",
+      "note": "A node that was offline gets the revocation (from the keeper or any member) before the device posts its old grant.",
+      "steps": [
+        {
+          "now": 1800086400,
+          "post": {
+            "id": "f8d47a6d1ff115b383fec307796e9548e0366ce4056ee7d8ecd70429afc872fd",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1800086400,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+              ["server", "grove.example.net"],
+              ["scope", "upload"],
+              ["scope", "get"],
+              ["scope", "delete"],
+              ["bytes", "1073741824"],
+              ["status", "revoked"],
+              ["expiration", "1802592000"]
+            ],
+            "content": "",
+            "sig": "6d064f5e6519ad78d758bd2382dcb3398dd5a388e4e5329135773c5a918cec0bef46d184f74b0dd035452f0941726e12fe2cb3acc881e3837402994ea22e3e16"
+          },
+          "expect": {
+            "status": 201,
+            "reason": "accepted",
+            "state": "revoked"
+          }
+        },
+        {
+          "now": 1800086405,
+          "post": {
+            "id": "84193e037af4c15e383404a0cd0b9aedf601783fa52ee4ca8e332693a811fe49",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1800000000,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+              ["server", "grove.example.net"],
+              ["scope", "upload"],
+              ["scope", "get"],
+              ["scope", "delete"],
+              ["bytes", "1073741824"],
+              ["status", "active"],
+              ["expiration", "1802592000"]
+            ],
+            "content": "",
+            "sig": "420ec29db8fb18e3f69c45c4788edd2d1c6fc9eed4bee70323824ad428f2c695e1b4cd26fd746718725c5367a3af738fc1e1a66476b741aeb0fb1ed44f55844f"
+          },
+          "expect": {
+            "status": 409,
+            "reason": "stale"
+          }
+        },
+        {
+          "now": 1800086405,
+          "check": {
+            "key": "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350",
+            "scope": "get"
+          },
+          "expect": {
+            "granted": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "reset-and-regrant",
+      "note": "A reset ends every grant of the room at the node that is not newer than it; later grants or renewals land again.",
+      "steps": [
+        {
+          "now": 1800000000,
+          "post": {
+            "id": "84193e037af4c15e383404a0cd0b9aedf601783fa52ee4ca8e332693a811fe49",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1800000000,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+              ["server", "grove.example.net"],
+              ["scope", "upload"],
+              ["scope", "get"],
+              ["scope", "delete"],
+              ["bytes", "1073741824"],
+              ["status", "active"],
+              ["expiration", "1802592000"]
+            ],
+            "content": "",
+            "sig": "420ec29db8fb18e3f69c45c4788edd2d1c6fc9eed4bee70323824ad428f2c695e1b4cd26fd746718725c5367a3af738fc1e1a66476b741aeb0fb1ed44f55844f"
+          },
+          "expect": {
+            "status": 201,
+            "reason": "accepted",
+            "state": "active"
+          }
+        },
+        {
+          "now": 1800000000,
+          "post": {
+            "id": "2479170691e635e7407de87953e920f341ecfcb0b3181eb95b3100d913cb86eb",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1800000000,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "847fc938da23190e3685ad6b78fc13ce"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["device", "64e8b9a29d0be4417d7197d509c8a0ef637034dcd421208670c62fc2c0887002"],
+              ["server", "grove.example.net"],
+              ["scope", "get"],
+              ["status", "active"],
+              ["expiration", "1802592000"]
+            ],
+            "content": "",
+            "sig": "4614c2beb127e0184fc3626b9d2f296920bb5dd54f5620f3801c42d9bb15dfbc82f876fa87654e2c12f6db3f70f79e1f13e28193ee8aea85fdc41e68d6a06509"
+          },
+          "expect": {
+            "status": 201,
+            "reason": "accepted",
+            "state": "active"
+          }
+        },
+        {
+          "now": 1800086400,
+          "post": {
+            "id": "32a08c6b46baf13272fadb810b5c466f21441903b09f142fd043ad11a0913f51",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1800086400,
+            "kind": 27541,
+            "tags": [
+              ["t", "reset"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["server", "grove.example.net"],
+              ["expiration", "1807862400"]
+            ],
+            "content": "",
+            "sig": "08a94fe5d67d5b25118101ffa25f3c7c4fdb3f5c267b3f43ecce78494a8732c4f0c0e802bef8de3093a5b40a4b1ad4020cc48e98274738c70dc899768143b17b"
+          },
+          "expect": {
+            "status": 201,
+            "reason": "accepted",
+            "state": "reset"
+          }
+        },
+        {
+          "now": 1800086400,
+          "check": {
+            "key": "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350",
+            "scope": "get"
+          },
+          "expect": {
+            "granted": false
+          }
+        },
+        {
+          "now": 1800086400,
+          "check": {
+            "key": "64e8b9a29d0be4417d7197d509c8a0ef637034dcd421208670c62fc2c0887002",
+            "scope": "get"
+          },
+          "expect": {
+            "granted": false
+          }
+        },
+        {
+          "now": 1800086400,
+          "post": {
+            "id": "ecf925a4139ade0ca505a7c38c2055a2b118673cbc827d3fa6539253e8f707eb",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1800086400,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+              ["server", "grove.example.net"],
+              ["scope", "upload"],
+              ["scope", "get"],
+              ["scope", "delete"],
+              ["bytes", "1073741824"],
+              ["status", "active"],
+              ["expiration", "1802678400"]
+            ],
+            "content": "",
+            "sig": "fe60d92366932c17873fbaaf42aae43da5e6f6749e594aa92cd34dcb23d489525e32fa56ecf64de7b914243656780bb899f252a960fcea5fa67050b855400a5d"
+          },
+          "expect": {
+            "status": 409,
+            "reason": "floor"
+          }
+        },
+        {
+          "now": 1800086401,
+          "post": {
+            "id": "f3134c51b52d27ea2e77a4dc8cfd15d50f93d7501fd5cb6901bded7915e6d5ac",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1800086401,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+              ["server", "grove.example.net"],
+              ["scope", "upload"],
+              ["scope", "get"],
+              ["scope", "delete"],
+              ["bytes", "1073741824"],
+              ["status", "active"],
+              ["expiration", "1802678400"]
+            ],
+            "content": "",
+            "sig": "ffd3f925551c4cbea1bf64c22107ab7ec2578e09a3ab9c7c48735b79a660f9b9a96947774719ab7ccf1227803196a1588cbad489fdde70ca34acaa00667e3556"
+          },
+          "expect": {
+            "status": 201,
+            "reason": "accepted",
+            "state": "active"
+          }
+        },
+        {
+          "now": 1800086401,
+          "check": {
+            "key": "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350",
+            "scope": "get"
+          },
+          "expect": {
+            "granted": true
+          }
+        },
+        {
+          "now": 1800086401,
+          "check": {
+            "key": "64e8b9a29d0be4417d7197d509c8a0ef637034dcd421208670c62fc2c0887002",
+            "scope": "get"
+          },
+          "expect": {
+            "granted": false
+          }
+        },
+        {
+          "now": 1800086402,
+          "post": {
+            "id": "f98c757f3fd27eb594f41ae7607f55d743a977e73963b8d0099499356c47e172",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1800043200,
+            "kind": 27541,
+            "tags": [
+              ["t", "reset"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["server", "grove.example.net"],
+              ["expiration", "1807819200"]
+            ],
+            "content": "",
+            "sig": "2cee3f4a285b09bc06793d3c9f59d3e748a639845579e775f9464133949d674ea0724d271d5de61b994d074df5c1a7850a3289485e88c7cc570f0a51a3a8db46"
+          },
+          "expect": {
+            "status": 409,
+            "reason": "stale"
+          }
+        }
+      ]
+    },
+    {
+      "name": "same-second",
+      "note": "Two different events for one grant id in the same second: the second is refused, so the keeper signs again a second later.",
+      "steps": [
+        {
+          "now": 1800000000,
+          "post": {
+            "id": "84193e037af4c15e383404a0cd0b9aedf601783fa52ee4ca8e332693a811fe49",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1800000000,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+              ["server", "grove.example.net"],
+              ["scope", "upload"],
+              ["scope", "get"],
+              ["scope", "delete"],
+              ["bytes", "1073741824"],
+              ["status", "active"],
+              ["expiration", "1802592000"]
+            ],
+            "content": "",
+            "sig": "420ec29db8fb18e3f69c45c4788edd2d1c6fc9eed4bee70323824ad428f2c695e1b4cd26fd746718725c5367a3af738fc1e1a66476b741aeb0fb1ed44f55844f"
+          },
+          "expect": {
+            "status": 201,
+            "reason": "accepted",
+            "state": "active"
+          }
+        },
+        {
+          "now": 1800000000,
+          "post": {
+            "id": "2b28d2602a039d226f156e2e33ee275515315c05575589ec05a89b55c23d11a1",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1800000000,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+              ["server", "grove.example.net"],
+              ["scope", "upload"],
+              ["scope", "get"],
+              ["scope", "delete"],
+              ["bytes", "2147483648"],
+              ["status", "active"],
+              ["expiration", "1802592000"]
+            ],
+            "content": "",
+            "sig": "ffed74b43e0fb99ef17a8423e3d9e2d82a571ed65c7aef7d9a0cb8e59c29dba6fb5a41fae64e4963105d6892f61ab37c8bfd240ac055df7bb0e086fbcd0d5e79"
+          },
+          "expect": {
+            "status": 409,
+            "reason": "stale"
+          }
+        },
+        {
+          "now": 1800000001,
+          "post": {
+            "id": "6d59d2b002a5ab8f9a6bf06c14883dccdfd5690e2598649b959f0d8374750fbc",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1800000001,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+              ["server", "grove.example.net"],
+              ["scope", "upload"],
+              ["scope", "get"],
+              ["scope", "delete"],
+              ["bytes", "2147483648"],
+              ["status", "active"],
+              ["expiration", "1802592001"]
+            ],
+            "content": "",
+            "sig": "e329fc746625c354c70df0ce77d1968f557b32f57e0de77c17b73034a414335a0f8bd184a03566dd271b4fad596dd0e893024bc3ffcb62ca9f1ef47171dd8c8a"
+          },
+          "expect": {
+            "status": 201,
+            "reason": "accepted",
+            "state": "active"
+          }
+        }
+      ]
+    },
+    {
+      "name": "one-grant-per-device-and-node",
+      "note": "A grant id's scope (room, device, node) never changes, and a device has one active grant per room and node.",
+      "steps": [
+        {
+          "now": 1800000000,
+          "post": {
+            "id": "84193e037af4c15e383404a0cd0b9aedf601783fa52ee4ca8e332693a811fe49",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1800000000,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+              ["server", "grove.example.net"],
+              ["scope", "upload"],
+              ["scope", "get"],
+              ["scope", "delete"],
+              ["bytes", "1073741824"],
+              ["status", "active"],
+              ["expiration", "1802592000"]
+            ],
+            "content": "",
+            "sig": "420ec29db8fb18e3f69c45c4788edd2d1c6fc9eed4bee70323824ad428f2c695e1b4cd26fd746718725c5367a3af738fc1e1a66476b741aeb0fb1ed44f55844f"
+          },
+          "expect": {
+            "status": 201,
+            "reason": "accepted",
+            "state": "active"
+          }
+        },
+        {
+          "now": 1800000001,
+          "post": {
+            "id": "73191161aa4f5850d41a1098d82319445ccaa9f137479f2046e83c5b4c6e7e65",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1800000001,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "04c72d7b15563a835704f304639e0a81"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+              ["server", "grove.example.net"],
+              ["scope", "get"],
+              ["status", "active"],
+              ["expiration", "1802592000"]
+            ],
+            "content": "",
+            "sig": "26ada0c80ebf43d0bfa1cd29441184ef339f559148423613d98845679e6073b2f36e2e28706d7de60906b4e16b9e7235822b9a3550cf7c1e2c338fd346472190"
+          },
+          "expect": {
+            "status": 409,
+            "reason": "scope-taken"
+          }
+        },
+        {
+          "now": 1800000002,
+          "post": {
+            "id": "ec2156a11fd2a395ad6d4ece1f220ba18252cf13b6f16d8f543f13b23e7b0a1f",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1800000002,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["device", "64e8b9a29d0be4417d7197d509c8a0ef637034dcd421208670c62fc2c0887002"],
+              ["server", "grove.example.net"],
+              ["scope", "get"],
+              ["status", "active"],
+              ["expiration", "1802592000"]
+            ],
+            "content": "",
+            "sig": "f79a8b4a5d34ca73905f34e780584530674c9ae1ebae71f10559ecee8f78f5f3c82c94ebf6e995154a4177b00d57ddaefa6c1b5387cd5b7851cce3c86ee7655f"
+          },
+          "expect": {
+            "status": 409,
+            "reason": "scope-changed"
+          }
+        }
+      ]
+    },
+    {
+      "name": "expiry-boundary",
+      "note": "A grant is active until the second before its expiration.",
+      "steps": [
+        {
+          "now": 1800000000,
+          "post": {
+            "id": "84193e037af4c15e383404a0cd0b9aedf601783fa52ee4ca8e332693a811fe49",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1800000000,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+              ["server", "grove.example.net"],
+              ["scope", "upload"],
+              ["scope", "get"],
+              ["scope", "delete"],
+              ["bytes", "1073741824"],
+              ["status", "active"],
+              ["expiration", "1802592000"]
+            ],
+            "content": "",
+            "sig": "420ec29db8fb18e3f69c45c4788edd2d1c6fc9eed4bee70323824ad428f2c695e1b4cd26fd746718725c5367a3af738fc1e1a66476b741aeb0fb1ed44f55844f"
+          },
+          "expect": {
+            "status": 201,
+            "reason": "accepted",
+            "state": "active"
+          }
+        },
+        {
+          "now": 1802591999,
+          "check": {
+            "key": "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350",
+            "scope": "upload"
+          },
+          "expect": {
+            "granted": true
+          }
+        },
+        {
+          "now": 1802592000,
+          "check": {
+            "key": "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350",
+            "scope": "upload"
+          },
+          "expect": {
+            "granted": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "scope-is-per-grant",
+      "note": "A read-only grant does not allow uploads or deletes.",
+      "steps": [
+        {
+          "now": 1800000000,
+          "post": {
+            "id": "2479170691e635e7407de87953e920f341ecfcb0b3181eb95b3100d913cb86eb",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1800000000,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "847fc938da23190e3685ad6b78fc13ce"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["device", "64e8b9a29d0be4417d7197d509c8a0ef637034dcd421208670c62fc2c0887002"],
+              ["server", "grove.example.net"],
+              ["scope", "get"],
+              ["status", "active"],
+              ["expiration", "1802592000"]
+            ],
+            "content": "",
+            "sig": "4614c2beb127e0184fc3626b9d2f296920bb5dd54f5620f3801c42d9bb15dfbc82f876fa87654e2c12f6db3f70f79e1f13e28193ee8aea85fdc41e68d6a06509"
+          },
+          "expect": {
+            "status": 201,
+            "reason": "accepted",
+            "state": "active"
+          }
+        },
+        {
+          "now": 1800000000,
+          "check": {
+            "key": "64e8b9a29d0be4417d7197d509c8a0ef637034dcd421208670c62fc2c0887002",
+            "scope": "get"
+          },
+          "expect": {
+            "granted": true
+          }
+        },
+        {
+          "now": 1800000000,
+          "check": {
+            "key": "64e8b9a29d0be4417d7197d509c8a0ef637034dcd421208670c62fc2c0887002",
+            "scope": "upload"
+          },
+          "expect": {
+            "granted": false
+          }
+        },
+        {
+          "now": 1800000000,
+          "check": {
+            "key": "64e8b9a29d0be4417d7197d509c8a0ef637034dcd421208670c62fc2c0887002",
+            "scope": "delete"
+          },
+          "expect": {
+            "granted": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "key-in-two-rooms",
+      "note": "A device key belongs to one group at a node. KithMoot device keys are per room, so this only refuses a mistake or an attack.",
+      "steps": [
+        {
+          "now": 1800000000,
+          "post": {
+            "id": "84193e037af4c15e383404a0cd0b9aedf601783fa52ee4ca8e332693a811fe49",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1800000000,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+              ["server", "grove.example.net"],
+              ["scope", "upload"],
+              ["scope", "get"],
+              ["scope", "delete"],
+              ["bytes", "1073741824"],
+              ["status", "active"],
+              ["expiration", "1802592000"]
+            ],
+            "content": "",
+            "sig": "420ec29db8fb18e3f69c45c4788edd2d1c6fc9eed4bee70323824ad428f2c695e1b4cd26fd746718725c5367a3af738fc1e1a66476b741aeb0fb1ed44f55844f"
+          },
+          "expect": {
+            "status": 201,
+            "reason": "accepted",
+            "state": "active"
+          }
+        },
+        {
+          "now": 1800000000,
+          "post": {
+            "id": "c4dddfc3efbbcac04952e12e6b3c3048c4a0a7405d9f6a3276e7ddc6169dc11b",
+            "pubkey": "b848cd989d099f2b52fb1ebb3ad689fbd081b53b511f272b3a500ddce8fab9d5",
+            "created_at": 1800000000,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "c175547264945b77f4d3a4c9e5fadff9"],
+              ["d", "fcdc853ddc1be7f7d978367e1a5156b55f11e4c22a49db949f5bb939a303762a"],
+              ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+              ["server", "grove.example.net"],
+              ["scope", "get"],
+              ["status", "active"],
+              ["expiration", "1802592000"]
+            ],
+            "content": "",
+            "sig": "a9d4dc698f68dd682b152763a1baa7183cfbfeb2f0456609e64078e9d9a198d9bd74f2987fdd75897e004dbbda6735fb5354eb7bc2f3656fa1e8a4e4aed30c2f"
+          },
+          "expect": {
+            "status": 409,
+            "reason": "key-conflict"
+          }
+        }
+      ]
+    },
+    {
+      "name": "delete-replay-and-grace",
+      "note": "A delete token is spent once; a revoked device keeps only deletion of its own claims, for seven days.",
+      "steps": [
+        {
+          "now": 1800000000,
+          "post": {
+            "id": "84193e037af4c15e383404a0cd0b9aedf601783fa52ee4ca8e332693a811fe49",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1800000000,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+              ["server", "grove.example.net"],
+              ["scope", "upload"],
+              ["scope", "get"],
+              ["scope", "delete"],
+              ["bytes", "1073741824"],
+              ["status", "active"],
+              ["expiration", "1802592000"]
+            ],
+            "content": "",
+            "sig": "420ec29db8fb18e3f69c45c4788edd2d1c6fc9eed4bee70323824ad428f2c695e1b4cd26fd746718725c5367a3af738fc1e1a66476b741aeb0fb1ed44f55844f"
+          },
+          "expect": {
+            "status": 201,
+            "reason": "accepted",
+            "state": "active"
+          }
+        },
+        {
+          "now": 1800000060,
+          "request": {
+            "method": "PUT",
+            "path": "/upload",
+            "headers": [
+              ["Authorization", "Nostr eyJpZCI6IjQ3NWQxODI3M2JiYmQxY2Q0ODY1YzM3MDA0ZGM0ODZiMWNlMDE2M2M4NmFkYWFiOTQ0Mzc2NDZiMDk3ZjFhMjEiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMDA1OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJ1cGxvYWQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAwMTE5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgdXBsb2FkIiwic2lnIjoiN2RjNDllNDk0NjI3MTJlM2IxNGJhMTIyYWYwY2M0NzI3OWFiNGNkMGUwMmM4ZGQ4YzcyOGFjNjg3YmU3NWQwOGFjYmJhNGE5YjRlMzkyYzBlOGYxYTA3NDAxOWM5YTI3YzI4MjE1ZDIxZjg2YTI1MTkyYWVmYWEwZTA1N2EyZWEifQ=="],
+              ["X-SHA-256", "9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd"],
+              ["Content-Length", "31"]
+            ],
+            "body": "blob1"
+          },
+          "expect": {
+            "status": 201,
+            "reason": "created"
+          }
+        },
+        {
+          "now": 1800000060,
+          "request": {
+            "method": "PUT",
+            "path": "/upload",
+            "headers": [
+              ["Authorization", "Nostr eyJpZCI6ImE0YzhhNmE5NmRhYzNmMWI5NjYwNTJkOWZkNTQ1ZGIzODNhNzA3YmNjNmUzODE2NWU0MjFlYmRiNjE3Yzg3OTIiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMDA1OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJ1cGxvYWQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAwMTE5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjkwNDhjZWNlOWMwM2Y0ZDBmZWFiNzVhNjM5ZDg3NWY1NzYxY2M4ZTYwMjc0ZGFkOWMwMmMzZDNhMDI0YzExYWEiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgdXBsb2FkIiwic2lnIjoiNDgzMjk3NzYzYjJkMzBhNjM2NTQ2NThlN2ZmZWYyOGQ5MWQ5YWQwYzdlYzBjOTliNTlmYjY0N2NhMzA4NDQ3ZmFjNmZjZTExOTI3MjY0ZDM0MWNlNTk0NjJhYjMwMmQxZGFiYTdkZjc0MTg1OGI5YjlkOTcyOGI4ZTlkMjU4OTkifQ=="],
+              ["X-SHA-256", "9048cece9c03f4d0feab75a639d875f5761cc8e60274dad9c02c3d3a024c11aa"],
+              ["Content-Length", "31"]
+            ],
+            "body": "blob4"
+          },
+          "expect": {
+            "status": 201,
+            "reason": "created"
+          }
+        },
+        {
+          "now": 1800003601,
+          "request": {
+            "method": "DELETE",
+            "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+            "headers": [
+              ["Authorization", "Nostr eyJpZCI6ImMxOGJjZWRiNzg1MWYyMmNmMDYxNTA2OGIwZDFkOWYxODNkZmU5NmE3ZmI0OTM2YzAwZjY2MGI5ZTdjMGI3NmQiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzYwMCwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJkZWxldGUiXSxbImV4cGlyYXRpb24iLCIxODAwNjA4NDAxIl0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZGVsZXRlIiwic2lnIjoiNWZkYmI3OGE5MWY0NjE4YTYzOTJkOGIwMmNiZTAyODUxNGVjMWE1ZDJmNmFjMGNmMjMwNjVmZWMyMDBjMjBhM2Q1ZGE5ZjJmYWVmMWIxNjkyZTYyOTRlMTlkNWM0YTUyODgyY2JhMzgxZDZlMWZiNTc5YjM2N2RjM2I3OTZmYmYifQ=="]
+            ]
+          },
+          "expect": {
+            "status": 200,
+            "reason": "ok"
+          }
+        },
+        {
+          "now": 1800003602,
+          "request": {
+            "method": "DELETE",
+            "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+            "headers": [
+              ["Authorization", "Nostr eyJpZCI6ImMxOGJjZWRiNzg1MWYyMmNmMDYxNTA2OGIwZDFkOWYxODNkZmU5NmE3ZmI0OTM2YzAwZjY2MGI5ZTdjMGI3NmQiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzYwMCwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJkZWxldGUiXSxbImV4cGlyYXRpb24iLCIxODAwNjA4NDAxIl0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZGVsZXRlIiwic2lnIjoiNWZkYmI3OGE5MWY0NjE4YTYzOTJkOGIwMmNiZTAyODUxNGVjMWE1ZDJmNmFjMGNmMjMwNjVmZWMyMDBjMjBhM2Q1ZGE5ZjJmYWVmMWIxNjkyZTYyOTRlMTlkNWM0YTUyODgyY2JhMzgxZDZlMWZiNTc5YjM2N2RjM2I3OTZmYmYifQ=="]
+            ]
+          },
+          "expect": {
+            "status": 404,
+            "reason": "absent"
+          }
+        },
+        {
+          "now": 1800003660,
+          "request": {
+            "method": "PUT",
+            "path": "/upload",
+            "headers": [
+              ["Authorization", "Nostr eyJpZCI6ImViYzVkOGNjNzM1OTRkNmU5OWE3ZTllYzUyNjcwNjMyMGQ4YzU5YjJiMDY4MjU5ZWM0Yjc0MzgxM2FiYmEyNDMiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzY1OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJ1cGxvYWQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAzNzE5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgdXBsb2FkIiwic2lnIjoiM2E3NjEzMzhiNWQ1MWY0NTgyNGU2MmM2ZDAwNWI2N2MxMWQ3MDgxMGE2ZDlmNDZmMWY3N2EzYjliYjcwNWJiODZmYjMwM2NmYjdkODM1YzQ5Nzc1YzM2YmQzYzY1NjAyYmIwNGJhNmQ3NTM1YWRiZjgwOWFiZmViMzUxODEyZmEifQ=="],
+              ["X-SHA-256", "9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd"],
+              ["Content-Length", "31"]
+            ],
+            "body": "blob1"
+          },
+          "expect": {
+            "status": 201,
+            "reason": "created"
+          }
+        },
+        {
+          "now": 1800003661,
+          "request": {
+            "method": "DELETE",
+            "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+            "headers": [
+              ["Authorization", "Nostr eyJpZCI6ImMxOGJjZWRiNzg1MWYyMmNmMDYxNTA2OGIwZDFkOWYxODNkZmU5NmE3ZmI0OTM2YzAwZjY2MGI5ZTdjMGI3NmQiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMzYwMCwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJkZWxldGUiXSxbImV4cGlyYXRpb24iLCIxODAwNjA4NDAxIl0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZGVsZXRlIiwic2lnIjoiNWZkYmI3OGE5MWY0NjE4YTYzOTJkOGIwMmNiZTAyODUxNGVjMWE1ZDJmNmFjMGNmMjMwNjVmZWMyMDBjMjBhM2Q1ZGE5ZjJmYWVmMWIxNjkyZTYyOTRlMTlkNWM0YTUyODgyY2JhMzgxZDZlMWZiNTc5YjM2N2RjM2I3OTZmYmYifQ=="]
+            ]
+          },
+          "expect": {
+            "status": 409,
+            "reason": "spent"
+          }
+        },
+        {
+          "now": 1800172800,
+          "post": {
+            "id": "4bb08924bc04c1a58e5aee1a9ae3b523a27df38940d6799a3f24a67da93a6fff",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1800172800,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+              ["server", "grove.example.net"],
+              ["scope", "upload"],
+              ["scope", "get"],
+              ["scope", "delete"],
+              ["bytes", "1073741824"],
+              ["status", "revoked"],
+              ["expiration", "1802592000"]
+            ],
+            "content": "",
+            "sig": "67abe50bb3bd1aef7363237a5e8c728f68b967c6ff0b380d5714a9b1bcab4029679d0007e2d49764824b8cb03a16f7bb65b6764dd6b0bff169ac32f6f5fc8808"
+          },
+          "expect": {
+            "status": 201,
+            "reason": "accepted",
+            "state": "revoked"
+          }
+        },
+        {
+          "now": 1800172860,
+          "request": {
+            "method": "GET",
+            "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+            "headers": [
+              ["Authorization", "Nostr eyJpZCI6ImM2Y2FkZDk2MTA1N2EzMzUxNzk0N2QwYjk1MWI1ZTUyNzJjODAwN2ZmNmVmNDEyNTMzYzIxNzJmMTk1YzI1NmYiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDE3Mjg1OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJnZXQiXSxbImV4cGlyYXRpb24iLCIxODAwMTcyOTE5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZ2V0Iiwic2lnIjoiMzJiYjY2MjQwNDQ2MjM2YzYxZjgzOWM1MWVkYWQyNjM2NTQxMDdiNTIwYmRkNmFjMTM5YjQyNDRlNDZmYzA3ZWFiZmNjODUzMDEzYjU2MmJjOGNkMWVkNmNhY2RjZWM0NDdjNWY1NDMyZWMxMjAzNGZmYzQ4MmNlYzE0NDY0NGEifQ=="]
+            ]
+          },
+          "expect": {
+            "status": 403,
+            "reason": "not-granted"
+          }
+        },
+        {
+          "now": 1800172860,
+          "request": {
+            "method": "PUT",
+            "path": "/upload",
+            "headers": [
+              ["Authorization", "Nostr eyJpZCI6IjA4OTg3OTE2OWQ5ZTc3YWFhNDM4YWQzODI4ZGYzZTYyMTI0ZThiYTk3MDQxOGNkNTU3ZGEzNmU4ODg5M2NmOTMiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDE3Mjg1OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJ1cGxvYWQiXSxbImV4cGlyYXRpb24iLCIxODAwMTcyOTE5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjkwNDhjZWNlOWMwM2Y0ZDBmZWFiNzVhNjM5ZDg3NWY1NzYxY2M4ZTYwMjc0ZGFkOWMwMmMzZDNhMDI0YzExYWEiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgdXBsb2FkIiwic2lnIjoiNGU1ZDljM2UzMTg5MzA4NjNkZjUwMDBhZDQ1ZjU0ZjY4OTE0NDc0MThjOWE2ZTQ3ZmRlMzA3ZThmODE1Y2I5MzYyOTk0MDliNzZiNDBlNDExOGE3OGRiNDJiMzU2Yzg3YTBlN2EwNmYxMDkxZDVjMjZjYjY2NDZlYzFkMmFmMjgifQ=="],
+              ["X-SHA-256", "9048cece9c03f4d0feab75a639d875f5761cc8e60274dad9c02c3d3a024c11aa"],
+              ["Content-Length", "31"]
+            ],
+            "body": "blob4"
+          },
+          "expect": {
+            "status": 403,
+            "reason": "not-granted"
+          }
+        },
+        {
+          "now": 1800172920,
+          "request": {
+            "method": "DELETE",
+            "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+            "headers": [
+              ["Authorization", "Nostr eyJpZCI6IjY5Yzk4OTk1M2E0ODc5ZDY1ZTZmODU3MzNmOTY1NGZjMjlmOTE2MTg3NzRjZmZkZmU3MDllMWY3YzE3Y2Y0YTUiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDE3MjkxOSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJkZWxldGUiXSxbImV4cGlyYXRpb24iLCIxODAwMTcyOTc5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZGVsZXRlIiwic2lnIjoiZDBkMDRlMDU0MzQzOThiMzhkNmE4NWZhMTU2NDUyYzg1MjM2MTQ4MDlkZWQxZTJmZWIxOTVlZDY4YjNlMTczMjcxNzFkZGEwYTQxMmY4N2Y4NWYyOTU2MjBlNmFjMDAyMmY0NmRkMzViMWJkYzk4NTQ3Nzg3NjI0ZjljZjRhY2UifQ=="]
+            ]
+          },
+          "expect": {
+            "status": 200,
+            "reason": "ok"
+          }
+        },
+        {
+          "now": 1800777600,
+          "request": {
+            "method": "DELETE",
+            "path": "/9048cece9c03f4d0feab75a639d875f5761cc8e60274dad9c02c3d3a024c11aa",
+            "headers": [
+              ["Authorization", "Nostr eyJpZCI6ImM3NDRlOTY4NDE4MzI0MDYyYTkwNWJkNjUyYTJmMTMxYTNlNWUxYmNlMjI2YWFiMTI0MzEzMTY2Y2JjYTdlNjYiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDc3NzU5OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJkZWxldGUiXSxbImV4cGlyYXRpb24iLCIxODAwNzc3NjU5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjkwNDhjZWNlOWMwM2Y0ZDBmZWFiNzVhNjM5ZDg3NWY1NzYxY2M4ZTYwMjc0ZGFkOWMwMmMzZDNhMDI0YzExYWEiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZGVsZXRlIiwic2lnIjoiNDk2YjcwMWNiYjYyYmFkZWJlZDg2YzhlMWUyYzZhNmEzYTgzNGFmZmFjMDE2NDIxMDYxNWE4NjEyYmM3M2FlYWRlZmU2ZDdkNDdiNTlhYzdiZjcxYTY1ZDgxNjU1OTc5ODEzYzljYjExMjg1NDg0ZGFkMzg1M2M0ZTY1N2FhNmEifQ=="]
+            ]
+          },
+          "expect": {
+            "status": 403,
+            "reason": "not-granted"
+          }
+        }
+      ]
+    },
+    {
+      "name": "removed-device-cannot-read",
+      "note": "Group claims stay with the group when the uploader is removed: other members still read, the removed device does not.",
+      "steps": [
+        {
+          "now": 1800000000,
+          "post": {
+            "id": "84193e037af4c15e383404a0cd0b9aedf601783fa52ee4ca8e332693a811fe49",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1800000000,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+              ["server", "grove.example.net"],
+              ["scope", "upload"],
+              ["scope", "get"],
+              ["scope", "delete"],
+              ["bytes", "1073741824"],
+              ["status", "active"],
+              ["expiration", "1802592000"]
+            ],
+            "content": "",
+            "sig": "420ec29db8fb18e3f69c45c4788edd2d1c6fc9eed4bee70323824ad428f2c695e1b4cd26fd746718725c5367a3af738fc1e1a66476b741aeb0fb1ed44f55844f"
+          },
+          "expect": {
+            "status": 201,
+            "reason": "accepted",
+            "state": "active"
+          }
+        },
+        {
+          "now": 1800000000,
+          "post": {
+            "id": "2479170691e635e7407de87953e920f341ecfcb0b3181eb95b3100d913cb86eb",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1800000000,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "847fc938da23190e3685ad6b78fc13ce"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["device", "64e8b9a29d0be4417d7197d509c8a0ef637034dcd421208670c62fc2c0887002"],
+              ["server", "grove.example.net"],
+              ["scope", "get"],
+              ["status", "active"],
+              ["expiration", "1802592000"]
+            ],
+            "content": "",
+            "sig": "4614c2beb127e0184fc3626b9d2f296920bb5dd54f5620f3801c42d9bb15dfbc82f876fa87654e2c12f6db3f70f79e1f13e28193ee8aea85fdc41e68d6a06509"
+          },
+          "expect": {
+            "status": 201,
+            "reason": "accepted",
+            "state": "active"
+          }
+        },
+        {
+          "now": 1800000060,
+          "request": {
+            "method": "PUT",
+            "path": "/upload",
+            "headers": [
+              ["Authorization", "Nostr eyJpZCI6IjQ3NWQxODI3M2JiYmQxY2Q0ODY1YzM3MDA0ZGM0ODZiMWNlMDE2M2M4NmFkYWFiOTQ0Mzc2NDZiMDk3ZjFhMjEiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDAwMDA1OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJ1cGxvYWQiXSxbImV4cGlyYXRpb24iLCIxODAwMDAwMTE5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgdXBsb2FkIiwic2lnIjoiN2RjNDllNDk0NjI3MTJlM2IxNGJhMTIyYWYwY2M0NzI3OWFiNGNkMGUwMmM4ZGQ4YzcyOGFjNjg3YmU3NWQwOGFjYmJhNGE5YjRlMzkyYzBlOGYxYTA3NDAxOWM5YTI3YzI4MjE1ZDIxZjg2YTI1MTkyYWVmYWEwZTA1N2EyZWEifQ=="],
+              ["X-SHA-256", "9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd"],
+              ["Content-Length", "31"]
+            ],
+            "body": "blob1"
+          },
+          "expect": {
+            "status": 201,
+            "reason": "created"
+          }
+        },
+        {
+          "now": 1800086400,
+          "post": {
+            "id": "f8d47a6d1ff115b383fec307796e9548e0366ce4056ee7d8ecd70429afc872fd",
+            "pubkey": "fbf0b98f8d8b9260ce1c5485f09f224a6174f230d0228afc98df0635d538dbe8",
+            "created_at": 1800086400,
+            "kind": 27541,
+            "tags": [
+              ["t", "grant"],
+              ["grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd"],
+              ["d", "2848bdd5c60a79e2dfe667ae9616c1107f61709032b66e556e28f4a96e69450b"],
+              ["device", "9a5a162931ba0e9935885af724afc213de2031302644b67208924419cc910350"],
+              ["server", "grove.example.net"],
+              ["scope", "upload"],
+              ["scope", "get"],
+              ["scope", "delete"],
+              ["bytes", "1073741824"],
+              ["status", "revoked"],
+              ["expiration", "1802592000"]
+            ],
+            "content": "",
+            "sig": "6d064f5e6519ad78d758bd2382dcb3398dd5a388e4e5329135773c5a918cec0bef46d184f74b0dd035452f0941726e12fe2cb3acc881e3837402994ea22e3e16"
+          },
+          "expect": {
+            "status": 201,
+            "reason": "accepted",
+            "state": "revoked"
+          }
+        },
+        {
+          "now": 1800086460,
+          "request": {
+            "method": "GET",
+            "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+            "headers": [
+              ["Authorization", "Nostr eyJpZCI6ImE0NzY5OTYzNzllZTk5NmZjMmE1ZjQ5ODU1OTcyMDI5YzQyOWM4OWI1ZjAyZDE0MTRjM2QxYmZlOTE4OGNjZWIiLCJwdWJrZXkiOiI5YTVhMTYyOTMxYmEwZTk5MzU4ODVhZjcyNGFmYzIxM2RlMjAzMTMwMjY0NGI2NzIwODkyNDQxOWNjOTEwMzUwIiwiY3JlYXRlZF9hdCI6MTgwMDA4NjQ1OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJnZXQiXSxbImV4cGlyYXRpb24iLCIxODAwMDg2NTE5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZ2V0Iiwic2lnIjoiMDI5YjgxZTBiYjZlYjExM2M0MTZkOWQ2ZDk2MWY5YTE4MTIwMWE1MTFhMjcyN2U5ZjRiZDQxOGYwN2YwZDllNGEwZGRmYzc3Zjc2ODU0ODc5N2RiMjM0ZGU4NjE5ZmFkNmMyODMwMTA3M2M0YmVjNzA5ZjhmMWI0Y2Y4YjdkMWMifQ=="]
+            ]
+          },
+          "expect": {
+            "status": 403,
+            "reason": "not-granted"
+          }
+        },
+        {
+          "now": 1800086460,
+          "request": {
+            "method": "GET",
+            "path": "/9c8849940451d3716f1042405664d7751bfedd9d46f44e601f7d1879ebd8c6dd",
+            "headers": [
+              ["Authorization", "Nostr eyJpZCI6ImY0Yjg3YzNiYzAzNDU2NGNlYTE2M2Q5MWM5YWExNmJkZGE2ODcxMGU0MzRiODUxNzM4OTNjZjU5MWIxNmMxYWQiLCJwdWJrZXkiOiI2NGU4YjlhMjlkMGJlNDQxN2Q3MTk3ZDUwOWM4YTBlZjYzNzAzNGRjZDQyMTIwODY3MGM2MmZjMmMwODg3MDAyIiwiY3JlYXRlZF9hdCI6MTgwMDA4NjQ1OSwia2luZCI6MjQyNDIsInRhZ3MiOltbInQiLCJnZXQiXSxbImV4cGlyYXRpb24iLCIxODAwMDg2NTE5Il0sWyJzZXJ2ZXIiLCJncm92ZS5leGFtcGxlLm5ldCJdLFsieCIsIjljODg0OTk0MDQ1MWQzNzE2ZjEwNDI0MDU2NjRkNzc1MWJmZWRkOWQ0NmY0NGU2MDFmN2QxODc5ZWJkOGM2ZGQiXV0sImNvbnRlbnQiOiJncm91cC1ncmFudHMvMSBzeW50aGV0aWMgZ2V0Iiwic2lnIjoiZWViNjRiYzY1OTAyNDRkYzM3ZjhkYzBiMmNiZmNmZjgwZDJkY2RiZjY4YzQwZmM0Yzc4MWU5OGY5ZWFkYmU0ZDQwOWIyYWFiMGM3MjMxZmFiNTZiMjJhY2NkMTUwMDI3ZmJkOTcxNTQ0Nzk4OWFmZDhkN2RiODRiNDg1MTFkNWYifQ=="]
+            ]
+          },
+          "expect": {
+            "status": 200,
+            "reason": "ok"
+          }
+        }
+      ]
+    }
+  ]
+}
