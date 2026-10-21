@@ -28,10 +28,14 @@ use std::{
 };
 use wildbloom_core::FriendGrant;
 
-/// Posts to the event route allowed in any one minute, across all callers:
-/// every request over Tor arrives from loopback, so a per-address limit
-/// would mean nothing.
-const EVENTS_PER_MINUTE: usize = 120;
+/// New or changed grants an enrolled keeper may land in any one minute,
+/// across all callers: every request over Tor arrives from loopback, so a
+/// per-address limit would mean nothing.  Revocations, resets and replays of
+/// an event the node already holds are never counted.
+const GRANTS_PER_MINUTE: usize = 120;
+/// Posts that fail to parse, verify or name an enrolled keeper in any one
+/// minute.  Junk spends only this budget, never the keeper's.
+const UNVERIFIED_PER_MINUTE: usize = 600;
 
 const GROUP_DATABASE_FILE: &str = "group-grants.sqlite3";
 
@@ -61,8 +65,11 @@ pub(super) struct GroupState {
     /// Serialises grant, revocation and reset commits.  Never held while
     /// verifying a signature, serving a request or waiting for the core.
     pub updates: tokio::sync::Mutex<()>,
-    /// Clock seconds of recent posts to the event route.
+    /// Clock seconds of recent grants that changed state.
     pub posts: Mutex<VecDeque<u64>>,
+    /// Clock seconds of recent posts that were refused before the node's
+    /// state was consulted.
+    pub unverified: Mutex<VecDeque<u64>>,
     /// Blobs each group holds, built from the store's claims on first use
     /// and kept current by the gate.  An absent entry is rebuilt, never
     /// guessed.
@@ -189,6 +196,7 @@ impl Grants {
             snapshot: RwLock::new(Arc::new(rows)),
             updates: tokio::sync::Mutex::new(()),
             posts: Mutex::new(VecDeque::new()),
+            unverified: Mutex::new(VecDeque::new()),
             holdings: Mutex::new(HashMap::new()),
             reserved: Mutex::new(HashMap::new()),
             writes: Arc::new(tokio::sync::Semaphore::new(
@@ -237,17 +245,27 @@ impl Grants {
         };
         rows.keys
             .iter()
-            .filter_map(|(device, key)| {
-                Some(FriendGrant {
-                    pubkey: device.clone(),
-                    byte_limit: key.byte_limit?,
-                    expires_at: CORE_GRANT_SENTINEL,
-                    grant_id: core_group_grant_id(&key.keeper, &key.room),
-                    issuer: Some(key.keeper.clone()),
-                })
-            })
+            .filter_map(|(device, key)| friend_grant(device, key))
             .collect()
     }
+
+    /// The friend set as it will be once `change` is committed.
+    fn projected_friend_grants(&self, change: &(String, GroupKey)) -> Vec<FriendGrant> {
+        let mut grants = self.group_friend_grants();
+        grants.retain(|grant| grant.pubkey != change.0);
+        grants.extend(friend_grant(&change.0, &change.1));
+        grants
+    }
+}
+
+fn friend_grant(device: &str, key: &GroupKey) -> Option<FriendGrant> {
+    Some(FriendGrant {
+        pubkey: device.to_owned(),
+        byte_limit: key.byte_limit?,
+        expires_at: CORE_GRANT_SENTINEL,
+        grant_id: core_group_grant_id(&key.keeper, &key.room),
+        issuer: Some(key.keeper.clone()),
+    })
 }
 
 /// A grant event the node recorded, or already held exactly.
@@ -278,12 +296,6 @@ impl Plan {
     }
 }
 
-/// What a failed core push must put back.
-struct Previous {
-    grant: Option<GroupGrantRow>,
-    key: Option<GroupKey>,
-}
-
 impl Grants {
     pub fn group_enabled(&self) -> bool {
         self.inner.group.get().is_some()
@@ -304,29 +316,28 @@ impl Grants {
         Ok(())
     }
 
-    /// A route-wide limit on posted events, on the node's own clock.
-    fn allow_group_post(&self, state: &GroupState) -> Result<(), Refusal> {
-        let now = self.now();
-        let mut posts = state.posts.lock().map_err(|_| Refusal::unavailable())?;
-        while posts
+    /// Count one event against a rolling minute, on the node's own clock.
+    fn within(window: &Mutex<VecDeque<u64>>, now: u64, limit: usize, count: bool) -> bool {
+        let Ok(mut window) = window.lock() else {
+            return false;
+        };
+        while window
             .front()
             .is_some_and(|at| now.saturating_sub(*at) >= 60)
         {
-            posts.pop_front();
+            window.pop_front();
         }
-        if posts.len() >= EVENTS_PER_MINUTE {
-            return Err(Refusal::new(StatusCode::TOO_MANY_REQUESTS, "rate"));
+        if window.len() >= limit {
+            return false;
         }
-        posts.push_back(now);
-        Ok(())
+        if count {
+            window.push_back(now);
+        }
+        true
     }
 
-    /// Submit one kind 27541 event.  Rules 1 to 7 of section 4.4 need no
-    /// state and run before the database is touched; rules 8 to 11 run
-    /// against the node's state under the update lock.
-    pub async fn post_group_event(&self, body: &[u8]) -> Result<Accepted, Refusal> {
-        let state = self.group_state()?;
-        self.allow_group_post(state)?;
+    /// Rules 1 to 7 of section 4.4: everything that needs no node state.
+    fn screen_group_event(&self, state: &GroupState, body: &[u8]) -> Result<GroupEvent, Refusal> {
         let event = group_event::parse(body)?;
         // 5: a keeper the node owner enrolled, for a room they expect.
         state
@@ -347,26 +358,97 @@ impl Grants {
         if event.expiration <= now {
             return Err(Refusal::forbidden("expired"));
         }
+        Ok(event)
+    }
+
+    /// Submit one kind 27541 event.  Rules 1 to 7 run before the database is
+    /// touched and before anything is counted against the keeper; rules 8 to
+    /// 11 run against the node's state under the update lock.
+    ///
+    /// Only a grant that changes state spends the keeper's rate budget, so
+    /// junk can never stop a revocation or a reset from landing, and a replay
+    /// is free.  A grant that adds an upload key or changes its ceiling is
+    /// pushed to the core before it is committed, so the gate never admits a
+    /// key the core has not been told about.
+    pub async fn post_group_event(&self, body: &[u8]) -> Result<Accepted, Refusal> {
+        let state = self.group_state()?;
+        let now = self.now();
+        // A post that is not even from an enrolled keeper is cut off cheaply
+        // once junk has used its own budget; a forged signature from a keeper
+        // key is still checked, because a real revocation looks the same.
+        #[derive(serde::Deserialize)]
+        struct Peek {
+            pubkey: Option<String>,
+        }
+        let claimed_keeper = serde_json::from_slice::<Peek>(body)
+            .ok()
+            .and_then(|peek| peek.pubkey)
+            .is_some_and(|key| state.enrolments.contains_key(&key));
+        if !claimed_keeper && !Self::within(&state.unverified, now, UNVERIFIED_PER_MINUTE, false) {
+            return Err(Refusal::new(StatusCode::TOO_MANY_REQUESTS, "rate"));
+        }
+        let event = match self.screen_group_event(state, body) {
+            Ok(event) => event,
+            Err(refusal) => {
+                let counted = Self::within(&state.unverified, now, UNVERIFIED_PER_MINUTE, true);
+                return Err(if counted {
+                    refusal
+                } else {
+                    Refusal::new(StatusCode::TOO_MANY_REQUESTS, "rate")
+                });
+            }
+        };
 
         let update = state.updates.lock().await;
-        let now = self.now();
         let rows = self.group_snapshot().ok_or_else(Refusal::unavailable)?;
-        let plan = self.evaluate_group_event(state, &rows, &event, now)?;
+        let plan = self.evaluate_group_event(state, &rows, &event, self.now())?;
         if plan.grant.is_none() && plan.floor.is_none() {
             return Ok(plan.accepted);
         }
-        let previous = Previous {
-            grant: plan.grant.as_ref().and_then(|row| {
-                rows.grants
-                    .get(&(row.keeper.clone(), row.grant_id.clone()))
-                    .cloned()
-            }),
-            key: plan
-                .key
-                .as_ref()
-                .and_then(|(device, _)| rows.keys.get(device).cloned()),
-        };
-        let before = self.group_friend_grants();
+        if plan.grant.as_ref().is_some_and(|row| row.active)
+            && !Self::within(&state.posts, self.now(), GRANTS_PER_MINUTE, true)
+        {
+            return Err(Refusal::new(StatusCode::TOO_MANY_REQUESTS, "rate"));
+        }
+        let changes_friends = plan.key.as_ref().is_some_and(|change| {
+            self.projected_friend_grants(change) != self.group_friend_grants()
+        });
+        if !changes_friends {
+            let accepted = self.commit_group_plan(state, &plan)?;
+            drop(update);
+            return Ok(accepted);
+        }
+        drop(update);
+
+        // The core hears of the key first.  Holding the push lock keeps a
+        // device grant's push from dropping it before the commit lands; the
+        // update lock is free meanwhile, so revocations never wait on a push.
+        let _push = self.inner.policy_push.lock().await;
+        let _update = state.updates.lock().await;
+        let rows = self.group_snapshot().ok_or_else(Refusal::unavailable)?;
+        let plan = self.evaluate_group_event(state, &rows, &event, self.now())?;
+        if plan.grant.is_none() && plan.floor.is_none() {
+            return Ok(plan.accepted);
+        }
+        if let (Some(app), Some(change)) = (self.inner.app.get(), plan.key.as_ref()) {
+            #[cfg(test)]
+            if self
+                .inner
+                .fail_push
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(Refusal::unavailable());
+            }
+            let projected = self.core_friend_grants_with(self.projected_friend_grants(change));
+            if let Err(error) = app.set_friend_grants(projected).await {
+                tracing::error!(reason = %error, "core refused the group friend set; grant not recorded");
+                return Err(Refusal::unavailable());
+            }
+        }
+        self.commit_group_plan(state, &plan)
+    }
+
+    fn commit_group_plan(&self, state: &GroupState, plan: &Plan) -> Result<Accepted, Refusal> {
         {
             let mut db = state.db.lock().map_err(|_| Refusal::unavailable())?;
             let tx = db.transaction().map_err(|_| Refusal::unavailable())?;
@@ -382,63 +464,7 @@ impl Grants {
             tx.commit().map_err(|_| Refusal::unavailable())?;
         }
         self.reload_group(state)?;
-        drop(update);
-        // Revocations, resets and expiry never change the core's friend set,
-        // so they never wait on a core push; only a new upload key or a new
-        // ceiling does.  The push waits for in-flight core writes, so it runs
-        // outside the update lock.
-        if before != self.group_friend_grants()
-            && let Err(error) = self.push_core_policy().await
-        {
-            tracing::error!(reason = %error, "core refused the group friend set; reverting");
-            let _update = state.updates.lock().await;
-            if let Some(row) = &plan.grant
-                && self
-                    .group_snapshot()
-                    .and_then(|rows| {
-                        rows.grants
-                            .get(&(row.keeper.clone(), row.grant_id.clone()))
-                            .cloned()
-                    })
-                    .as_ref()
-                    == Some(row)
-            {
-                self.revert_group(state, row, previous, plan.key.as_ref())?;
-            }
-            drop(_update);
-            let _ = self.push_core_policy().await;
-            return Err(Refusal::unavailable());
-        }
         Ok(plan.accepted)
-    }
-
-    fn revert_group(
-        &self,
-        state: &GroupState,
-        written: &GroupGrantRow,
-        previous: Previous,
-        key: Option<&(String, GroupKey)>,
-    ) -> Result<(), Refusal> {
-        {
-            let mut db = state.db.lock().map_err(|_| Refusal::unavailable())?;
-            let tx = db.transaction().map_err(|_| Refusal::unavailable())?;
-            match previous.grant {
-                Some(row) => group_db::write_grant(&tx, &row),
-                None => {
-                    group_db::delete_grant(&tx, &(written.keeper.clone(), written.grant_id.clone()))
-                }
-            }
-            .map_err(|_| Refusal::unavailable())?;
-            if let Some((device, _)) = key {
-                match previous.key {
-                    Some(key) => group_db::write_key(&tx, device, &key),
-                    None => group_db::delete_key(&tx, device),
-                }
-                .map_err(|_| Refusal::unavailable())?;
-            }
-            tx.commit().map_err(|_| Refusal::unavailable())?;
-        }
-        self.reload_group(state)
     }
 
     fn group_key_conflict(
@@ -838,6 +864,13 @@ impl Grants {
             group: group.clone(),
             bytes: need,
         }))
+    }
+
+    /// Bytes of group uploads admitted and still being written.
+    pub(super) fn group_reserved(&self, group: &GroupId) -> Result<u64, Refusal> {
+        let state = self.group_state()?;
+        let reserved = state.reserved.lock().map_err(|_| Refusal::unavailable())?;
+        Ok(reserved.get(group).copied().unwrap_or(0))
     }
 
     /// Spend a delete token id.  `false` when it was spent already.

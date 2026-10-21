@@ -350,6 +350,10 @@ Reasons are the names the vectors use; the wire carries the status and a
 short `X-Reason` text.  Responses carry `Cache-Control: no-store`.  The node
 verifies the signature before touching its database, and limits the rate of
 this route as a whole, since every request over Tor arrives from loopback.
+Only an event that parses, verifies and names an enrolled keeper spends that
+keeper's budget, and only a grant that changes the node's state does; junk has
+a budget of its own, and a revocation, a reset or a replay of an event the node
+already holds is never refused for rate.
 
 A device may ask about its own grant with `GET /groups/v1/self`, signed with
 NIP-98 by that device, to show how much of its ceiling is used.  It is
@@ -531,8 +535,9 @@ All three paths use `POST /groups/v1/events`:
 1. **The keeper pushes** every grant, revocation and reset it signs to the node
    it names, over the transport it already uses for that node (Tor or HTTPS),
    and keeps a journal entry until that node answers `200`, `201` or `409`.
-   Any other answer (a node that no longer enrols the keeper, say) stops the
-   retries for that node and is reported to the room's hosts.
+   `429` (`rate`) and `503` are retryable: the keeper keeps the entry and tries
+   again later.  Any other answer (a node that no longer enrols the keeper,
+   say) stops the retries for that node and is reported to the room's hosts.
 2. **The device posts its own grant** on first contact with a node, after a
    renewal, and after any `403`.
 3. **Every member device carries revocations and resets.**  Before its first
@@ -647,11 +652,11 @@ Built in S3.  The names and shapes S3 settled are in the right-hand column.
 |---|---|
 | Group mode | A start flag, `--group-mode` (`WILDBLOOM_GROUP_MODE`).  Refuses `--open-shelter`, the guest tier, service discovery (kind 31402, `--service-profile`) and paid profiles (`--checkout-profile`) at start-up, and needs at least one keeper.  Makes every read need a token; sets the cache headers in 6.6 |
 | Enrolment | A repeatable `--group-keeper <hex>:<ceiling bytes>[:<room>+<room>]` (`WILDBLOOM_GROUP_KEEPERS`, comma-separated), checked at start like `--friend-grant`.  The keeper is 64 lower-case hex, the ceiling is bytes per group, and the optional rooms (64 lower-case hex, joined with `+`) limit which room ids that keeper may open here.  A keeper listed twice, or also an owner, friend, device-grant, recovery, service or group device key, stops the node starting.  There is no enrolment file in S3 |
-| Event route | `POST /groups/v1/events`, beside `/grants/v1`.  At most 120 posts a minute across all callers.  A reason is the response's `X-Reason`.  `GET /groups/v1/self` is not built (optional in S3) |
+| Event route | `POST /groups/v1/events`, beside `/grants/v1`.  At most 120 new or changed grants a minute from enrolled keepers and 600 refused posts a minute from anyone, across all callers; revocations, resets and replays are never counted.  A reason is the response's `X-Reason`.  `GET /groups/v1/self` is not built (optional in S3) |
 | State | A private `0600` SQLite file `group-grants.sqlite3` beside the store, like `device-grants.sqlite3`: grant rows by keeper and grant id, reset floors, the key to group map, and the spent delete token ids (the `used_events` table and `consume_event` of the device grants, in this file).  Grant rows are kept until their latest expiration plus the seven-day delete grace, floors for 90 days, spent ids until the token expires; a key stays in its group for good.  Part of retention state: back it up with the store |
 | Claims | Each group key that ever had an `upload` grant is a core friend grant with core grant id `wildbloom-group:<keeper>:<room>`, the far-future sentinel expiry device grants use, and the ceiling of its newest upload grant.  Its claims are ordinary friend claims in the store.  The real expiry and scopes are enforced by a gate in front of the core router |
 | Reads | The gate's check for `GET` and `HEAD`, before the core serves the bytes.  A blob counts as held by a group while any key of the group claims it.  The gate keeps that view in memory and rebuilds it from the store's claims after a restart |
-| Uploads, preflights, deletes | Completed by the gate through the store, not by the core router: the core checks a token against the machine clock and has no `get` verifier, so a group token (which the gate verifies on the node's clock) cannot go through it.  `PUT /mirror` is allowed by the gate and then made by the core |
+| Uploads, preflights, deletes | Completed by the gate through the store, not by the core router: the core checks a token against the machine clock and has no `get` verifier, so a group token (which the gate verifies on the node's clock) cannot go through it.  `PUT /mirror` is allowed by the gate and then made by the core.  A key whose group does not hold a blob gets a claim on it only once the whole body has been read and hashed; the core drops a mirror's fetched bytes when it already has the blob, so such a mirror is taken back and answers `409` `wrong-blob` |
 | Ended keys | Stay in the core's friend set while they hold claims; the gate refuses them.  Their claims are not moved to an owner, unlike device grants |
 | Spent ids | The device grants' `consume_event` table shape, keyed by token id until its expiry, in the group file |
 | TURN | `device_auth` accepts a key with an active `turn` group grant (S9, not built) |
@@ -665,6 +670,9 @@ What S3 chose where the profile is silent or an open question applies (section 1
   they hold themselves.  Their uploads, mirrors, deletes and lists reach the
   core as before.  An enrolled keeper is not a user and is refused `403`.
 - A room the enrolment does not list is refused `403 keeper`.
+- `--storage-proofs` is refused with `--group-mode`: its proofs answer any key
+  whether a blob is stored.  `/healthz` answers liveness only and `/` is
+  never cached by a shared cache.
 - Per-key request-rate and read-byte limits (O13) are not built; the only
   limits are the ceilings, the per-blob limit, and a cap on concurrent group
   upload streams (`--max-concurrent-writes`, counted apart from the core's).

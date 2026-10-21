@@ -205,22 +205,48 @@ fn enrolments_are_validated() {
 // The shared vectors (`vectors/group-grants-v1.json`).
 // ---------------------------------------------------------------------------
 use super::{gate, group_event::Scope, group_gate};
+use axum::body::Bytes;
 use axum::{
     Router,
     body::{Body, to_bytes},
     http::{HeaderMap, Method, Request, StatusCode},
     middleware::from_fn_with_state,
 };
+use futures_util::{StreamExt, future::BoxFuture};
 use serde_json::Value;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tower::ServiceExt;
-use wildbloom_core::{AppState, BlossomConfig, ServerMetadata, Store, StoreConfig, router};
+use wildbloom_core::{
+    AppState, BlobFetcher, BlossomConfig, FetchError, FetchPath, FetchRequest, FetchedBlob,
+    ServerMetadata, Store, StoreConfig, router,
+};
 
 /// Overrides for the tests that fill a node or a group.
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone)]
 struct Limits {
     quota: Option<u64>,
     ceiling: Option<u64>,
+    /// A `--friend-grant` key, to try the core's own upload route.
+    friend: Option<String>,
+    /// What the node's mirror source serves, whatever it is asked for.
+    source: Option<Vec<u8>>,
+}
+
+/// A mirror source that serves the same bytes for every hash it is asked for.
+struct FakeSource(Vec<u8>);
+
+impl BlobFetcher for FakeSource {
+    fn fetch(&self, _request: FetchRequest) -> BoxFuture<'_, Result<FetchedBlob, FetchError>> {
+        let bytes = self.0.clone();
+        Box::pin(async move {
+            Ok(FetchedBlob {
+                path: FetchPath::Https,
+                size: bytes.len() as u64,
+                content_type: None,
+                body: futures_util::stream::once(async move { Ok(Bytes::from(bytes)) }).boxed(),
+            })
+        })
+    }
 }
 
 const VECTORS: &str = include_str!("../../../../vectors/group-grants-v1.json");
@@ -292,7 +318,17 @@ impl VectorNode {
                 owners: owners.clone(),
                 server_names: vec![server.clone()],
                 origin: format!("https://{server}/"),
-                cli_friend_grants: Vec::new(),
+                cli_friend_grants: limits
+                    .friend
+                    .iter()
+                    .map(|key| wildbloom_core::FriendGrant {
+                        pubkey: key.clone(),
+                        byte_limit: MIB,
+                        expires_at: 4_000_000_000,
+                        grant_id: "local:friend".into(),
+                        issuer: None,
+                    })
+                    .collect(),
                 reserved_keys: Vec::new(),
             },
             Arc::new(move || source.load(Ordering::SeqCst)),
@@ -318,19 +354,20 @@ impl VectorNode {
                 },
             )
             .unwrap();
-        let state = AppState::new(
-            store,
-            BlossomConfig {
-                server_metadata: ServerMetadata::default(),
-                public_base_url: format!("https://{server}/").parse().unwrap(),
-                accepted_server_names: vec![server],
-                allowed_pubkeys: owners,
-                friend_grants: grants.core_friend_grants(),
-                open_shelter: false,
-                max_concurrent_writes: 4,
-                mirror_proxy: None,
-            },
-        )
+        let config = BlossomConfig {
+            server_metadata: ServerMetadata::default(),
+            public_base_url: format!("https://{server}/").parse().unwrap(),
+            accepted_server_names: vec![server],
+            allowed_pubkeys: owners,
+            friend_grants: grants.core_friend_grants(),
+            open_shelter: false,
+            max_concurrent_writes: 4,
+            mirror_proxy: None,
+        };
+        let state = match limits.source {
+            Some(bytes) => AppState::with_fetcher(store, config, Arc::new(FakeSource(bytes))),
+            None => AppState::new(store, config),
+        }
         .unwrap();
         grants.attach(state.clone());
         grants.startup().await.unwrap();
@@ -597,7 +634,7 @@ fn step_post(sequence: &Value, index: usize) -> &Value {
 }
 
 #[tokio::test]
-async fn an_oversized_body_is_refused_and_the_route_is_limited_as_a_whole() {
+async fn an_oversized_body_is_refused() {
     let vectors = vectors();
     let node = VectorNode::new(&vectors).await;
     let response = node
@@ -614,22 +651,150 @@ async fn an_oversized_body_is_refused_and_the_route_is_limited_as_a_whole() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     assert_eq!(response.headers().get("x-reason").unwrap(), "too-large");
+}
 
-    // Every post counts, whoever sent it and whatever it held.
-    let mut limited = None;
-    for _ in 0..200 {
-        let (status, reason, _) = node.post(&Value::Null).await;
-        if status == StatusCode::TOO_MANY_REQUESTS {
-            limited = Some(reason);
-            break;
-        }
-        assert_eq!(status, StatusCode::BAD_REQUEST);
+/// A keeper's revocation of a grant, as the review's run sent it.
+fn revocation(vectors: &Value, at: u64) -> Value {
+    sign(
+        &secret(vectors, "authorityA"),
+        27_541,
+        &[
+            ("t", "grant".to_owned()),
+            ("grant", "a683be7ffdc9a5cdab418a1d3dd3a9dd".to_owned()),
+            (
+                "d",
+                vectors["rooms"]["a"]["roomId"].as_str().unwrap().to_owned(),
+            ),
+            ("device", pubkey(vectors, "alicePhone")),
+            ("server", "grove.example.net".to_owned()),
+            ("scope", "upload".to_owned()),
+            ("scope", "get".to_owned()),
+            ("scope", "delete".to_owned()),
+            ("bytes", "1073741824".to_owned()),
+            ("status", "revoked".to_owned()),
+            ("expiration", "1802592000".to_owned()),
+        ],
+        "",
+        at,
+    )
+}
+
+#[tokio::test]
+async fn junk_cannot_stop_a_revocation_and_replays_cost_nothing() {
+    let vectors = vectors();
+    let (hash, _) = blob(&vectors, "blob1");
+    let now = 1_800_000_000;
+    let node = VectorNode::new(&vectors).await;
+    fixture(&node, &vectors).await;
+    assert_eq!(
+        get(&node, &vectors, "alicePhone", &hash, now + 100).await.0,
+        StatusCode::OK
+    );
+    // The review's run: 120 posts of nothing, then a real revocation.
+    for _ in 0..700 {
+        let (status, ..) = node.post(&serde_json::json!({})).await;
+        assert!(status == StatusCode::BAD_REQUEST || status == StatusCode::TOO_MANY_REQUESTS);
     }
-    assert_eq!(limited.as_deref(), Some("rate"));
-    // The window is a minute of the node's clock.
-    node.set_now(vectors["time"]["t0"].as_u64().unwrap() + 61);
-    let (status, _, _) = node.post(&Value::Null).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // Junk has a budget of its own, and has used it up...
+    let (status, reason, _) = node.post(&serde_json::json!({})).await;
+    assert_eq!(
+        (status, reason.as_str()),
+        (StatusCode::TOO_MANY_REQUESTS, "rate")
+    );
+    // ...but it was never the keeper's.
+    node.set_now(now + 101);
+    assert_eq!(
+        node.post(&revocation(&vectors, now + 101)).await.0,
+        StatusCode::CREATED
+    );
+    let (status, reason, _) = get(&node, &vectors, "alicePhone", &hash, now + 101).await;
+    assert_eq!(
+        (status, reason.as_str()),
+        (StatusCode::FORBIDDEN, "not-granted")
+    );
+
+    // A replay of an event the node holds is free, however often it comes.
+    let held = &case(&vectors, "grantEvents", "good-grant-get-only")["event"];
+    node.set_now(now + 102);
+    for _ in 0..300 {
+        assert_eq!(node.post(held).await.0, StatusCode::OK);
+    }
+}
+
+#[tokio::test]
+async fn the_keepers_grant_budget_never_stops_a_revocation_or_a_reset() {
+    let vectors = vectors();
+    let now = 1_800_000_000;
+    let node = VectorNode::new(&vectors).await;
+    node.set_now(now);
+    // 120 new grants a minute from enrolled keepers; the 121st waits.
+    for n in 0..120 {
+        let device = keys(1_000 + n);
+        let event = grant_for(
+            &vectors,
+            "authorityA",
+            "a",
+            &format!("{n:032x}"),
+            &device,
+            &["get"],
+            None,
+            now,
+            86_400,
+        );
+        assert_eq!(node.post(&event).await.0, StatusCode::CREATED, "{n}");
+    }
+    let extra = grant_for(
+        &vectors,
+        "authorityA",
+        "a",
+        &format!("{:032x}", 999),
+        &keys(2_000),
+        &["get"],
+        None,
+        now,
+        86_400,
+    );
+    let (status, reason, _) = node.post(&extra).await;
+    assert_eq!(
+        (status, reason.as_str()),
+        (StatusCode::TOO_MANY_REQUESTS, "rate")
+    );
+    // A revocation and a reset still land, and the budget refills.
+    node.set_now(now + 1);
+    assert_eq!(
+        node.post(&revocation(&vectors, now + 1)).await.0,
+        StatusCode::CREATED
+    );
+    let reset = sign(
+        &secret(&vectors, "authorityA"),
+        27_541,
+        &[
+            ("t", "reset".to_owned()),
+            (
+                "d",
+                vectors["rooms"]["a"]["roomId"].as_str().unwrap().to_owned(),
+            ),
+            ("server", "grove.example.net".to_owned()),
+            ("expiration", "1807776000".to_owned()),
+        ],
+        "",
+        now + 2,
+    );
+    node.set_now(now + 2);
+    assert_eq!(node.post(&reset).await.0, StatusCode::CREATED);
+    node.set_now(now + 61);
+    let fresh = grant_for(
+        &vectors,
+        "authorityA",
+        "a",
+        &format!("{:032x}", 998),
+        &keys(2_001),
+        &["get"],
+        None,
+        now + 61,
+        86_400,
+    );
+    assert_eq!(node.post(&fresh).await.0, StatusCode::CREATED);
 }
 
 #[tokio::test]
@@ -825,6 +990,32 @@ fn grant(
     at: u64,
     lifetime: u64,
 ) -> Value {
+    grant_for(
+        vectors,
+        keeper,
+        room,
+        grant_id,
+        &pubkey(vectors, device),
+        scopes,
+        bytes,
+        at,
+        lifetime,
+    )
+}
+
+/// The same for any device key.
+#[allow(clippy::too_many_arguments)]
+fn grant_for(
+    vectors: &Value,
+    keeper: &str,
+    room: &str,
+    grant_id: &str,
+    device: &str,
+    scopes: &[&str],
+    bytes: Option<u64>,
+    at: u64,
+    lifetime: u64,
+) -> Value {
     let mut tags = vec![
         ("t", "grant".to_owned()),
         ("grant", grant_id.to_owned()),
@@ -835,7 +1026,7 @@ fn grant(
                 .unwrap()
                 .to_owned(),
         ),
-        ("device", pubkey(vectors, device)),
+        ("device", device.to_owned()),
         ("server", "grove.example.net".to_owned()),
     ];
     tags.extend(scopes.iter().map(|scope| ("scope", (*scope).to_owned())));
@@ -849,6 +1040,10 @@ fn grant(
 
 /// A BUD-11 token a test signs, valid for a minute around `now`.
 fn token(vectors: &Value, who: &str, verb: &str, hash: &str, now: u64) -> String {
+    token_by(&secret(vectors, who), verb, hash, now)
+}
+
+fn token_by(signer: &Keys, verb: &str, hash: &str, now: u64) -> String {
     use base64::Engine as _;
     let tags = [
         ("t", verb.to_owned()),
@@ -856,13 +1051,7 @@ fn token(vectors: &Value, who: &str, verb: &str, hash: &str, now: u64) -> String
         ("server", "grove.example.net".to_owned()),
         ("x", hash.to_owned()),
     ];
-    let event = sign(
-        &secret(vectors, who),
-        24_242,
-        &tags,
-        "group-grants/1 synthetic",
-        now - 1,
-    );
+    let event = sign(signer, 24_242, &tags, "group-grants/1 synthetic", now - 1);
     format!(
         "Nostr {}",
         base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -1603,4 +1792,564 @@ async fn a_spent_delete_token_stays_spent_across_a_restart() {
     assert_eq!(steps[6]["expect"]["reason"], "spent");
     // The revocation and the seven-day grace behave the same afterwards.
     run_steps(&node, &vectors, "grace", &Value::Array(steps[7..].to_vec())).await;
+}
+
+// ---------------------------------------------------------------------------
+// The independent review's findings.
+// ---------------------------------------------------------------------------
+
+fn real_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}
+
+/// A raw upload: the hash and length a client claims, and the bytes it sends.
+async fn put_raw(
+    node: &VectorNode,
+    signer: &Keys,
+    hash: &str,
+    length: usize,
+    body: Vec<u8>,
+    now: u64,
+) -> (StatusCode, String, HeaderMap) {
+    node.set_now(now);
+    let response = node
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/upload")
+                .header("Authorization", token_by(signer, "upload", hash, now))
+                .header("X-SHA-256", hash)
+                .header("Content-Length", length.to_string())
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let headers = response.headers().clone();
+    let reason = headers
+        .get("x-reason")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    let status = response.status();
+    let _ = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+    (status, reason, headers)
+}
+
+fn holds(node: &VectorNode, key: &str, hash: &str) -> bool {
+    super::claims::holds_claim(&node.store, key, hash).unwrap()
+}
+
+#[tokio::test]
+async fn a_hash_and_a_length_are_not_enough_to_be_handed_a_blob() {
+    let vectors = vectors();
+    let now = 1_800_000_060;
+    let node = VectorNode::new(&vectors).await;
+    fixture(&node, &vectors).await;
+    let alice = secret(&vectors, "alicePhone");
+    let alice_key = pubkey(&vectors, "alicePhone");
+    let (owner_blob, owner_text) = blob(&vectors, "blob3");
+    let (other_group, _) = blob(&vectors, "blob2");
+
+    // The review's run: the owner's hash and size, and nothing but zeros.
+    for hash in [&owner_blob, &other_group] {
+        let (status, reason, _) = put_raw(
+            &node,
+            &alice,
+            hash,
+            owner_text.len(),
+            vec![0; owner_text.len()],
+            now,
+        )
+        .await;
+        assert_eq!(
+            (status, reason.as_str()),
+            (StatusCode::BAD_REQUEST, "bad-request")
+        );
+        assert!(!holds(&node, &alice_key, hash), "no claim was made");
+        let (status, reason, _) = get(&node, &vectors, "alicePhone", hash, now + 1).await;
+        assert_eq!((status, reason.as_str()), (StatusCode::NOT_FOUND, "absent"));
+    }
+    // Too few, too many or wrong bytes are all refused the same way.
+    for body in [
+        vec![],
+        vec![1; owner_text.len() + 1],
+        vec![7; owner_text.len()],
+    ] {
+        let length = owner_text.len();
+        let (status, ..) = put_raw(&node, &alice, &owner_blob, length, body, now + 2).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+    assert!(!holds(&node, &alice_key, &owner_blob));
+
+    // The real bytes prove the blob: 201 for a group that did not hold it,
+    // and from then on the group may read it.
+    let (status, ..) = put_raw(
+        &node,
+        &alice,
+        &owner_blob,
+        owner_text.len(),
+        owner_text.clone().into_bytes(),
+        now + 3,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(
+        get(&node, &vectors, "alicePhone", &owner_blob, now + 4)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        get(&node, &vectors, "bobLaptop", &owner_blob, now + 4)
+            .await
+            .0,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn no_upload_or_preflight_hints_that_a_blob_is_stored_elsewhere() {
+    let vectors = vectors();
+    let now = 1_800_000_060;
+    let node = VectorNode::new(&vectors).await;
+    fixture(&node, &vectors).await;
+    let alice = secret(&vectors, "alicePhone");
+    let (stored, text) = blob(&vectors, "blob3");
+    let (unknown, _) = blob(&vectors, "blob4");
+
+    // A wrong length gets the same answer for a stored hash and an unknown one.
+    let wrong = |hash: String| {
+        let (node, alice) = (&node, &alice);
+        async move {
+            let (status, reason, _) = put_raw(node, alice, &hash, 5, vec![1; 5], now).await;
+            (status, reason)
+        }
+    };
+    assert_eq!(wrong(stored.clone()).await, wrong(unknown.clone()).await);
+    // So does a preflight, with the right length or a wrong one.
+    for length in [text.len(), 5, text.len() + 100] {
+        let mut answers = Vec::new();
+        for hash in [&stored, &unknown] {
+            node.set_now(now);
+            let (status, reason, _) = node
+                .request(
+                    &vectors,
+                    &request(
+                        "HEAD",
+                        "/upload",
+                        &[
+                            ("Authorization", token_by(&alice, "upload", hash, now)),
+                            ("X-SHA-256", hash.clone()),
+                            ("X-Content-Length", length.to_string()),
+                            ("X-Content-Type", "application/octet-stream".to_owned()),
+                        ],
+                        None,
+                    ),
+                )
+                .await;
+            answers.push((status, reason));
+        }
+        assert_eq!(answers[0], answers[1], "length {length}");
+    }
+}
+
+#[tokio::test]
+async fn the_core_upload_route_and_mirrors_also_need_the_bytes() {
+    let vectors = vectors();
+    let (hash4, text4) = blob(&vectors, "blob4");
+    let (owner_blob, owner_text) = blob(&vectors, "blob3");
+    let friend = Keys::generate();
+    // The core checks tokens on the machine clock, so this node keeps it.
+    let node = VectorNode::limited(
+        &vectors,
+        Limits {
+            friend: Some(friend.public_key().to_hex()),
+            source: Some(text4.clone().into_bytes()),
+            ..Limits::default()
+        },
+    )
+    .await;
+    let now = real_now();
+    node.set_now(now);
+    let alice_key = pubkey(&vectors, "alicePhone");
+    let event = grant(
+        &vectors,
+        "authorityA",
+        "a",
+        "77777777777777777777777777777777",
+        "alicePhone",
+        &["upload", "get"],
+        Some(1 << 20),
+        now,
+        86_400,
+    );
+    assert_eq!(node.post(&event).await.0, StatusCode::CREATED);
+    node.owner_upload(&vectors, "blob3");
+    assert_eq!(
+        upload(&node, &vectors, "alicePhone", "blob1", now).await.0,
+        StatusCode::CREATED
+    );
+    let (group_blob, _) = blob(&vectors, "blob1");
+    let friend_key = friend.public_key().to_hex();
+
+    // A friend key: zeros for the owner's or a group's hash are refused, and
+    // it gets no claim and cannot read.
+    for hash in [&owner_blob, &group_blob] {
+        let (status, ..) = put_raw(
+            &node,
+            &friend,
+            hash,
+            owner_text.len(),
+            vec![0; owner_text.len()],
+            now,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(!holds(&node, &friend_key, hash));
+        node.set_now(now);
+        let (status, ..) = node
+            .request(
+                &vectors,
+                &request(
+                    "GET",
+                    &format!("/{hash}"),
+                    &[("Authorization", token_by(&friend, "get", hash, now))],
+                    None,
+                ),
+            )
+            .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+    // With the real bytes it holds its own claim, as a re-upload always did.
+    let (status, ..) = put_raw(
+        &node,
+        &friend,
+        &owner_blob,
+        owner_text.len(),
+        owner_text.clone().into_bytes(),
+        now,
+    )
+    .await;
+    assert!(status.is_success(), "{status}");
+    assert!(holds(&node, &friend_key, &owner_blob));
+
+    // A mirror of a blob the group does not hold, from a source that serves
+    // other bytes: the core would call the existing blob a success and drop
+    // what it fetched, so the gate takes the claim back.
+    let mirror = |hash: String| {
+        let (node, alice) = (&node, secret(&vectors, "alicePhone"));
+        async move {
+            node.set_now(now);
+            let response = node
+                .app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("PUT")
+                        .uri("/mirror")
+                        .header("Authorization", token_by(&alice, "upload", &hash, now))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({ "url": format!("https://source.example.net/{hash}") })
+                                .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let reason = response
+                .headers()
+                .get("x-reason")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_owned();
+            (status, reason)
+        }
+    };
+    let (status, reason) = mirror(group_blob.clone()).await;
+    assert_eq!(
+        (status, reason.as_str()),
+        (StatusCode::OK, ""),
+        "held already"
+    );
+    let (status, reason) = mirror(owner_blob.clone()).await;
+    assert_eq!(
+        (status, reason.as_str()),
+        (StatusCode::CONFLICT, "wrong-blob")
+    );
+    assert!(!holds(&node, &alice_key, &owner_blob));
+    assert_eq!(
+        get(&node, &vectors, "alicePhone", &owner_blob, now).await.0,
+        StatusCode::NOT_FOUND
+    );
+    // A blob nobody holds is fetched, checked and kept: that mirror is real.
+    let (status, _) = mirror(hash4.clone()).await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(
+        get(&node, &vectors, "alicePhone", &hash4, now).await.0,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn gate_answers_carry_the_core_cors_headers_and_health_says_little() {
+    let vectors = vectors();
+    let now = 1_800_000_060;
+    let node = VectorNode::new(&vectors).await;
+    fixture(&node, &vectors).await;
+    let (hash, text) = blob(&vectors, "blob1");
+    let (fresh, fresh_text) = blob(&vectors, "blob4");
+    node.set_now(now);
+    let origin = ("Origin", "https://app.example.net".to_owned());
+    let mut answers = Vec::new();
+    // 401, 403, 404, 200 (read), 201 (upload), preflight, delete and a refusal.
+    answers.push(
+        node.request(
+            &vectors,
+            &request(
+                "GET",
+                &format!("/{hash}"),
+                std::slice::from_ref(&origin),
+                None,
+            ),
+        )
+        .await,
+    );
+    for (who, target) in [("stranger", &hash), ("alicePhone", &fresh)] {
+        let headers = [
+            ("Authorization", token(&vectors, who, "get", target, now)),
+            origin.clone(),
+        ];
+        answers.push(
+            node.request(
+                &vectors,
+                &request("GET", &format!("/{target}"), &headers, None),
+            )
+            .await,
+        );
+    }
+    let headers = [
+        (
+            "Authorization",
+            token(&vectors, "alicePhone", "get", &hash, now),
+        ),
+        origin.clone(),
+    ];
+    answers.push(
+        node.request(
+            &vectors,
+            &request("GET", &format!("/{hash}"), &headers, None),
+        )
+        .await,
+    );
+    let headers = [
+        (
+            "Authorization",
+            token(&vectors, "alicePhone", "upload", &fresh, now),
+        ),
+        ("X-SHA-256", fresh.clone()),
+        ("Content-Length", fresh_text.len().to_string()),
+        origin.clone(),
+    ];
+    answers.push(
+        node.request(
+            &vectors,
+            &request("PUT", "/upload", &headers, Some("blob4")),
+        )
+        .await,
+    );
+    let headers = [
+        (
+            "Authorization",
+            token(&vectors, "alicePhone", "upload", &hash, now),
+        ),
+        ("X-SHA-256", hash.clone()),
+        ("X-Content-Length", text.len().to_string()),
+        ("X-Content-Type", "application/octet-stream".to_owned()),
+        origin.clone(),
+    ];
+    answers.push(
+        node.request(&vectors, &request("HEAD", "/upload", &headers, None))
+            .await,
+    );
+    let headers = [
+        (
+            "Authorization",
+            token(&vectors, "alicePhone", "delete", &fresh, now),
+        ),
+        origin.clone(),
+    ];
+    answers.push(
+        node.request(
+            &vectors,
+            &request("DELETE", &format!("/{fresh}"), &headers, None),
+        )
+        .await,
+    );
+    let headers = [
+        (
+            "Authorization",
+            token(&vectors, "bobLaptop", "delete", &hash, now),
+        ),
+        origin.clone(),
+    ];
+    answers.push(
+        node.request(
+            &vectors,
+            &request("DELETE", &format!("/{hash}"), &headers, None),
+        )
+        .await,
+    );
+    let statuses = answers
+        .iter()
+        .map(|(status, ..)| status.as_u16())
+        .collect::<Vec<_>>();
+    assert_eq!(statuses, [401, 403, 404, 200, 201, 200, 200, 403]);
+    for (status, _, headers) in &answers {
+        assert_eq!(
+            header(headers, "access-control-allow-origin"),
+            ["*"],
+            "{status}"
+        );
+        let exposed = header(headers, "access-control-expose-headers").join(",");
+        assert!(
+            exposed.contains("x-reason") && exposed.contains("content-range"),
+            "{status}: {exposed}"
+        );
+    }
+
+    // Liveness only, and nothing cacheable, on the two public routes.
+    for path in ["/", "/healthz"] {
+        let response = node
+            .app
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        assert_eq!(
+            response.headers()["cache-control"],
+            "private, no-store",
+            "{path}"
+        );
+        let body = to_bytes(response.into_body(), 1 << 16).await.unwrap();
+        let text = String::from_utf8_lossy(&body);
+        if path == "/healthz" {
+            assert_eq!(text, r#"{"status":"ok"}"#);
+        }
+    }
+
+    // A HEAD of a list is judged like a GET of one.
+    node.set_now(now);
+    let stranger = pubkey(&vectors, "stranger");
+    let headers = [(
+        "Authorization",
+        token(&vectors, "stranger", "list", &hash, now),
+    )];
+    let (status, reason, _) = node
+        .request(
+            &vectors,
+            &request("HEAD", &format!("/list/{stranger}"), &headers, None),
+        )
+        .await;
+    assert_eq!(
+        (status, reason.as_str()),
+        (StatusCode::FORBIDDEN, "not-granted")
+    );
+}
+
+#[tokio::test]
+async fn a_preflight_counts_the_bytes_other_uploads_have_in_flight() {
+    let vectors = vectors();
+    let now = 1_800_000_000;
+    let node = VectorNode::limited(
+        &vectors,
+        Limits {
+            ceiling: Some(40),
+            ..Limits::default()
+        },
+    )
+    .await;
+    node.set_now(now);
+    let event = grant(
+        &vectors,
+        "authorityA",
+        "a",
+        "88888888888888888888888888888888",
+        "alicePhone",
+        &["upload", "get"],
+        Some(1 << 20),
+        now,
+        86_400,
+    );
+    assert_eq!(node.post(&event).await.0, StatusCode::CREATED);
+    let (hash, text) = blob(&vectors, "blob4");
+    let preflight = || async {
+        node.set_now(now + 5);
+        node.request(
+            &vectors,
+            &request(
+                "HEAD",
+                "/upload",
+                &[
+                    (
+                        "Authorization",
+                        token(&vectors, "alicePhone", "upload", &hash, now + 5),
+                    ),
+                    ("X-SHA-256", hash.clone()),
+                    ("X-Content-Length", text.len().to_string()),
+                    ("X-Content-Type", "application/octet-stream".to_owned()),
+                ],
+                None,
+            ),
+        )
+        .await
+        .0
+    };
+    assert_eq!(preflight().await, StatusCode::OK);
+    let group = (
+        pubkey(&vectors, "authorityA"),
+        vectors["rooms"]["a"]["roomId"].as_str().unwrap().to_owned(),
+    );
+    // Another device's upload is part way through and holds 31 of the 40.
+    let admitted = node
+        .grants
+        .reserve_group_bytes(&group, 40, 31)
+        .unwrap()
+        .unwrap();
+    assert_eq!(preflight().await, StatusCode::INSUFFICIENT_STORAGE);
+    drop(admitted);
+    assert_eq!(preflight().await, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_grant_the_core_will_not_take_is_not_recorded_or_admitted() {
+    let vectors = vectors();
+    let node = VectorNode::new(&vectors).await;
+    node.set_now(1_800_000_000);
+    let event = case(&vectors, "grantEvents", "good-grant")["event"].clone();
+    let alice = pubkey(&vectors, "alicePhone");
+    node.grants
+        .inner
+        .fail_push
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let (status, reason, _) = node.post(&event).await;
+    assert_eq!(
+        (status, reason.as_str()),
+        (StatusCode::SERVICE_UNAVAILABLE, "unavailable")
+    );
+    assert!(!node.granted(&alice, "get"), "the gate never saw the key");
+    assert!(node.grants.core_friend_grants().is_empty());
+    // The keeper retries and it lands, as a new grant rather than a replay.
+    let (status, reason, _) = node.post(&event).await;
+    assert_eq!((status, reason.as_str()), (StatusCode::CREATED, "accepted"));
+    assert!(node.granted(&alice, "get"));
+    assert_eq!(node.grants.core_friend_grants().len(), 1);
 }

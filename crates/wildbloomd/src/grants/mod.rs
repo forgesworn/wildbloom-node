@@ -186,6 +186,9 @@ struct Inner {
     app: OnceLock<AppState>,
     /// Group mode state; unset unless the node runs with `--group-mode`.
     group: OnceLock<group::GroupState>,
+    /// Makes the next group push fail, to test that a refused push records nothing.
+    #[cfg(test)]
+    fail_push: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -341,6 +344,8 @@ impl Grants {
                 delete_auth: AuthPolicy::new(config.server_names.clone()).with_public_writes(true),
                 app: OnceLock::new(),
                 group: OnceLock::new(),
+                #[cfg(test)]
+                fail_push: std::sync::atomic::AtomicBool::new(false),
             }),
         };
         grants.reload()?;
@@ -368,6 +373,11 @@ impl Grants {
     /// CLI friend grants plus every delegated key the core must currently
     /// hold.  Supply this as `BlossomConfig::friend_grants`.
     pub fn core_friend_grants(&self) -> Vec<FriendGrant> {
+        self.core_friend_grants_with(self.group_friend_grants())
+    }
+
+    /// The same set with `group` standing in for the group keys.
+    fn core_friend_grants_with(&self, group: Vec<FriendGrant>) -> Vec<FriendGrant> {
         let snapshot = self.snapshot();
         self.inner
             .cli_friend_grants
@@ -380,7 +390,7 @@ impl Grants {
                 grant_id: core_grant_id(key),
                 issuer: Some(member.issuer.clone()),
             }))
-            .chain(self.group_friend_grants())
+            .chain(group)
             .collect()
     }
 

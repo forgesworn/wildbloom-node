@@ -309,14 +309,6 @@ pub(super) fn write_grant(connection: &Connection, row: &GroupGrantRow) -> rusql
     Ok(())
 }
 
-pub(super) fn delete_grant(connection: &Connection, id: &GrantId) -> rusqlite::Result<()> {
-    connection.execute(
-        "DELETE FROM group_grants WHERE keeper = ?1 AND grant_id = ?2",
-        params![id.0, id.1],
-    )?;
-    Ok(())
-}
-
 pub(super) fn write_floor(
     connection: &Connection,
     group: &GroupId,
@@ -348,11 +340,6 @@ pub(super) fn write_key(
          ON CONFLICT(device) DO UPDATE SET byte_limit = excluded.byte_limit",
         params![device, key.keeper, key.room, key.byte_limit.map(int)],
     )?;
-    Ok(())
-}
-
-pub(super) fn delete_key(connection: &Connection, device: &str) -> rusqlite::Result<()> {
-    connection.execute("DELETE FROM group_keys WHERE device = ?1", [device])?;
     Ok(())
 }
 

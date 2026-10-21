@@ -29,7 +29,7 @@ use sha2::{Digest, Sha256};
 use tokio::{io::AsyncWriteExt, task::spawn_blocking};
 use wildbloom_core::{
     ClaimSpec, DeleteOutcome, RetentionTier, StoreError,
-    store::{BlobMetadata, UploadStart},
+    store::{BlobMetadata, UploadReservation, UploadStart},
 };
 
 /// Largest mirror request body the gate reads to find the blob.
@@ -47,7 +47,11 @@ enum Route {
     Delete(Option<String>),
     /// A CORS preflight.
     Options,
-    /// `/`, `/healthz` and anything the core answers without storing.
+    /// `/`: server information, never cached by a shared cache.
+    Info,
+    /// `/healthz`: liveness only.
+    Health,
+    /// Anything else the core answers without storing.
     Other,
 }
 
@@ -68,8 +72,9 @@ fn classify(request: &Request) -> Route {
         (&Method::PUT, "/upload") => Route::Upload,
         (&Method::HEAD, "/upload") => Route::Preflight,
         (&Method::PUT, "/mirror") => Route::Mirror,
-        (&Method::GET | &Method::HEAD, "/healthz") => Route::Other,
-        (&Method::GET, path) if path.starts_with("/list/") => Route::List,
+        (&Method::GET | &Method::HEAD, "/healthz") => Route::Health,
+        (&Method::GET | &Method::HEAD, "/") => Route::Info,
+        (&Method::GET | &Method::HEAD, path) if path.starts_with("/list/") => Route::List,
         (&Method::GET | &Method::HEAD, _) if single => Route::Read(hash()),
         (&Method::DELETE, _) if single => Route::Delete(hash()),
         _ => Route::Other,
@@ -117,6 +122,36 @@ fn preflight() -> Response {
     response
 }
 
+/// The headers the core's CORS layer puts on its own answers, so a browser
+/// client sees the gate's answers, refusals and `X-Reason` the same way.
+fn cors_headers(response: &mut Response) {
+    let headers = response.headers_mut();
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        HeaderValue::from_static("*"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_EXPOSE_HEADERS,
+        HeaderValue::from_static(
+            "content-length, content-range, content-type, etag, accept-ranges, content-disposition, x-content-type-options, x-reason",
+        ),
+    );
+}
+
+fn private_no_store(response: &mut Response) {
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+}
+
+/// Liveness only: a group node does not tell strangers what it stores.
+fn health() -> Response {
+    let mut response = axum::Json(serde_json::json!({ "status": "ok" })).into_response();
+    private_no_store(&mut response);
+    response
+}
+
 pub async fn group_gate(State(grants): State<Grants>, request: Request, next: Next) -> Response {
     if !grants.group_enabled() {
         return next.run(request).await;
@@ -124,8 +159,14 @@ pub async fn group_gate(State(grants): State<Grants>, request: Request, next: Ne
     let route = classify(&request);
     let is_read = matches!(route, Route::Read(_) | Route::List);
     let result = match route {
-        Route::Other => return next.run(request).await,
-        Route::Options => return preflight(),
+        Route::Other => return with_cors(next.run(request).await),
+        Route::Info => {
+            let mut response = next.run(request).await;
+            private_no_store(&mut response);
+            return with_cors(response);
+        }
+        Route::Health => return with_cors(health()),
+        Route::Options => return with_cors(preflight()),
         Route::Read(hash) => grants.group_read(request, next, hash).await,
         Route::List => grants.group_list(request, next).await,
         Route::Upload => grants.group_upload(request, next).await,
@@ -134,15 +175,18 @@ pub async fn group_gate(State(grants): State<Grants>, request: Request, next: Ne
         Route::Delete(hash) => grants.group_delete(request, next, hash).await,
     };
     let mut response = result.unwrap_or_else(IntoResponse::into_response);
-    if is_read || response.headers().get(header::CACHE_CONTROL).is_none() {
-        if is_read {
-            read_headers(&mut response);
-        } else {
-            response
-                .headers_mut()
-                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-        }
+    if is_read {
+        read_headers(&mut response);
+    } else if response.headers().get(header::CACHE_CONTROL).is_none() {
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     }
+    with_cors(response)
+}
+
+fn with_cors(mut response: Response) -> Response {
+    cors_headers(&mut response);
     response
 }
 
@@ -237,6 +281,31 @@ fn claim_spec(group: &GroupId, signer: &str, bytes: u64, content_type: &str) -> 
         byte_limit: Some(bytes),
         class: None,
     }
+}
+
+enum Started {
+    Existing(BlobMetadata),
+    Reserved(Box<UploadReservation>),
+}
+
+/// Read a body to the end and check that it is `length` bytes with the
+/// SHA-256 `hash`.  Nothing is kept.
+async fn prove_body(body: Body, hash: &str, length: u64) -> Result<(), Refusal> {
+    let mut stream = bounded_body(body).into_data_stream();
+    let mut hasher = Sha256::new();
+    let mut received = 0_u64;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| bad_request())?;
+        received = received
+            .checked_add(chunk.len() as u64)
+            .filter(|received| *received <= length)
+            .ok_or_else(bad_request)?;
+        hasher.update(&chunk);
+    }
+    if received != length || hex::encode(hasher.finalize()) != hash {
+        return Err(bad_request());
+    }
+    Ok(())
 }
 
 /// A member that may use `scope` right now.
@@ -334,6 +403,10 @@ impl Grants {
 
     /// `PUT /upload`: checked, then written through the store as a friend
     /// claim in the signer's group.
+    ///
+    /// A key that does not already hold the blob (and, for a group key, whose
+    /// group does not) gets a claim only once the whole body has been read and
+    /// hashed, so a digest and a length are never enough to be handed a blob.
     async fn group_upload(&self, request: Request, next: Next) -> Result<Response, Refusal> {
         let headers = request.headers();
         let hash = canonical_hash(header_text(headers, "x-sha-256")).ok_or_else(bad_request)?;
@@ -345,8 +418,25 @@ impl Grants {
             .unwrap_or("application/octet-stream")
             .to_owned();
         let token = self.verify_group_token(headers, Verb::Upload, Some(&hash))?;
+        let store = self.core_store()?;
         let Some(granted) = self.member_with(&token.signer, Scope::Upload)? else {
-            return Ok(next.run(request).await);
+            // An owner, friend or device-grant key: the core stores it, but
+            // not before the bytes prove the blob when the key does not hold it.
+            let (probe_store, signer, probe_hash) = (store, token.signer.clone(), hash.clone());
+            let must_prove = spawn_blocking(move || -> Result<bool, StoreError> {
+                Ok(!claims::holds_claim(&probe_store, &signer, &probe_hash)
+                    .map_err(|_| StoreError::MissingBlob)?
+                    && probe_store.get(&probe_hash)?.is_some())
+            })
+            .await
+            .map_err(|_| internal())?
+            .map_err(store_refusal)?;
+            if !must_prove {
+                return Ok(next.run(request).await);
+            }
+            let (parts, body) = request.into_parts();
+            prove_body(body, &hash, length).await?;
+            return Ok(next.run(Request::from_parts(parts, Body::empty())).await);
         };
         let bytes = granted.active.bytes.ok_or_else(internal)?;
         let permit = self
@@ -369,18 +459,65 @@ impl Grants {
         };
         let admitted = admitted.ok_or_else(group_full)?;
 
-        let claim = claim_spec(&granted.group, &token.signer, bytes, &content_type);
-        let store = self.core_store()?;
-        let started = {
+        // A blob some other holder already has is not stored again, so the
+        // bytes are checked here instead: a hash and a length prove nothing.
+        let exists = {
             let (store, hash) = (store.clone(), hash.clone());
-            spawn_blocking(move || store.begin_claimed_upload(&hash, length, claim))
+            spawn_blocking(move || store.get(&hash).map(|found| found.is_some()))
                 .await
                 .map_err(|_| internal())?
                 .map_err(store_refusal)?
         };
+        let proven = !held && exists;
+        let (_, body) = request.into_parts();
+        let body = if proven {
+            prove_body(body, &hash, length).await?;
+            None
+        } else {
+            Some(body)
+        };
+
+        let claim = claim_spec(&granted.group, &token.signer, bytes, &content_type);
+        // The claim and the group's view of it are made in one blocking task,
+        // which a dropped request cannot cancel half way.
+        let started = {
+            let (store, hash, group, signer) = (
+                store.clone(),
+                hash.clone(),
+                granted.group.clone(),
+                token.signer.clone(),
+            );
+            self.blocking(move |grants| {
+                match store.begin_claimed_upload(&hash, length, claim) {
+                    Ok(UploadStart::Existing(metadata)) => {
+                        if !held && !proven {
+                            // The blob appeared after the check, so nothing
+                            // proves these bytes: take the claim back.
+                            let _ = store.delete_claim(&hash, &signer);
+                            return Err(Refusal::unavailable());
+                        }
+                        grants.with_holdings(&group, |held| {
+                            held.insert(&metadata.sha256, metadata.size)
+                        })?;
+                        Ok(Started::Existing(metadata))
+                    }
+                    Ok(UploadStart::Reserved(reservation)) => {
+                        if proven {
+                            // The proven blob was removed meanwhile and the
+                            // body is spent: the client retries.
+                            return Err(Refusal::unavailable());
+                        }
+                        Ok(Started::Reserved(reservation))
+                    }
+                    Err(error) => Err(store_refusal(error)),
+                }
+            })
+            .await?
+        };
         let (metadata, created) = match started {
-            UploadStart::Existing(metadata) => (metadata, false),
-            UploadStart::Reserved(reservation) => {
+            Started::Existing(metadata) => (metadata, false),
+            Started::Reserved(reservation) => {
+                let body = body.ok_or_else(internal)?;
                 let mut options = tokio::fs::OpenOptions::new();
                 options.write(true).create_new(true);
                 #[cfg(unix)]
@@ -389,7 +526,6 @@ impl Grants {
                     .open(reservation.temp_path())
                     .await
                     .map_err(|_| internal())?;
-                let (_, body) = request.into_parts();
                 let mut stream = bounded_body(body).into_data_stream();
                 let mut hasher = Sha256::new();
                 let mut received = 0_u64;
@@ -409,20 +545,21 @@ impl Grants {
                 file.sync_all().await.map_err(|_| internal())?;
                 drop(file);
                 let actual = hex::encode(hasher.finalize());
-                let metadata = spawn_blocking(move || reservation.commit(&actual, received))
-                    .await
-                    .map_err(|_| internal())?
-                    .map_err(store_refusal)?;
+                let group = granted.group.clone();
+                let metadata = self
+                    .blocking(move |grants| {
+                        let metadata = reservation
+                            .commit(&actual, received)
+                            .map_err(store_refusal)?;
+                        grants.with_holdings(&group, |held| {
+                            held.insert(&metadata.sha256, metadata.size)
+                        })?;
+                        Ok(metadata)
+                    })
+                    .await?;
                 (metadata, true)
             }
         };
-        {
-            let (group, metadata) = (granted.group.clone(), metadata.clone());
-            self.blocking(move |grants| {
-                grants.with_holdings(&group, |held| held.insert(&metadata.sha256, metadata.size))
-            })
-            .await?;
-        }
         drop(admitted);
         drop(permit);
         // 201 when the signer's group did not hold the blob, whatever any
@@ -478,11 +615,18 @@ impl Grants {
         };
         let bytes = granted.active.bytes.ok_or_else(internal)?;
         let ceiling = self.group_ceiling(&granted.group.0).ok_or_else(internal)?;
+        let reserved = self.group_reserved(&granted.group)?;
         let (group, held_hash) = (granted.group.clone(), hash.clone());
-        let fits = self
+        let (held, fits) = self
             .blocking(move |grants| {
                 grants.with_holdings(&group, |held| {
-                    held.contains(&held_hash) || held.total().saturating_add(length) <= ceiling
+                    let held_already = held.contains(&held_hash);
+                    (
+                        held_already,
+                        held_already
+                            || held.total().saturating_add(reserved).saturating_add(length)
+                                <= ceiling,
+                    )
                 })
             })
             .await?;
@@ -491,16 +635,25 @@ impl Grants {
         }
         let claim = claim_spec(&granted.group, &token.signer, bytes, &content_type);
         let store = self.core_store()?;
-        spawn_blocking(move || store.check_claimed_upload(&hash, length, &claim))
+        match spawn_blocking(move || store.check_claimed_upload(&hash, length, &claim))
             .await
             .map_err(|_| internal())?
-            .map_err(store_refusal)?;
+        {
+            Ok(()) => {}
+            // A length that disagrees with a stored blob says nothing to a
+            // group that does not hold it: the bytes decide, as for a new one.
+            Err(StoreError::LengthMismatch) if !held => {}
+            Err(error) => return Err(store_refusal(error)),
+        }
         Ok(Response::new(Body::empty()))
     }
 
     /// `PUT /mirror`: the core fetches and stores; the gate decides who may
-    /// ask, refuses a full group first, and takes back a mirror that would
-    /// put the group over its ceiling.
+    /// ask, refuses a full group first, and takes back what it cannot stand
+    /// behind.  The core drops the fetched bytes when it already has the
+    /// blob (it answers `200` rather than `201`), so for a key that did not
+    /// hold the blob that claim rests on nothing and is taken back; a mirror
+    /// that would put the group over its ceiling is taken back too.
     async fn group_mirror(&self, request: Request, next: Next) -> Result<Response, Refusal> {
         let (parts, body) = request.into_parts();
         let body = to_bytes(body, MIRROR_BODY_BYTES)
@@ -510,47 +663,74 @@ impl Grants {
         let token = self.verify_group_token(&parts.headers, Verb::Upload, hash.as_deref())?;
         let granted = self.member_with(&token.signer, Scope::Upload)?;
         let request = Request::from_parts(parts, Body::from(body));
-        let Some(granted) = granted else {
-            return Ok(next.run(request).await);
+        let store = self.core_store()?;
+        let signer = token.signer;
+        let (group, ceiling, reserved, held_before) = match &granted {
+            Some(granted) => {
+                let ceiling = self.group_ceiling(&granted.group.0).ok_or_else(internal)?;
+                let reserved = self.group_reserved(&granted.group)?;
+                let (group, hash) = (granted.group.clone(), hash.clone());
+                let (held, total) = self
+                    .blocking(move |grants| {
+                        grants.with_holdings(&group, |held| {
+                            (
+                                hash.as_deref().is_some_and(|hash| held.contains(hash)),
+                                held.total(),
+                            )
+                        })
+                    })
+                    .await?;
+                if !held && total.saturating_add(reserved) >= ceiling {
+                    return Err(group_full());
+                }
+                (Some(granted.group.clone()), ceiling, reserved, held)
+            }
+            None => {
+                let (store, signer, hash) = (store.clone(), signer.clone(), hash.clone());
+                let held = self
+                    .blocking(move |_| match hash {
+                        Some(hash) => claims::holds_claim(&store, &signer, &hash)
+                            .map_err(|_| Refusal::unavailable()),
+                        None => Ok(false),
+                    })
+                    .await?;
+                (None, 0, 0, held)
+            }
         };
-        let ceiling = self.group_ceiling(&granted.group.0).ok_or_else(internal)?;
-        let held_before = {
-            let (group, hash) = (granted.group.clone(), hash.clone());
-            self.blocking(move |grants| {
-                grants.with_holdings(&group, |held| {
-                    (
-                        hash.as_deref().is_some_and(|hash| held.contains(hash)),
-                        held.total(),
-                    )
-                })
-            })
-            .await?
-        };
-        if !held_before.0 && held_before.1 >= ceiling {
-            return Err(group_full());
-        }
-        let response = next.run(request).await;
-        if !response.status().is_success() {
-            return Ok(response);
-        }
-        let (parts, body) = response.into_parts();
-        let bytes = to_bytes(body, DESCRIPTOR_BYTES)
-            .await
-            .map_err(|_| internal())?;
-        let descriptor: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
-        let named = descriptor["sha256"]
-            .as_str()
-            .zip(descriptor["size"].as_u64())
-            .map(|(hash, size)| (hash.to_owned(), size));
-        if let Some((hash, size)) = named {
-            let group = granted.group.clone();
-            let store = self.core_store()?;
-            let signer = token.signer.clone();
-            let over = self
+        // Forwarding and the group's view of the result run as one task, so
+        // a client that hangs up cannot leave a committed claim unrecorded.
+        let grants = self.clone();
+        tokio::spawn(async move {
+            let response = next.run(request).await;
+            if !response.status().is_success() {
+                return Ok(response);
+            }
+            let status = response.status();
+            let (parts, body) = response.into_parts();
+            let bytes = to_bytes(body, DESCRIPTOR_BYTES)
+                .await
+                .map_err(|_| internal())?;
+            let descriptor: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
+            let named = descriptor["sha256"]
+                .as_str()
+                .zip(descriptor["size"].as_u64())
+                .map(|(hash, size)| (hash.to_owned(), size));
+            let Some((hash, size)) = named else {
+                return Ok(Response::from_parts(parts, Body::from(bytes)));
+            };
+            let unproven = status == StatusCode::OK && !held_before;
+            let verdict = grants
                 .blocking(move |grants| {
+                    if unproven {
+                        let _ = store.delete_claim(&hash, &signer);
+                        return Err(Refusal::conflict("wrong-blob"));
+                    }
+                    let Some(group) = group else {
+                        return Ok(false);
+                    };
                     grants.with_holdings(&group, |held| {
                         held.insert(&hash, size);
-                        if !held_before.0 && held.total() > ceiling {
+                        if !held_before && held.total().saturating_add(reserved) > ceiling {
                             // The claim is new, so taking it back loses nothing.
                             let _ = store.delete_claim(&hash, &signer);
                             held.remove(&hash);
@@ -560,11 +740,13 @@ impl Grants {
                     })
                 })
                 .await?;
-            if over {
+            if verdict {
                 return Err(group_full());
             }
-        }
-        Ok(Response::from_parts(parts, Body::from(bytes)))
+            Ok(Response::from_parts(parts, Body::from(bytes)))
+        })
+        .await
+        .map_err(|_| internal())?
     }
 
     /// `DELETE /<sha256>`: a `delete` token and one of an active `delete`

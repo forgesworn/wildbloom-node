@@ -30,6 +30,7 @@ fn group_mode_refuses_to_start_beside_the_guest_tier_discovery_and_paid_profiles
     let base = ["--group-mode", "--group-keeper", keeper.as_str()];
     for (flag, value, needle) in [
         ("--open-shelter", None, "--open-shelter"),
+        ("--storage-proofs", None, "--storage-proofs"),
         (
             "--service-profile",
             Some("/nonexistent/profile.json"),
@@ -349,5 +350,8 @@ async fn a_running_group_node_serves_only_its_group_and_remembers_across_a_resta
         .output()
         .unwrap();
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("group state"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("group state"));
+    // The message does not offer moving the file aside as if that were safe.
+    assert!(stderr.contains("evictable"), "{stderr}");
 }

@@ -653,6 +653,12 @@ fn group_mode_config(cli: &Cli) -> Result<Option<grants::GroupConfig>, Box<dyn s
             "--group-mode refuses --checkout-profile: a group node sells no storage".into(),
         );
     }
+    if cli.storage_proofs {
+        return Err(
+            "--group-mode refuses --storage-proofs: any key could ask whether a blob is stored"
+                .into(),
+        );
+    }
     if cli.group_keepers.is_empty() {
         return Err("--group-mode needs at least one --group-keeper".into());
     }
@@ -675,7 +681,7 @@ fn refuse_orphaned_group_state(
 ) -> Result<(), Box<dyn std::error::Error>> {
     if !group_mode && grants::Grants::group_database_path(data_dir).exists() {
         return Err(
-            "this data directory holds group state: start with --group-mode and the same --group-keeper entries, or move group-grants.sqlite3 aside"
+            "this data directory holds group state: start with --group-mode and the same --group-keeper entries. Moving group-grants.sqlite3 aside is not a fix: the group's claims would be demoted to evictable guest data that a node outside group mode serves to anyone who asks for the hash"
                 .into(),
         );
     }
