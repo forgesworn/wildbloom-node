@@ -479,22 +479,38 @@ impl Grants {
         let Some(granted) = self.member_with(&token.signer, Scope::Upload)? else {
             // An owner, friend or device-grant key: the core stores it, but
             // not before the bytes prove the blob when the key does not hold it.
-            let (probe_store, signer, probe_hash) =
-                (store.clone(), token.signer.clone(), hash.clone());
-            let must_prove = spawn_blocking(move || -> Result<bool, StoreError> {
-                Ok(!claims::holds_claim(&probe_store, &signer, &probe_hash)
-                    .map_err(|_| StoreError::MissingBlob)?
-                    && probe_store.get(&probe_hash)?.is_some())
+            let (probe_grants, probe_store, signer, probe_hash) = (
+                self.clone(),
+                store.clone(),
+                token.signer.clone(),
+                hash.clone(),
+            );
+            let must_prove = spawn_blocking(move || -> Result<bool, Refusal> {
+                Ok(
+                    !probe_grants.authority_holds(&probe_store, &signer, &probe_hash)?
+                        && probe_store
+                            .get(&probe_hash)
+                            .map_err(store_refusal)?
+                            .is_some(),
+                )
             })
             .await
-            .map_err(|_| internal())?
-            .map_err(store_refusal)?;
+            .map_err(|_| internal())??;
             if !must_prove {
                 return Ok(next.run(request).await);
             }
             // The core would have judged the length before reading a byte;
             // so do the same here, then take a write slot and prove the bytes.
-            if let Some(claim) = self.authority_claim(&token.signer) {
+            // A device key whose grant has ended, or that the core does not
+            // know, is refused at once, as it is for a hash nobody stores.
+            if self.snapshot().knows(&token.signer) && !self.is_active(&token.signer) {
+                return Err(Refusal::forbidden("the delegated storage grant has ended"));
+            }
+            let claim = self.authority_claim(&token.signer).ok_or(Refusal::new(
+                StatusCode::UNAUTHORIZED,
+                "invalid Blossom authorisation",
+            ))?;
+            {
                 let store = store.clone();
                 spawn_blocking(move || judge_as_new(&store, &claim, length))
                     .await
@@ -774,9 +790,8 @@ impl Grants {
             None => {
                 let (store, signer, hash) = (store.clone(), signer.clone(), hash.clone());
                 let held = self
-                    .blocking(move |_| match hash {
-                        Some(hash) => claims::holds_claim(&store, &signer, &hash)
-                            .map_err(|_| Refusal::unavailable()),
+                    .blocking(move |grants| match hash {
+                        Some(hash) => grants.authority_holds(&store, &signer, &hash),
                         None => Ok(false),
                     })
                     .await?;

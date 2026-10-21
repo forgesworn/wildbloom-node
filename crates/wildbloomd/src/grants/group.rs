@@ -21,7 +21,7 @@ use axum::{
 };
 use rusqlite::Connection;
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, RwLock},
     time::Duration,
@@ -68,8 +68,9 @@ pub(super) struct GroupState {
     /// Clock seconds of recent grants that changed state, per keeper.
     pub posts: Mutex<HashMap<String, VecDeque<u64>>>,
     /// (key, hash) pairs whose claim was made by a mirror the gate has not
-    /// yet vouched for: an owner-delegated key may not read them meanwhile.
-    pub unproven: Mutex<HashSet<(String, String)>>,
+    /// yet vouched for, with how many such mirrors are in flight: an
+    /// owner-delegated key may not read them, or count them as held, meanwhile.
+    pub unproven: Mutex<HashMap<(String, String), usize>>,
     /// Clock seconds of recent posts that were refused before the node's
     /// state was consulted.
     pub unverified: Mutex<VecDeque<u64>>,
@@ -199,7 +200,7 @@ impl Grants {
             snapshot: RwLock::new(Arc::new(rows)),
             updates: tokio::sync::Mutex::new(()),
             posts: Mutex::new(HashMap::new()),
-            unproven: Mutex::new(HashSet::new()),
+            unproven: Mutex::new(HashMap::new()),
             unverified: Mutex::new(VecDeque::new()),
             holdings: Mutex::new(HashMap::new()),
             reserved: Mutex::new(HashMap::new()),
@@ -942,18 +943,23 @@ impl Drop for Unproven {
     fn drop(&mut self) {
         if let Some(state) = self.grants.inner.group.get()
             && let Ok(mut unproven) = state.unproven.lock()
+            && let Some(count) = unproven.get_mut(&self.pair)
         {
-            unproven.remove(&self.pair);
+            *count -= 1;
+            if *count == 0 {
+                unproven.remove(&self.pair);
+            }
         }
     }
 }
 
 impl Grants {
     /// Until the guard drops, `key` may not read `hash` as its own claim.
+    /// Marks are counted: the claim is trusted again only when the last one drops.
     pub(super) fn mark_unproven(&self, key: &str, hash: &str) -> Option<Unproven> {
         let state = self.inner.group.get()?;
         let pair = (key.to_owned(), hash.to_owned());
-        state.unproven.lock().ok()?.insert(pair.clone());
+        *state.unproven.lock().ok()?.entry(pair.clone()).or_default() += 1;
         Some(Unproven {
             grants: self.clone(),
             pair,
@@ -962,10 +968,25 @@ impl Grants {
 
     pub(super) fn is_unproven(&self, key: &str, hash: &str) -> bool {
         self.inner.group.get().is_some_and(|state| {
-            state
-                .unproven
-                .lock()
-                .map_or(true, |set| set.contains(&(key.to_owned(), hash.to_owned())))
+            state.unproven.lock().map_or(true, |marks| {
+                marks.contains_key(&(key.to_owned(), hash.to_owned()))
+            })
         })
+    }
+}
+
+impl Grants {
+    /// Whether an owner-delegated key holds a claim the gate stands behind:
+    /// a claim made by a mirror still being checked does not count.
+    pub(super) fn authority_holds(
+        &self,
+        store: &wildbloom_core::Store,
+        key: &str,
+        hash: &str,
+    ) -> Result<bool, Refusal> {
+        if self.is_unproven(key, hash) {
+            return Ok(false);
+        }
+        super::claims::holds_claim(store, key, hash).map_err(|_| Refusal::unavailable())
     }
 }

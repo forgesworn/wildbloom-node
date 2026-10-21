@@ -811,7 +811,13 @@ Still open:
   reads of their own files?  Proposed: no, every read needs a token.
 - **O12.** Grants visible to all members on the control channel (chosen), or
   sealed to each device under a new kind?
-- **O13.** Per-key rate and read limits for a home node.
+- **O13.** Per-key rate and read limits for a home node.  S3 builds none.
+  One consequence: the proofs of owner, friend and device-grant keys (reading
+  an upload's bytes before a claim on a blob they do not hold) take the same
+  write permits as group uploads, so one such key can hold every permit for
+  as long as it trickles a body, and group uploads then answer `429`.  Group
+  members can do the same.  The remedy is a separate permit pool for proofs,
+  or per-key limits on concurrent streams and read bytes.
 - **O14.** Register kind 27541 upstream after a relay scan, or keep it a
   project kind?
 

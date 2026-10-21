@@ -2740,3 +2740,153 @@ async fn the_event_route_exposes_x_reason_to_browsers() {
             .contains("x-reason")
     );
 }
+
+#[tokio::test]
+async fn a_second_mirror_cannot_slip_past_the_mark_of_the_first() {
+    let vectors = vectors();
+    let (_, text4) = blob(&vectors, "blob4");
+    let (hash, text) = blob(&vectors, "blob3");
+    let friend = Keys::generate();
+    let friend_key = friend.public_key().to_hex();
+    let release = Arc::new(tokio::sync::Notify::new());
+    let node = Arc::new(
+        VectorNode::limited(
+            &vectors,
+            Limits {
+                friend: Some(friend_key.clone()),
+                source: Some(text4.into_bytes()),
+                source_gate: Some(release.clone()),
+                ..Limits::default()
+            },
+        )
+        .await,
+    );
+    let now = real_now();
+    node.set_now(now);
+    node.owner_upload(&vectors, "blob3");
+
+    // A first mirror is part way through: its claim exists and is marked.
+    let first_mark = node.grants.mark_unproven(&friend_key, &hash).unwrap();
+    let claim = wildbloom_core::ClaimSpec {
+        signer_pubkey: friend_key.clone(),
+        retention_tier: wildbloom_core::RetentionTier::Friend,
+        declared_type: "application/octet-stream".into(),
+        grant_id: Some("local:friend".into()),
+        claim_expires_at: Some(4_000_000_000),
+        byte_limit: Some(MIB),
+        class: None,
+    };
+    node.store
+        .begin_claimed_upload(&hash, text.len() as u64, claim)
+        .unwrap();
+    assert!(holds(&node, &friend_key, &hash));
+    // Meanwhile the claim counts as nothing: a zero-byte upload does not get
+    // the existing-blob shortcut.
+    let (status, ..) = put_raw(&node, &friend, &hash, text.len(), vec![0; text.len()], now).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // A second mirror, from a slow source, is marked too, and takes the claim
+    // back when it ends, though the first mark is still there.
+    let second = {
+        let node = node.clone();
+        let (friend, hash) = (friend.clone(), hash.clone());
+        tokio::spawn(async move {
+            node.app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("PUT")
+                        .uri("/mirror")
+                        .header("Authorization", token_by(&friend, "upload", &hash, now))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({ "url": format!("https://source.example.net/{hash}") })
+                                .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status()
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    release.notify_one();
+    assert_eq!(second.await.unwrap(), StatusCode::CONFLICT);
+    assert!(
+        !holds(&node, &friend_key, &hash),
+        "the shared claim was taken back"
+    );
+    // The first mirror ends later: the pair is only trusted once every mark is gone.
+    assert!(node.grants.is_unproven(&friend_key, &hash));
+    drop(first_mark);
+    assert!(!node.grants.is_unproven(&friend_key, &hash));
+    let (status, ..) = node
+        .request(
+            &vectors,
+            &request(
+                "GET",
+                &format!("/{hash}"),
+                &[("Authorization", token_by(&friend, "get", &hash, now))],
+                None,
+            ),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_device_key_with_nothing_to_judge_against_is_refused_at_once() {
+    use super::event::DEVICE_GRANT_KIND;
+    let vectors = vectors();
+    let node = VectorNode::new(&vectors).await;
+    let now = 1_800_000_000;
+    node.set_now(now);
+    node.owner_upload(&vectors, "blob3");
+    let owner = secret(&vectors, "nodeOwner");
+    let device = Keys::generate();
+    let recovery = Keys::generate();
+    let tags = [
+        ["t", "grant"],
+        ["device", device.public_key().to_hex().as_str()],
+        ["recovery", recovery.public_key().to_hex().as_str()],
+        ["bytes", "1048576"],
+        ["until", (now + 1_000).to_string().as_str()],
+        ["server", "grove.example.net"],
+        ["expiration", (now + 300).to_string().as_str()],
+    ]
+    .into_iter()
+    .map(|tag| Tag::parse(tag).unwrap())
+    .collect::<Vec<_>>();
+    let event = EventBuilder::new(Kind::Custom(DEVICE_GRANT_KIND), "Approve this device")
+        .tags(tags)
+        .custom_created_at(Timestamp::from(now))
+        .finalize(&owner)
+        .unwrap();
+    node.grants
+        .apply_grant(serde_json::to_string(&event).unwrap().as_bytes())
+        .await
+        .unwrap();
+    let (stored, _) = blob(&vectors, "blob3");
+    let (unknown, _) = blob(&vectors, "blob4");
+
+    // The grant ends; first it is still a member of the core's set, then the
+    // sweep has removed it.  Either way a stored hash and an unknown one are
+    // refused alike, at once, for the device and for its recovery key.
+    for stage in ["ended", "swept"] {
+        node.set_now(now + 2_000);
+        if stage == "swept" {
+            node.grants.sweep_ended().await.unwrap();
+        }
+        for key in [&device, &recovery] {
+            let mut answers: Vec<Answer> = Vec::new();
+            for hash in [&stored, &unknown] {
+                let (status, reason, _) =
+                    put_raw(&node, key, hash, 600_000, vec![0; 600_000], now + 2_000).await;
+                answers.push((status, reason));
+            }
+            assert_eq!(answers[0], answers[1], "{stage}");
+            assert_eq!(answers[0].0, StatusCode::FORBIDDEN, "{stage}");
+        }
+    }
+}
