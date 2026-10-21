@@ -131,6 +131,7 @@ Key CLI flags (each also has a `WILDBLOOM_*` environment variable; see
 - [Protocol and trust boundaries](docs/PROTOCOL.md)
 - [Storage priority contract](docs/STORAGE-POLICY.md)
 - [Threat model](docs/THREAT-MODEL.md)
+- [Group grants (draft, not implemented)](docs/GROUP-GRANTS.md)
 - [Replica maintenance guide](docs/REPLICA-POLICY.md)
 - [Roadmap](docs/ROADMAP.md)
 - [Release process](docs/RELEASE.md)

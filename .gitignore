@@ -6,3 +6,4 @@ desktop/src-tauri/gen/
 *.log
 
 desktop/node_modules/
+scripts/group-grants/node_modules/

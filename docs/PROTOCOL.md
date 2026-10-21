@@ -156,6 +156,10 @@ ended, every request from its keys other than `GET`, `OPTIONS` and non-preflight
 grant ends (expiry, revocation or its owner leaving the owner set) is set out
 in [STORAGE-POLICY.md](STORAGE-POLICY.md#owner-delegated-claims).
 
+[GROUP-GRANTS.md](GROUP-GRANTS.md) drafts a related profile, not yet
+implemented: keeper-signed kind `27541` grants that admit a KithMoot room's
+devices to a node in a closed group mode with authenticated reads.
+
 ### Pairing creation-grant issuer
 
 `--pairing-issuer --pairing-relay-url <foregather base>` (with
