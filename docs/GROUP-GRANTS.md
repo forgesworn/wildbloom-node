@@ -1,9 +1,9 @@
 # Group grants
 
-Status: draft profile `group-grants/1`, 21 October 2026.  Specified only:
-nothing here is built in `wildbloomd`, KithMoot or Bothy yet.  This is phase
-S2 of KithMoot's group-hosted design; S3 to S9 consume it.  It is an
-experimental profile, not a NIP, and not legal advice.
+Status: draft profile `group-grants/1`, 21 October 2026.  Phase S3, the
+`wildbloomd` group mode of section 12, is built; KithMoot and Bothy are not.
+This is phase S2 of KithMoot's group-hosted design; S3 to S9 consume it.  It
+is an experimental profile, not a NIP, and not legal advice.
 
 The phases and decision this document refers to:
 
@@ -641,19 +641,40 @@ When a group node will not do what it asks, it says so plainly:
 
 ## 12. wildbloomd mapping (for S3)
 
+Built in S3.  The names and shapes S3 settled are in the right-hand column.
+
 | Element | In `wildbloomd` |
 |---|---|
-| Group mode | A start flag, `--group-mode`.  Refuses `--open-shelter`, the guest tier, service discovery (kind 31402) and paid profiles; makes every read need a token; sets the cache headers in 6.6 |
-| Enrolment | A repeatable `--group-keeper <hex>:<ceiling bytes>` (or a file), checked at start like `--friend-grant`.  Names and shape are S3's to settle |
-| Event route | `POST /groups/v1/events`, beside `/grants/v1` |
-| State | A private `0600` SQLite file beside the store, like `device-grants.sqlite3`: grant rows by keeper and grant id, floors, key to group, spent delete ids.  Part of retention state: back it up with the store |
-| Claims | Each group key is a core friend grant while it holds claims, with a core grant id per group and the far-future sentinel expiry, as device grants use.  The real expiry and scopes are enforced by a gate in front of the core router |
-| Reads | The main new code: a check in that gate for `GET` and `HEAD`, before the core serves the bytes.  Today `wildbloomd` serves reads without a token |
+| Group mode | A start flag, `--group-mode` (`WILDBLOOM_GROUP_MODE`).  Refuses `--open-shelter`, the guest tier, service discovery (kind 31402, `--service-profile`) and paid profiles (`--checkout-profile`) at start-up, and needs at least one keeper.  Makes every read need a token; sets the cache headers in 6.6 |
+| Enrolment | A repeatable `--group-keeper <hex>:<ceiling bytes>[:<room>+<room>]` (`WILDBLOOM_GROUP_KEEPERS`, comma-separated), checked at start like `--friend-grant`.  The keeper is 64 lower-case hex, the ceiling is bytes per group, and the optional rooms (64 lower-case hex, joined with `+`) limit which room ids that keeper may open here.  A keeper listed twice, or also an owner, friend, device-grant, recovery, service or group device key, stops the node starting.  There is no enrolment file in S3 |
+| Event route | `POST /groups/v1/events`, beside `/grants/v1`.  At most 120 posts a minute across all callers.  A reason is the response's `X-Reason`.  `GET /groups/v1/self` is not built (optional in S3) |
+| State | A private `0600` SQLite file `group-grants.sqlite3` beside the store, like `device-grants.sqlite3`: grant rows by keeper and grant id, reset floors, the key to group map, and the spent delete token ids (the `used_events` table and `consume_event` of the device grants, in this file).  Grant rows are kept until their latest expiration plus the seven-day delete grace, floors for 90 days, spent ids until the token expires; a key stays in its group for good.  Part of retention state: back it up with the store |
+| Claims | Each group key that ever had an `upload` grant is a core friend grant with core grant id `wildbloom-group:<keeper>:<room>`, the far-future sentinel expiry device grants use, and the ceiling of its newest upload grant.  Its claims are ordinary friend claims in the store.  The real expiry and scopes are enforced by a gate in front of the core router |
+| Reads | The gate's check for `GET` and `HEAD`, before the core serves the bytes.  A blob counts as held by a group while any key of the group claims it.  The gate keeps that view in memory and rebuilds it from the store's claims after a restart |
+| Uploads, preflights, deletes | Completed by the gate through the store, not by the core router: the core checks a token against the machine clock and has no `get` verifier, so a group token (which the gate verifies on the node's clock) cannot go through it.  `PUT /mirror` is allowed by the gate and then made by the core |
 | Ended keys | Stay in the core's friend set while they hold claims; the gate refuses them.  Their claims are not moved to an owner, unlike device grants |
-| Spent ids | The device grants' `consume_event` table, keyed by token id until its expiry |
-| TURN | `device_auth` accepts a key with an active `turn` group grant (S9) |
+| Spent ids | The device grants' `consume_event` table shape, keyed by token id until its expiry, in the group file |
+| TURN | `device_auth` accepts a key with an active `turn` group grant (S9, not built) |
 | Pairing issuer | Not open to group keys |
-| Device grants | Keep working; a key cannot be in both |
+| Device grants | Keep working; a key cannot be in both.  A device grant refuses a group key, and a group grant refuses a device-grant key |
+
+What S3 chose where the profile is silent or an open question applies (section 15):
+
+- The owner's own keys, friends and device-grant keys need a token to read too
+  (O11, the stated default), and a valid `get` token shows them only the blobs
+  they hold themselves.  Their uploads, mirrors, deletes and lists reach the
+  core as before.  An enrolled keeper is not a user and is refused `403`.
+- A room the enrolment does not list is refused `403 keeper`.
+- Per-key request-rate and read-byte limits (O13) are not built; the only
+  limits are the ceilings, the per-blob limit, and a cap on concurrent group
+  upload streams (`--max-concurrent-writes`, counted apart from the core's).
+- Retention from last fetch (O7) is not built: a group's files stay until a
+  holder deletes them or the node owner removes them.
+- A mirror's size is unknown until the core has fetched it, so the group
+  ceiling is checked after it: a mirror that would pass the ceiling is taken
+  back and answers `507`.
+- A delete token is spent by any permitted attempt, including one that finds
+  nothing to delete.
 
 ## 13. Bothy mapping (proposal; needs decented's agreement)
 

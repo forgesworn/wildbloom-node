@@ -215,6 +215,8 @@ Useful controls:
 --friend-grant <P:L:E>         PUBKEY:BYTE_LIMIT:EXPIRES_AT, Unix expiry, repeatable
 --open-shelter                 admit unknown signed mirrors as guest data
 --device-grants                accept owner-signed device grants on /grants/v1
+--group-mode                   closed group storage node (docs/GROUP-GRANTS.md)
+--group-keeper <K:C[:R+R]>     KEEPER:CEILING_BYTES[:ROOM+ROOM] to enrol, repeatable
 --pairing-issuer               issue one-use Foregather live grants to devices
 --pairing-relay-url <URL>      Foregather API base for --pairing-issuer
 --pairing-operator-token-file <PATH>  private file holding its operator token
@@ -298,6 +300,15 @@ An operator may add an invited key with
 separate, explicit policy: unknown keys may submit signed BUD-04 mirrors when
 the high free-space watermark remains intact, but they still cannot upload
 directly and receive no retention promise.
+
+`--group-mode` runs a closed node for the devices of enrolled groups.  Each
+`--group-keeper <keeper-hex>:<ceiling-bytes>` names a room authority key the
+node serves and the most one of its groups may hold.  The keeper signs kind
+`27541` grants that the node takes on `POST /groups/v1/events`; only granted
+keys may use the node, every read needs a BUD-11 `get` token, and a read shows
+only what the signer's own group holds.  It refuses `--open-shelter`,
+`--service-profile` and `--checkout-profile`, so the node is never listed or
+open to strangers.  See [docs/GROUP-GRANTS.md](docs/GROUP-GRANTS.md).
 
 Wildbloom's browser app keeps encryption client-side, so a node stores ciphertext
 rather than plaintext.  See the exact [protocol and trust boundaries](docs/PROTOCOL.md)

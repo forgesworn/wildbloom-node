@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Add `wildbloomd --group-mode`, a closed storage node for the devices of
+  enrolled groups (phase S3 of `docs/GROUP-GRANTS.md`).  `--group-keeper
+  <keeper>:<ceiling bytes>` enrols a room authority key; its kind `27541`
+  grants arrive on `POST /groups/v1/events`.  Only granted keys may use the
+  node, every read needs a BUD-11 `get` token and sees only what the signer's
+  group holds, and group reads are never cacheable.  It refuses
+  `--open-shelter`, `--service-profile` and `--checkout-profile`.
+
 ## 0.3.11 preview - 2026-10-20
 
 - Update the TLS certificate checks in Drop and `wildbloomd`: `rustls-webpki`
