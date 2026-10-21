@@ -283,6 +283,38 @@ fn claim_spec(group: &GroupId, signer: &str, bytes: u64, content_type: &str) -> 
     }
 }
 
+/// Judge a declared length exactly as for a blob the node has never seen: the
+/// per-blob limit, the key's own ceiling and the node's quota, in the store's
+/// order.  A random digest stands in for the hash, so a stored blob's size
+/// cannot show through.
+fn judge_as_new(
+    store: &wildbloom_core::Store,
+    claim: &ClaimSpec,
+    length: u64,
+) -> Result<(), StoreError> {
+    let mut digest = [0_u8; 32];
+    getrandom::fill(&mut digest).map_err(|_| StoreError::IntegerRange)?;
+    store.check_claimed_upload(&hex::encode(digest), length, claim)
+}
+
+/// What the core would have answered an owner, friend or device-grant key,
+/// word for word, so a stored hash and an unknown one read the same.
+fn core_refusal(error: StoreError) -> Refusal {
+    match error {
+        StoreError::BlobTooLarge { .. } => {
+            Refusal::new(StatusCode::PAYLOAD_TOO_LARGE, "upload is too large")
+        }
+        StoreError::QuotaExceeded => {
+            Refusal::new(StatusCode::INSUFFICIENT_STORAGE, "storage quota is full")
+        }
+        StoreError::FriendLimitExceeded => Refusal::new(
+            StatusCode::INSUFFICIENT_STORAGE,
+            "friend storage grant is full or expired",
+        ),
+        other => store_refusal(other),
+    }
+}
+
 enum Started {
     Existing(BlobMetadata),
     Reserved(Box<UploadReservation>),
@@ -335,6 +367,28 @@ impl Grants {
             .map_err(|_| Refusal::unavailable())?
     }
 
+    /// The claim an owner, friend or device-grant key would make through the
+    /// core, for judging a length before a byte is read.
+    fn authority_claim(&self, signer: &str) -> Option<ClaimSpec> {
+        let spec = |tier, grant: Option<wildbloom_core::FriendGrant>| ClaimSpec {
+            signer_pubkey: signer.to_owned(),
+            retention_tier: tier,
+            declared_type: "application/octet-stream".to_owned(),
+            grant_id: grant.as_ref().map(|grant| grant.grant_id.clone()),
+            claim_expires_at: grant.as_ref().map(|grant| grant.expires_at),
+            byte_limit: grant.map(|grant| grant.byte_limit),
+            class: None,
+        };
+        if self.inner.owners.contains(signer) {
+            return Some(spec(RetentionTier::Owner, None));
+        }
+        let grant = self
+            .core_friend_grants()
+            .into_iter()
+            .find(|grant| grant.pubkey == signer)?;
+        Some(spec(RetentionTier::Friend, Some(grant)))
+    }
+
     fn core_store(&self) -> Result<wildbloom_core::Store, Refusal> {
         self.inner
             .app
@@ -381,6 +435,9 @@ impl Grants {
                 let hash = hash.ok_or_else(absent)?;
                 let store = self.core_store()?;
                 let signer = token.signer;
+                if self.is_unproven(&signer, &hash) {
+                    return Err(absent());
+                }
                 self.blocking(move |_| {
                     claims::holds_claim(&store, &signer, &hash).map_err(|_| Refusal::unavailable())
                 })
@@ -422,7 +479,8 @@ impl Grants {
         let Some(granted) = self.member_with(&token.signer, Scope::Upload)? else {
             // An owner, friend or device-grant key: the core stores it, but
             // not before the bytes prove the blob when the key does not hold it.
-            let (probe_store, signer, probe_hash) = (store, token.signer.clone(), hash.clone());
+            let (probe_store, signer, probe_hash) =
+                (store.clone(), token.signer.clone(), hash.clone());
             let must_prove = spawn_blocking(move || -> Result<bool, StoreError> {
                 Ok(!claims::holds_claim(&probe_store, &signer, &probe_hash)
                     .map_err(|_| StoreError::MissingBlob)?
@@ -434,8 +492,25 @@ impl Grants {
             if !must_prove {
                 return Ok(next.run(request).await);
             }
+            // The core would have judged the length before reading a byte;
+            // so do the same here, then take a write slot and prove the bytes.
+            if let Some(claim) = self.authority_claim(&token.signer) {
+                let store = store.clone();
+                spawn_blocking(move || judge_as_new(&store, &claim, length))
+                    .await
+                    .map_err(|_| internal())?
+                    .map_err(core_refusal)?;
+            }
+            let _permit = self
+                .group_writes()
+                .ok_or_else(Refusal::unavailable)?
+                .try_acquire_owned()
+                .map_err(|_| Refusal::new(StatusCode::TOO_MANY_REQUESTS, "busy"))?;
             let (parts, body) = request.into_parts();
-            prove_body(body, &hash, length).await?;
+            // Worded as the core words a body that is not the blob.
+            prove_body(body, &hash, length)
+                .await
+                .map_err(|_| Refusal::bad("upload does not match its declared metadata"))?;
             return Ok(next.run(Request::from_parts(parts, Body::empty())).await);
         };
         let bytes = granted.active.bytes.ok_or_else(internal)?;
@@ -458,6 +533,16 @@ impl Grants {
             .await?
         };
         let admitted = admitted.ok_or_else(group_full)?;
+        let claim = claim_spec(&granted.group, &token.signer, bytes, &content_type);
+        if !held {
+            // A group that does not hold the blob is judged as for a new one
+            // before any byte is read, whatever the node has stored.
+            let (store, claim) = (store.clone(), claim.clone());
+            spawn_blocking(move || judge_as_new(&store, &claim, length))
+                .await
+                .map_err(|_| internal())?
+                .map_err(store_refusal)?;
+        }
 
         // A blob some other holder already has is not stored again, so the
         // bytes are checked here instead: a hash and a length prove nothing.
@@ -477,7 +562,6 @@ impl Grants {
             Some(body)
         };
 
-        let claim = claim_spec(&granted.group, &token.signer, bytes, &content_type);
         // The claim and the group's view of it are made in one blocking task,
         // which a dropped request cannot cancel half way.
         let started = {
@@ -635,16 +719,18 @@ impl Grants {
         }
         let claim = claim_spec(&granted.group, &token.signer, bytes, &content_type);
         let store = self.core_store()?;
-        match spawn_blocking(move || store.check_claimed_upload(&hash, length, &claim))
-            .await
-            .map_err(|_| internal())?
-        {
-            Ok(()) => {}
-            // A length that disagrees with a stored blob says nothing to a
-            // group that does not hold it: the bytes decide, as for a new one.
-            Err(StoreError::LengthMismatch) if !held => {}
-            Err(error) => return Err(store_refusal(error)),
-        }
+        // A group that does not hold the blob is judged as for a new one,
+        // whatever the node has stored under that hash.
+        spawn_blocking(move || {
+            if held {
+                store.check_claimed_upload(&hash, length, &claim)
+            } else {
+                judge_as_new(&store, &claim, length)
+            }
+        })
+        .await
+        .map_err(|_| internal())?
+        .map_err(store_refusal)?;
         Ok(Response::new(Body::empty()))
     }
 
@@ -697,10 +783,17 @@ impl Grants {
                 (None, 0, 0, held)
             }
         };
+        // An owner-delegated key reads its own claims, so until the gate has
+        // vouched for this one it may not read the blob.
+        let unproven_mark = match (&granted, &hash, held_before) {
+            (None, Some(hash), false) => self.mark_unproven(&signer, hash),
+            _ => None,
+        };
         // Forwarding and the group's view of the result run as one task, so
         // a client that hangs up cannot leave a committed claim unrecorded.
         let grants = self.clone();
         tokio::spawn(async move {
+            let _unproven = unproven_mark;
             let response = next.run(request).await;
             if !response.status().is_success() {
                 return Ok(response);
@@ -723,7 +816,7 @@ impl Grants {
                 .blocking(move |grants| {
                     if unproven {
                         let _ = store.delete_claim(&hash, &signer);
-                        return Err(Refusal::conflict("wrong-blob"));
+                        return Err(Refusal::conflict("mirror origin returned the wrong blob"));
                     }
                     let Some(group) = group else {
                         return Ok(false);

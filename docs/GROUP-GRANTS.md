@@ -670,6 +670,23 @@ What S3 chose where the profile is silent or an open question applies (section 1
   they hold themselves.  Their uploads, mirrors, deletes and lists reach the
   core as before.  An enrolled keeper is not a user and is refused `403`.
 - A room the enrolment does not list is refused `403 keeper`.
+- A length is judged as for a blob the node has never seen (the per-blob
+  limit, the key's own ceiling, the group ceiling, the node quota) before any
+  byte is read, whenever the key, or for a group key its group, does not hold
+  the hash; only then are the bytes read and hashed.  A stored hash and an
+  unknown one answer alike at every length, on `PUT` and `HEAD /upload`, for
+  group keys and for owner, friend and device-grant keys.
+- A mirror by an owner, friend or device-grant key for a blob it does not hold
+  is not refused up front, because that would show whether the node contacts
+  the source and so whether the blob exists.  The core makes the claim, the key
+  cannot read the blob while the gate vouches for it, and the claim is taken
+  back with the answer a wrong-bytes mirror of a new hash gets.
+- A new upload key is pushed to the core while only the push lock is held, so
+  a revocation or a reset never waits on a core write in flight.  A keeper's
+  grant budget is its own.
+- `/healthz` in group mode says `{"status":"ok"}` and nothing about storage.
+  The desktop app reads storage figures from it, so it must not run its
+  `wildbloomd` in group mode.
 - `--storage-proofs` is refused with `--group-mode`: its proofs answer any key
   whether a blob is stored.  `/healthz` answers liveness only and `/` is
   never cached by a shared cache.

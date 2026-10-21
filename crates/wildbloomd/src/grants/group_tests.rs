@@ -214,7 +214,9 @@ use axum::{
 };
 use futures_util::{StreamExt, future::BoxFuture};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 use tower::ServiceExt;
 use wildbloom_core::{
     AppState, BlobFetcher, BlossomConfig, FetchError, FetchPath, FetchRequest, FetchedBlob,
@@ -230,15 +232,25 @@ struct Limits {
     friend: Option<String>,
     /// What the node's mirror source serves, whatever it is asked for.
     source: Option<Vec<u8>>,
+    /// Holds the mirror source until released.
+    source_gate: Option<Arc<tokio::sync::Notify>>,
+    /// The per-blob limit, default 8 MiB.
+    max_blob: Option<u64>,
+    /// The friend key's byte limit, default 1 MiB.
+    friend_bytes: Option<u64>,
 }
 
 /// A mirror source that serves the same bytes for every hash it is asked for.
-struct FakeSource(Vec<u8>);
+struct FakeSource(Vec<u8>, Option<Arc<tokio::sync::Notify>>);
 
 impl BlobFetcher for FakeSource {
     fn fetch(&self, _request: FetchRequest) -> BoxFuture<'_, Result<FetchedBlob, FetchError>> {
         let bytes = self.0.clone();
+        let gate = self.1.clone();
         Box::pin(async move {
+            if let Some(gate) = gate {
+                gate.notified().await;
+            }
             Ok(FetchedBlob {
                 path: FetchPath::Https,
                 size: bytes.len() as u64,
@@ -306,7 +318,7 @@ impl VectorNode {
         let store = Store::open(StoreConfig {
             root: root.clone(),
             quota_bytes: limits.quota.unwrap_or(64 * MIB),
-            max_blob_bytes: 8 * MIB,
+            max_blob_bytes: limits.max_blob.unwrap_or(8 * MIB),
         })
         .unwrap();
         let held_store = store.clone();
@@ -323,7 +335,7 @@ impl VectorNode {
                     .iter()
                     .map(|key| wildbloom_core::FriendGrant {
                         pubkey: key.clone(),
-                        byte_limit: MIB,
+                        byte_limit: limits.friend_bytes.unwrap_or(MIB),
                         expires_at: 4_000_000_000,
                         grant_id: "local:friend".into(),
                         issuer: None,
@@ -365,7 +377,11 @@ impl VectorNode {
             mirror_proxy: None,
         };
         let state = match limits.source {
-            Some(bytes) => AppState::with_fetcher(store, config, Arc::new(FakeSource(bytes))),
+            Some(bytes) => AppState::with_fetcher(
+                store,
+                config,
+                Arc::new(FakeSource(bytes, limits.source_gate.clone())),
+            ),
             None => AppState::new(store, config),
         }
         .unwrap();
@@ -759,6 +775,19 @@ async fn the_keepers_grant_budget_never_stops_a_revocation_or_a_reset() {
         (status, reason.as_str()),
         (StatusCode::TOO_MANY_REQUESTS, "rate")
     );
+    // The budget is each keeper's own: keeper B is not held up by keeper A.
+    let other = grant(
+        &vectors,
+        "authorityB",
+        "b",
+        "99999999999999999999999999999999",
+        "carolPhone",
+        &["get"],
+        None,
+        now,
+        86_400,
+    );
+    assert_eq!(node.post(&other).await.0, StatusCode::CREATED);
     // A revocation and a reset still land, and the budget refills.
     node.set_now(now + 1);
     assert_eq!(
@@ -2082,7 +2111,10 @@ async fn the_core_upload_route_and_mirrors_also_need_the_bytes() {
     let (status, reason) = mirror(owner_blob.clone()).await;
     assert_eq!(
         (status, reason.as_str()),
-        (StatusCode::CONFLICT, "wrong-blob")
+        (
+            StatusCode::CONFLICT,
+            "mirror origin returned the wrong blob"
+        )
     );
     assert!(!holds(&node, &alice_key, &owner_blob));
     assert_eq!(
@@ -2352,4 +2384,359 @@ async fn a_grant_the_core_will_not_take_is_not_recorded_or_admitted() {
     assert_eq!((status, reason.as_str()), (StatusCode::CREATED, "accepted"));
     assert!(node.granted(&alice, "get"));
     assert_eq!(node.grants.core_friend_grants().len(), 1);
+}
+
+/// What a request answered, for comparing two hashes: status and reason.
+type Answer = (StatusCode, String);
+
+#[tokio::test]
+async fn a_stored_hash_and_an_unknown_one_get_the_same_answer_at_every_length() {
+    let vectors = vectors();
+    let node = VectorNode::limited(
+        &vectors,
+        Limits {
+            ceiling: Some(10 * MIB),
+            max_blob: Some(MIB),
+            ..Limits::default()
+        },
+    )
+    .await;
+    let now = 1_800_000_000;
+    node.set_now(now);
+    // The review's table: a device with 512 KiB, a 1 MiB blob limit.
+    let event = grant(
+        &vectors,
+        "authorityA",
+        "a",
+        "abababababababababababababababab",
+        "alicePhone",
+        &["upload", "get"],
+        Some(524_288),
+        now,
+        86_400,
+    );
+    assert_eq!(node.post(&event).await.0, StatusCode::CREATED);
+    let carol = grant(
+        &vectors,
+        "authorityB",
+        "b",
+        "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "carolPhone",
+        &["upload", "get"],
+        Some(1 << 20),
+        now,
+        86_400,
+    );
+    assert_eq!(node.post(&carol).await.0, StatusCode::CREATED);
+    assert_eq!(
+        upload(&node, &vectors, "carolPhone", "blob2", now + 1)
+            .await
+            .0,
+        StatusCode::CREATED
+    );
+    let alice = secret(&vectors, "alicePhone");
+    let (stored, _) = blob(&vectors, "blob2");
+    let (unknown, _) = blob(&vectors, "blob4");
+
+    for length in [0_usize, 7, 31, 524_289, 600_000, 1_048_576, 1_048_577] {
+        let mut puts: Vec<Answer> = Vec::new();
+        let mut heads: Vec<Answer> = Vec::new();
+        for hash in [&stored, &unknown] {
+            let (status, reason, _) =
+                put_raw(&node, &alice, hash, length, vec![0; length], now + 2).await;
+            puts.push((status, reason));
+            node.set_now(now + 2);
+            let (status, reason, _) = node
+                .request(
+                    &vectors,
+                    &request(
+                        "HEAD",
+                        "/upload",
+                        &[
+                            ("Authorization", token_by(&alice, "upload", hash, now + 2)),
+                            ("X-SHA-256", hash.clone()),
+                            ("X-Content-Length", length.to_string()),
+                            ("X-Content-Type", "application/octet-stream".to_owned()),
+                        ],
+                        None,
+                    ),
+                )
+                .await;
+            heads.push((status, reason));
+        }
+        assert_eq!(puts[0], puts[1], "PUT of {length} bytes");
+        assert_eq!(heads[0], heads[1], "HEAD of {length} bytes");
+        if length == 600_000 {
+            assert_eq!(puts[0].0, StatusCode::INSUFFICIENT_STORAGE);
+            assert_eq!(heads[0].0, StatusCode::INSUFFICIENT_STORAGE);
+        }
+        if length == 1_048_577 {
+            assert_eq!(puts[0].0, StatusCode::PAYLOAD_TOO_LARGE);
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_owner_delegated_key_is_judged_before_a_byte_is_read_too() {
+    let vectors = vectors();
+    let friend = Keys::generate();
+    let node = VectorNode::limited(
+        &vectors,
+        Limits {
+            friend: Some(friend.public_key().to_hex()),
+            friend_bytes: Some(100_000),
+            max_blob: Some(MIB),
+            ..Limits::default()
+        },
+    )
+    .await;
+    let now = real_now();
+    node.set_now(now);
+    node.owner_upload(&vectors, "blob3");
+    let (stored, _) = blob(&vectors, "blob3");
+    let (unknown, _) = blob(&vectors, "blob4");
+    for length in [7_usize, 31, 600_000, 1_048_577] {
+        let mut answers: Vec<Answer> = Vec::new();
+        for hash in [&stored, &unknown] {
+            let (status, reason, _) =
+                put_raw(&node, &friend, hash, length, vec![0; length], now).await;
+            answers.push((status, reason));
+        }
+        assert_eq!(answers[0], answers[1], "{length} bytes");
+        if length == 600_000 {
+            assert_eq!(answers[0].0, StatusCode::INSUFFICIENT_STORAGE);
+        }
+        if length == 1_048_577 {
+            assert_eq!(answers[0].0, StatusCode::PAYLOAD_TOO_LARGE);
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_revocation_never_waits_on_a_core_push_or_a_write_in_flight() {
+    let vectors = vectors();
+    let node = Arc::new(VectorNode::new(&vectors).await);
+    let now = real_now();
+    node.set_now(now);
+    // Keeper B has a member whose grant its keeper will revoke.
+    let carol = grant(
+        &vectors,
+        "authorityB",
+        "b",
+        "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "carolPhone",
+        &["get"],
+        None,
+        now,
+        86_400,
+    );
+    assert_eq!(node.post(&carol).await.0, StatusCode::CREATED);
+
+    // An owner upload that starts and then stalls, holding a core write slot.
+    let body = vec![0_u8; 1_000];
+    let hash = hex::encode(Sha256::digest(&body));
+    let owner = secret(&vectors, "nodeOwner");
+    let (sender, receiver) = tokio::sync::mpsc::channel::<Bytes>(4);
+    let stream = futures_util::stream::unfold(receiver, |mut receiver| async move {
+        receiver
+            .recv()
+            .await
+            .map(|chunk| (Ok::<Bytes, std::io::Error>(chunk), receiver))
+    });
+    let upload = {
+        let node = node.clone();
+        let request = Request::builder()
+            .method("PUT")
+            .uri("/upload")
+            .header("Authorization", token_by(&owner, "upload", &hash, now))
+            .header("X-SHA-256", &hash)
+            .header("Content-Length", "1000")
+            .body(Body::from_stream(stream))
+            .unwrap();
+        tokio::spawn(async move { node.app.clone().oneshot(request).await.unwrap().status() })
+    };
+    sender.send(Bytes::from(vec![0; 10])).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // A new upload key from keeper A has to be pushed to the core, which waits
+    // for that write.
+    let alice = grant(
+        &vectors,
+        "authorityA",
+        "a",
+        "efefefefefefefefefefefefefefefef",
+        "alicePhone",
+        &["upload", "get"],
+        Some(1 << 20),
+        now,
+        86_400,
+    );
+    let pending = {
+        let node = node.clone();
+        tokio::spawn(async move { node.post(&alice).await.0 })
+    };
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!pending.is_finished(), "the push is waiting on the write");
+
+    // Keeper B's revocation is accepted promptly all the same.
+    node.set_now(now + 1);
+    let revoke = sign(
+        &secret(&vectors, "authorityB"),
+        27_541,
+        &[
+            ("t", "grant".to_owned()),
+            ("grant", "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd".to_owned()),
+            (
+                "d",
+                vectors["rooms"]["b"]["roomId"].as_str().unwrap().to_owned(),
+            ),
+            ("device", pubkey(&vectors, "carolPhone")),
+            ("server", "grove.example.net".to_owned()),
+            ("scope", "get".to_owned()),
+            ("status", "revoked".to_owned()),
+            ("expiration", (now + 86_400).to_string()),
+        ],
+        "",
+        now + 1,
+    );
+    let (status, ..) = tokio::time::timeout(Duration::from_secs(2), node.post(&revoke))
+        .await
+        .expect("the revocation did not wait for the push");
+    assert_eq!(status, StatusCode::CREATED);
+    assert!(!node.granted(&pubkey(&vectors, "carolPhone"), "get"));
+    assert!(!pending.is_finished());
+
+    // Let the write finish: the push, and so the grant, follow.
+    sender.send(Bytes::from(vec![0; 990])).await.unwrap();
+    drop(sender);
+    assert_eq!(upload.await.unwrap(), StatusCode::CREATED);
+    assert_eq!(pending.await.unwrap(), StatusCode::CREATED);
+    assert!(node.granted(&pubkey(&vectors, "alicePhone"), "upload"));
+}
+
+#[tokio::test]
+async fn an_owner_delegated_key_cannot_read_a_claim_a_mirror_has_not_proven() {
+    let vectors = vectors();
+    let (_, text4) = blob(&vectors, "blob4");
+    let (owner_blob, _) = blob(&vectors, "blob3");
+    let friend = Keys::generate();
+    let friend_key = friend.public_key().to_hex();
+    let release = Arc::new(tokio::sync::Notify::new());
+    let node = Arc::new(
+        VectorNode::limited(
+            &vectors,
+            Limits {
+                friend: Some(friend_key.clone()),
+                source: Some(text4.into_bytes()),
+                source_gate: Some(release.clone()),
+                ..Limits::default()
+            },
+        )
+        .await,
+    );
+    let now = real_now();
+    node.set_now(now);
+    node.owner_upload(&vectors, "blob3");
+
+    // The key is marked before the core is asked, and the mark outlives the
+    // take-back; the mirror itself answers as a fresh wrong-bytes one does.
+    let mirror = {
+        let node = node.clone();
+        let (friend, hash) = (friend.clone(), owner_blob.clone());
+        tokio::spawn(async move {
+            let response = node
+                .app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("PUT")
+                        .uri("/mirror")
+                        .header("Authorization", token_by(&friend, "upload", &hash, now))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({ "url": format!("https://source.example.net/{hash}") })
+                                .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let reason = response
+                .headers()
+                .get("x-reason")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_owned();
+            (response.status(), reason)
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(node.grants.is_unproven(&friend_key, &owner_blob));
+    release.notify_one();
+    let (status, reason) = mirror.await.unwrap();
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(reason, "mirror origin returned the wrong blob");
+    assert!(!node.grants.is_unproven(&friend_key, &owner_blob));
+    assert!(!holds(&node, &friend_key, &owner_blob));
+
+    // While a key's claim is unproven it reads nothing, even with the claim in place.
+    let (status, ..) = put_raw(
+        &node,
+        &friend,
+        &owner_blob,
+        31,
+        blob(&vectors, "blob3").1.into_bytes(),
+        now,
+    )
+    .await;
+    assert!(status.is_success());
+    let read = || async {
+        node.request(
+            &vectors,
+            &request(
+                "GET",
+                &format!("/{owner_blob}"),
+                &[("Authorization", token_by(&friend, "get", &owner_blob, now))],
+                None,
+            ),
+        )
+        .await
+        .0
+    };
+    assert_eq!(read().await, StatusCode::OK);
+    let mark = node.grants.mark_unproven(&friend_key, &owner_blob).unwrap();
+    assert_eq!(read().await, StatusCode::NOT_FOUND);
+    drop(mark);
+    assert_eq!(read().await, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn the_event_route_exposes_x_reason_to_browsers() {
+    let vectors = vectors();
+    let node = VectorNode::new(&vectors).await;
+    node.set_now(1_800_000_000);
+    let event = case(&vectors, "grantEvents", "good-grant")["event"].clone();
+    let response = node
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/groups/v1/events")
+                .header("origin", "https://app.example.net")
+                .body(Body::from(serde_json::to_vec(&event).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(
+        header(response.headers(), "access-control-allow-origin"),
+        ["*"]
+    );
+    assert!(
+        header(response.headers(), "access-control-expose-headers")
+            .join(",")
+            .contains("x-reason")
+    );
 }

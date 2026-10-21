@@ -6,7 +6,7 @@
 //! and the far-future sentinel expiry that device grants use); the real expiry
 //! and scopes are enforced by a gate in front of the core router.
 use super::{
-    CORE_GRANT_SENTINEL, Grants, GrantsError, cors,
+    CORE_GRANT_SENTINEL, Grants, GrantsError,
     event::is_canonical_key,
     group_db::{self, Floor, GroupGrantRow, GroupId, GroupKey, GroupRows},
     group_event::{self, Body, FUTURE_SKEW, GroupEvent, Refusal, Scope},
@@ -21,7 +21,7 @@ use axum::{
 };
 use rusqlite::Connection;
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, RwLock},
     time::Duration,
@@ -65,8 +65,11 @@ pub(super) struct GroupState {
     /// Serialises grant, revocation and reset commits.  Never held while
     /// verifying a signature, serving a request or waiting for the core.
     pub updates: tokio::sync::Mutex<()>,
-    /// Clock seconds of recent grants that changed state.
-    pub posts: Mutex<VecDeque<u64>>,
+    /// Clock seconds of recent grants that changed state, per keeper.
+    pub posts: Mutex<HashMap<String, VecDeque<u64>>>,
+    /// (key, hash) pairs whose claim was made by a mirror the gate has not
+    /// yet vouched for: an owner-delegated key may not read them meanwhile.
+    pub unproven: Mutex<HashSet<(String, String)>>,
     /// Clock seconds of recent posts that were refused before the node's
     /// state was consulted.
     pub unverified: Mutex<VecDeque<u64>>,
@@ -195,7 +198,8 @@ impl Grants {
                 .collect(),
             snapshot: RwLock::new(Arc::new(rows)),
             updates: tokio::sync::Mutex::new(()),
-            posts: Mutex::new(VecDeque::new()),
+            posts: Mutex::new(HashMap::new()),
+            unproven: Mutex::new(HashSet::new()),
             unverified: Mutex::new(VecDeque::new()),
             holdings: Mutex::new(HashMap::new()),
             reserved: Mutex::new(HashMap::new()),
@@ -317,10 +321,7 @@ impl Grants {
     }
 
     /// Count one event against a rolling minute, on the node's own clock.
-    fn within(window: &Mutex<VecDeque<u64>>, now: u64, limit: usize, count: bool) -> bool {
-        let Ok(mut window) = window.lock() else {
-            return false;
-        };
+    fn roll(window: &mut VecDeque<u64>, now: u64, limit: usize, count: bool) -> bool {
         while window
             .front()
             .is_some_and(|at| now.saturating_sub(*at) >= 60)
@@ -334,6 +335,30 @@ impl Grants {
             window.push_back(now);
         }
         true
+    }
+
+    fn within(window: &Mutex<VecDeque<u64>>, now: u64, limit: usize, count: bool) -> bool {
+        window
+            .lock()
+            .is_ok_and(|mut window| Self::roll(&mut window, now, limit, count))
+    }
+
+    /// The same, one window for each keeper: one keeper's grants never use up
+    /// another's budget.
+    fn within_keeper(
+        windows: &Mutex<HashMap<String, VecDeque<u64>>>,
+        keeper: &str,
+        now: u64,
+        limit: usize,
+    ) -> bool {
+        windows.lock().is_ok_and(|mut windows| {
+            Self::roll(
+                windows.entry(keeper.to_owned()).or_default(),
+                now,
+                limit,
+                true,
+            )
+        })
     }
 
     /// Rules 1 to 7 of section 4.4: everything that needs no node state.
@@ -406,7 +431,7 @@ impl Grants {
             return Ok(plan.accepted);
         }
         if plan.grant.as_ref().is_some_and(|row| row.active)
-            && !Self::within(&state.posts, self.now(), GRANTS_PER_MINUTE, true)
+            && !Self::within_keeper(&state.posts, &event.keeper, self.now(), GRANTS_PER_MINUTE)
         {
             return Err(Refusal::new(StatusCode::TOO_MANY_REQUESTS, "rate"));
         }
@@ -420,17 +445,24 @@ impl Grants {
         }
         drop(update);
 
-        // The core hears of the key first.  Holding the push lock keeps a
-        // device grant's push from dropping it before the commit lands; the
-        // update lock is free meanwhile, so revocations never wait on a push.
+        // The core hears of the key first.  The push waits for every core
+        // write in flight, so it holds only the push lock, which keeps a
+        // device grant's push from dropping the key before the commit lands.
+        // The update lock is taken just to plan and just to commit: a
+        // revocation never waits on a push or on a write slot.
         let _push = self.inner.policy_push.lock().await;
-        let _update = state.updates.lock().await;
-        let rows = self.group_snapshot().ok_or_else(Refusal::unavailable)?;
-        let plan = self.evaluate_group_event(state, &rows, &event, self.now())?;
-        if plan.grant.is_none() && plan.floor.is_none() {
-            return Ok(plan.accepted);
-        }
-        if let (Some(app), Some(change)) = (self.inner.app.get(), plan.key.as_ref()) {
+        let projected = {
+            let _update = state.updates.lock().await;
+            let rows = self.group_snapshot().ok_or_else(Refusal::unavailable)?;
+            let plan = self.evaluate_group_event(state, &rows, &event, self.now())?;
+            if plan.grant.is_none() && plan.floor.is_none() {
+                return Ok(plan.accepted);
+            }
+            plan.key
+                .as_ref()
+                .map(|change| self.core_friend_grants_with(self.projected_friend_grants(change)))
+        };
+        if let (Some(app), Some(projected)) = (self.inner.app.get(), projected) {
             #[cfg(test)]
             if self
                 .inner
@@ -439,11 +471,16 @@ impl Grants {
             {
                 return Err(Refusal::unavailable());
             }
-            let projected = self.core_friend_grants_with(self.projected_friend_grants(change));
             if let Err(error) = app.set_friend_grants(projected).await {
                 tracing::error!(reason = %error, "core refused the group friend set; grant not recorded");
                 return Err(Refusal::unavailable());
             }
+        }
+        let _update = state.updates.lock().await;
+        let rows = self.group_snapshot().ok_or_else(Refusal::unavailable)?;
+        let plan = self.evaluate_group_event(state, &rows, &event, self.now())?;
+        if plan.grant.is_none() && plan.floor.is_none() {
+            return Ok(plan.accepted);
         }
         self.commit_group_plan(state, &plan)
     }
@@ -623,7 +660,13 @@ impl Grants {
         Router::new()
             .route("/groups/v1/events", post(post_event))
             .with_state(self.clone())
-            .layer(cors(&[Method::POST]))
+            .layer(
+                tower_http::cors::CorsLayer::new()
+                    .allow_origin(tower_http::cors::Any)
+                    .allow_methods([Method::POST])
+                    .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+                    .expose_headers([axum::http::HeaderName::from_static("x-reason")]),
+            )
     }
 }
 
@@ -886,5 +929,43 @@ impl Grants {
 
     pub(super) fn group_writes(&self) -> Option<Arc<tokio::sync::Semaphore>> {
         self.inner.group.get().map(|state| state.writes.clone())
+    }
+}
+
+/// Marks a key's claim on a blob as unproven until dropped.
+pub(super) struct Unproven {
+    grants: Grants,
+    pair: (String, String),
+}
+
+impl Drop for Unproven {
+    fn drop(&mut self) {
+        if let Some(state) = self.grants.inner.group.get()
+            && let Ok(mut unproven) = state.unproven.lock()
+        {
+            unproven.remove(&self.pair);
+        }
+    }
+}
+
+impl Grants {
+    /// Until the guard drops, `key` may not read `hash` as its own claim.
+    pub(super) fn mark_unproven(&self, key: &str, hash: &str) -> Option<Unproven> {
+        let state = self.inner.group.get()?;
+        let pair = (key.to_owned(), hash.to_owned());
+        state.unproven.lock().ok()?.insert(pair.clone());
+        Some(Unproven {
+            grants: self.clone(),
+            pair,
+        })
+    }
+
+    pub(super) fn is_unproven(&self, key: &str, hash: &str) -> bool {
+        self.inner.group.get().is_some_and(|state| {
+            state
+                .unproven
+                .lock()
+                .map_or(true, |set| set.contains(&(key.to_owned(), hash.to_owned())))
+        })
     }
 }
