@@ -5,6 +5,19 @@ nothing here is built in `wildbloomd`, KithMoot or Bothy yet.  This is phase
 S2 of KithMoot's group-hosted design; S3 to S9 consume it.  It is an
 experimental profile, not a NIP, and not legal advice.
 
+The phases and decision this document refers to:
+
+| Name | What it is |
+|---|---|
+| S2 | This contract |
+| S3 | `wildbloomd` group mode: refuse guests and open shelter, authenticate reads, enforce grants and the group ceiling |
+| S4 | The KithMoot keeper mints and revokes grants when it admits and removes devices, and delivers them in the room |
+| S5 | A room carries its group storage nodes in its signed invitation; clients upload to a granted node and fetch with authentication |
+| S7 | Group replica policy: copies on several members' nodes, and deletes that reach every copy |
+| S8 | Group relay: a member-run NIP-42 relay that accepts only granted keys |
+| S9 | Group TURN: a node's TURN issuer accepts group grants |
+| D9 | A proposed closed "group box" profile for a Bothy box used as a group node (drop tier off, public fronts off), which needs the Bothy maintainers' agreement |
+
 Vectors: [`vectors/group-grants-v1.json`](../vectors/group-grants-v1.json),
 built and checked by [`scripts/group-grants/vectors.mjs`](../scripts/group-grants/vectors.mjs)
 (see [Vectors](#16-vectors)).
