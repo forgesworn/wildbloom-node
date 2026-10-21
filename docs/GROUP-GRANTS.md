@@ -427,7 +427,7 @@ limits, the device's `bytes` and the group ceiling apply (section 9).
 - an active `purge` grant: removes every claim the signer's group holds on
   that blob;
 - a grant that had `delete` and ended less than seven days ago: removes the
-  signer's own claim, and nothing else (open question O4).
+  signer's own claim, and nothing else (O4, decided: allowed for seven days).
 
 A blob with no claim of the signer (or, for `purge`, of its group) answers
 `404`.  A spent delete token answers `404` if there is nothing to delete and
@@ -552,7 +552,7 @@ that grant is honoured until one of these happens first:
 
 - the keeper's journal reaches the node;
 - any member device that read the revocation in the room contacts the node;
-- the grant expires (at most 90 days; KithMoot's default is open question O3).
+- the grant expires (at most 90 days; KithMoot's default is 30 days, renewed when 10 are left, O3).
 
 Once the revocation lands, the older grant can never land again, at that node
 or by replay.  A node that comes back online cannot know what it missed; the
@@ -592,7 +592,7 @@ publish it for group uploads, as quiet rooms already do not.
 - **Full node.** Refuses new uploads (`507`) rather than evicting group
   claims.  A group never evicts the owner's files or another group's.
 - **Several devices.** Each device gets its own `bytes`.  A keeper caps grants
-  per participant (open question O5); a node cannot, since it never learns
+  per participant (O5, decided: up to five); a node cannot, since it never learns
   participants.
 - **Requests.** The node sets per-key limits on request rate, concurrent
   streams and read bytes.  The figures are the node owner's (open question
@@ -736,19 +736,21 @@ Box profile: KithMoot's design asks decented for a closed "group box" profile
 
 For the owner:
 
-- **O1.** Sign with the room authority key (chosen), or a dedicated per-room
-  grant key that hides a node's link to the room's public rekeys at the cost of
-  an announcement op and a key to back up?
+Decided by the owner on 21 October 2026:
+
+- **O1.** Sign with the room authority key, not a dedicated per-room grant
+  key.
+- **O3.** KithMoot's default grant lifetime is 30 days, renewed when 10 are
+  left, under the 90-day cap.
+- **O4.** A removed device may keep deleting its own uploads for seven days,
+  so "Leave and tidy up" and KithMoot's retry journal keep working.
+- **O5.** The keeper grants every admitted device automatically, up to five
+  devices per participant.
+
+Still open:
+
 - **O2.** Use the room id as `d` (chosen), or a derived storage selector?  With
   the authority key as signer, a derived selector hides nothing.
-- **O3.** Grant lifetime: the cap is 90 days.  KithMoot's default: 30 days,
-  renewed when 10 are left, is proposed.  Shorter closes the revocation gap
-  sooner; longer survives a keeper that is down for longer.
-- **O4.** Should a removed device keep deleting its own uploads for seven days?
-  It matches today's public store and KithMoot's retry journal; refusing it
-  keeps the group's history whole.
-- **O5.** Does the keeper grant every admitted device automatically, or ask a
-  host first?  How many devices per participant?
 - **O6.** Default per-device and group ceilings: no figure is assumed here.
 - **O7.** Retention from last fetch: a tag in the grant, or one setting at
   enrolment?  Either way the node keeps fetch times.
