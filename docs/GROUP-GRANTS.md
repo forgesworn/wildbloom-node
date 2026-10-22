@@ -458,6 +458,8 @@ person who asks.  A node never answers `304` to a request without a valid
 token.  Clients keep their own copy of an envelope if they want one.  Tokens
 never go in a URL.  `OPTIONS` stays unauthenticated, reveals nothing, and
 allows the `Authorization`, `Range` and `X-SHA-256` request headers.
+Answers expose `X-Reason` and `Date` to browsers, so a web client can read
+why it was refused and compare its clock with the node's (6.5, 11).
 
 ### 6.7 Refusals
 
