@@ -18,7 +18,7 @@ The inputs are the public DMGs built by installer workflow `37460450117` from
 `95185d73339a6ec372c1ad0cbac1b74e48743e32` has the same source tree. Signing and
 stapling modify the package bytes; the output hashes below identify the candidates.
 
-Identity: `Developer ID Application: Epona Solutions Ltd (2GLP954N6A)`.
+Identity: `Developer ID Application (the project's Apple certificate)`.
 Existing Keychain credentials were used without exporting private keys or
 reading passwords into the process environment, chat or logs.
 
