@@ -63,8 +63,11 @@ def main():
     args.output.mkdir(mode=0o700)
     evidence = {
         "input": args.input.name, "input_sha256": args.sha256,
-        "source_commit": args.source_commit, "signing_identity": args.identity,
-        "team_id": args.team_id, "started_at": datetime.now(timezone.utc).isoformat(),
+        # The identity and team are checked below but never written down:
+        # evidence files get committed, and the certificate holder stays out
+        # of the repository.
+        "source_commit": args.source_commit, "signing_identity": "(withheld)",
+        "team_id": "(withheld)", "started_at": datetime.now(timezone.utc).isoformat(),
         "script_sha256": digest(Path(__file__)), "passed": False,
         "scope": "Local Developer ID signing and Apple notarisation; no updater signature, publication or clean-machine acceptance",
     }
