@@ -666,7 +666,10 @@ impl Grants {
                     .allow_origin(tower_http::cors::Any)
                     .allow_methods([Method::POST])
                     .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
-                    .expose_headers([axum::http::HeaderName::from_static("x-reason")]),
+                    .expose_headers([
+                        axum::http::HeaderName::from_static("x-reason"),
+                        header::DATE,
+                    ]),
             )
     }
 }

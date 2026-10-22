@@ -2252,7 +2252,9 @@ async fn gate_answers_carry_the_core_cors_headers_and_health_says_little() {
         );
         let exposed = header(headers, "access-control-expose-headers").join(",");
         assert!(
-            exposed.contains("x-reason") && exposed.contains("content-range"),
+            exposed.contains("x-reason")
+                && exposed.contains("content-range")
+                && exposed.contains("date"),
             "{status}: {exposed}"
         );
     }
@@ -2738,6 +2740,11 @@ async fn the_event_route_exposes_x_reason_to_browsers() {
         header(response.headers(), "access-control-expose-headers")
             .join(",")
             .contains("x-reason")
+    );
+    assert!(
+        header(response.headers(), "access-control-expose-headers")
+            .join(",")
+            .contains("date")
     );
 }
 

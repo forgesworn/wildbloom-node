@@ -124,6 +124,8 @@ fn preflight() -> Response {
 
 /// The headers the core's CORS layer puts on its own answers, so a browser
 /// client sees the gate's answers, refusals and `X-Reason` the same way.
+/// `Date` is exposed so a browser can tell a wrong device clock from a
+/// refused token (contract 6.5 and 11).
 fn cors_headers(response: &mut Response) {
     let headers = response.headers_mut();
     headers.insert(
@@ -133,7 +135,7 @@ fn cors_headers(response: &mut Response) {
     headers.insert(
         header::ACCESS_CONTROL_EXPOSE_HEADERS,
         HeaderValue::from_static(
-            "content-length, content-range, content-type, etag, accept-ranges, content-disposition, x-content-type-options, x-reason",
+            "content-length, content-range, content-type, etag, accept-ranges, content-disposition, x-content-type-options, x-reason, date",
         ),
     );
 }
