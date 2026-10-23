@@ -1161,7 +1161,10 @@ async fn tokens_and_authorisation_events_never_reach_the_logs() {
         logs.contains("accepted an owner-signed device grant"),
         "{logs}"
     );
-    assert!(logs.contains("issued a pair of TURN credentials"), "{logs}");
+    assert!(
+        logs.contains("issued a pair of ICE configurations"),
+        "{logs}"
+    );
     let mut secrets = vec![
         URL_SAFE_NO_PAD.encode(OPERATOR_TOKEN_BYTES),
         URL_SAFE_NO_PAD.encode([9_u8; 32]),
@@ -2066,7 +2069,7 @@ fn turn_app(node: &Node) -> Router {
     TurnIssuer::new(
         node.grants.clone(),
         urls,
-        TurnSecret::parse(TURN_SECRET).unwrap(),
+        Some(TurnSecret::parse(TURN_SECRET).unwrap()),
     )
     .router()
 }
@@ -2184,6 +2187,48 @@ async fn turn_issuer_returns_two_fresh_credentials_to_a_granted_device() {
     }
     let distinct = labels.iter().collect::<std::collections::BTreeSet<_>>();
     assert_eq!(distinct.len(), labels.len());
+}
+
+#[tokio::test]
+async fn a_stun_only_issuer_needs_no_secret_and_hands_out_empty_credentials() {
+    let (_dir, node) = node().await;
+    let urls = vec!["stun:stun.example.net:3478".to_owned()];
+    let urls = super::turn::ice_urls(&urls).unwrap();
+    assert!(!super::turn::has_turn_url(&urls));
+    let app = TurnIssuer::new(node.grants.clone(), urls, None).router();
+    let now = node.now();
+    node.call(post_grant(grant_event(&keys(1), &standard_grant(), now)))
+        .await;
+    let response = app
+        .oneshot(turn_request(&keys(10), now, b""))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    let bytes = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+    let text = String::from_utf8(bytes.to_vec()).unwrap();
+    let body = serde_json::from_slice::<Value>(&bytes).unwrap();
+    let expires = body["expires"].as_u64().unwrap();
+    let entry = r#"{"credential":"","urls":["stun:stun.example.net:3478"],"username":""}"#;
+    assert_eq!(
+        text,
+        format!(r#"{{"expires":{expires},"own":{entry},"peer":{entry}}}"#)
+    );
+}
+
+#[tokio::test]
+async fn a_turn_issuer_without_its_secret_is_unavailable_rather_than_unsigned() {
+    let (_dir, node) = node().await;
+    let urls = super::turn::ice_urls(&TURN_URLS.map(str::to_owned)).unwrap();
+    let app = TurnIssuer::new(node.grants.clone(), urls, None).router();
+    let now = node.now();
+    node.call(post_grant(grant_event(&keys(1), &standard_grant(), now)))
+        .await;
+    let response = app
+        .oneshot(turn_request(&keys(10), now, b""))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
 
 #[tokio::test]

@@ -1,6 +1,9 @@
-//! Opt-in TURN credential issuer: a currently granted device exchanges one
-//! fresh NIP-98 request for two short-lived TURN REST credentials, one for
-//! itself and one for the verified person at the other end of a direct send.
+//! Opt-in ICE configuration issuer: a currently granted device exchanges one
+//! fresh NIP-98 request for two entries, one for itself and one for the
+//! verified person at the other end of a direct send.  If any configured URL
+//! is TURN, each entry holds short-lived TURN REST credentials.  If every URL
+//! is STUN, nothing is minted and no secret is held: both entries carry the
+//! URLs with an empty username and credential.
 //!
 //! Credentials use coturn's `use-auth-secret` form: the username is
 //! `<expires>:<label>` and the credential is the padded base64 HMAC-SHA1 of the
@@ -119,8 +122,8 @@ impl TurnSecret {
 
 /// Validate the configured ICE URLs against the direct-send `ice` entry: 1 to
 /// 4 distinct `stun:`, `turn:` or `turns:` URLs of at most 256 bytes of
-/// printable ASCII (no spaces, quotes or backslashes), at least one of them
-/// TURN.
+/// printable ASCII (no spaces, quotes or backslashes).  STUN alone is valid;
+/// see [`has_turn_url`] for when a secret is needed.
 pub fn ice_urls(urls: &[String]) -> Result<Vec<String>, &'static str> {
     if urls.is_empty() || urls.len() > MAX_URLS {
         return Err("--turn-url must be given 1 to 4 times");
@@ -144,13 +147,14 @@ pub fn ice_urls(urls: &[String]) -> Result<Vec<String>, &'static str> {
     if urls.iter().collect::<BTreeSet<_>>().len() != urls.len() {
         return Err("--turn-url values must be distinct");
     }
-    if !urls
-        .iter()
-        .any(|url| url.starts_with("turn:") || url.starts_with("turns:"))
-    {
-        return Err("at least one --turn-url must be turn: or turns:");
-    }
     Ok(urls.to_vec())
+}
+
+/// Whether any URL is `turn:` or `turns:`, which is when credentials are
+/// minted and the shared secret is required.
+pub fn has_turn_url(urls: &[String]) -> bool {
+    urls.iter()
+        .any(|url| url.starts_with("turn:") || url.starts_with("turns:"))
 }
 
 /// One entry of the direct-send `ice` list, members in canonical order.
@@ -184,12 +188,15 @@ pub struct TurnCredentials {
 pub struct TurnIssuer {
     auth: DeviceAuth,
     urls: Arc<[String]>,
-    secret: TurnSecret,
+    /// Present exactly when a URL is TURN.
+    secret: Option<TurnSecret>,
 }
 
 impl TurnIssuer {
-    /// `urls` must already have passed [`ice_urls`].
-    pub fn new(grants: Grants, urls: Vec<String>, secret: TurnSecret) -> Self {
+    /// `urls` must already have passed [`ice_urls`]. `secret` is needed if
+    /// and only if [`has_turn_url`] holds for them; a TURN issuer without one
+    /// answers 503.
+    pub fn new(grants: Grants, urls: Vec<String>, secret: Option<TurnSecret>) -> Self {
         Self {
             auth: DeviceAuth::new(grants, TURN_PATH, RATE_LIMIT, &REFUSALS),
             urls: Arc::from(urls),
@@ -211,10 +218,19 @@ impl TurnIssuer {
                 "TURN credentials are unavailable",
             )
         };
+        // STUN alone: nothing to mint, so no label and no credential.
+        if !has_turn_url(&self.urls) {
+            return Ok(IceServer {
+                credential: String::new(),
+                urls: self.urls.to_vec(),
+                username: String::new(),
+            });
+        }
+        let secret = self.secret.as_ref().ok_or_else(unavailable)?;
         let mut label = [0_u8; LABEL_BYTES];
         getrandom::fill(&mut label).map_err(|_| unavailable())?;
         let username = format!("{expires}:{}", URL_SAFE_NO_PAD.encode(label));
-        let credential = self.secret.credential(&username).ok_or_else(unavailable)?;
+        let credential = secret.credential(&username).ok_or_else(unavailable)?;
         Ok(IceServer {
             credential,
             urls: self.urls.to_vec(),
@@ -236,7 +252,7 @@ async fn issue(State(issuer): State<TurnIssuer>, request: Request<Body>) -> Resp
     .await;
     match result {
         Ok(credentials) => {
-            tracing::info!("issued a pair of TURN credentials");
+            tracing::info!("issued a pair of ICE configurations");
             let mut response = (StatusCode::CREATED, Json(credentials)).into_response();
             no_store(&mut response);
             response
@@ -384,11 +400,23 @@ mod tests {
     }
 
     #[test]
+    fn a_secret_is_needed_only_when_a_url_is_turn() {
+        let owned = |urls: &[&str]| urls.iter().map(|url| (*url).to_owned()).collect::<Vec<_>>();
+        assert!(!has_turn_url(&owned(&["stun:stun.example.net:3478"])));
+        assert!(has_turn_url(&owned(&[
+            "stun:turn.example.net:3478",
+            "turn:turn.example.net:3478"
+        ])));
+        assert!(has_turn_url(&owned(&["turns:turn.example.net:5349"])));
+    }
+
+    #[test]
     fn ice_urls_follow_the_direct_send_rules() {
         let owned = |urls: &[&str]| urls.iter().map(|url| (*url).to_owned()).collect::<Vec<_>>();
         for accepted in [
             &["turn:turn.example.net:3478"][..],
             &["turns:turn.example.net:5349?transport=tcp"][..],
+            &["stun:stun.example.net:3478"][..],
             &[
                 "stun:turn.example.net:3478",
                 "turn:turn.example.net:3478?transport=udp",
@@ -410,7 +438,6 @@ mod tests {
                 "turn:d.example",
                 "turn:e.example",
             ]),
-            owned(&["stun:turn.example.net:3478"]),
             owned(&["http://turn.example.net/"]),
             owned(&["TURN:turn.example.net"]),
             owned(&["turn:"]),

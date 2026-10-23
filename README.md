@@ -220,9 +220,9 @@ Useful controls:
 --pairing-issuer               issue one-use Foregather live grants to devices
 --pairing-relay-url <URL>      Foregather API base for --pairing-issuer
 --pairing-operator-token-file <PATH>  private file holding its operator token
---turn-issuer                  issue short-lived TURN credentials to devices
+--turn-issuer                  hand out direct-send ICE servers: STUN alone, or TURN with short-lived credentials
 --turn-url <URL>               stun:, turn: or turns: URL for --turn-issuer, 1 to 4
---turn-secret-file <PATH>      private file holding the TURN static-auth-secret
+--turn-secret-file <PATH>      private file holding the TURN static-auth-secret (only with a turn: or turns: URL)
 --service-profile <PATH>       opt-in public service listing (docs/SERVICE-DISCOVERY.md)
 --checkout-profile <PATH>      opt-in paid checkout, needs --no-tor (docs/CHECKOUT.md)
 --max-concurrent-writes <N>    concurrent upload/mirror limit, default 4
