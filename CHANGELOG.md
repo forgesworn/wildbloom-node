@@ -10,6 +10,20 @@
   group holds, and group reads are never cacheable.  It refuses
   `--open-shelter`, `--service-profile` and `--checkout-profile`.
 
+## 0.3.12 preview - 2026-10-24
+
+- Direct send works without TURN.  Drop and the `/send` and `/get` pages now
+  default to the public STUN server `stun:stun.cloudflare.com:3478`; no
+  ForgeSworn-run STUN or TURN server is built in any more.  A node without a
+  TURN issuer makes Drop fall back to that STUN server.
+- Self-hosters can still hand out their own servers: `wildbloomd --turn-issuer`
+  accepts STUN-only `--turn-url` lists (no secret), or TURN with a secret.
+- "Hide my address" still needs a TURN server and now refuses clearly before a
+  link is made when none is offered.  It is now off by default for installs
+  that never set it; a setting you chose is kept.
+- Clearer message when a direct connection cannot be made (mobile data or
+  some work networks).
+
 ## 0.3.11 preview - 2026-10-20
 
 - Update the TLS certificate checks in Drop and `wildbloomd`: `rustls-webpki`
