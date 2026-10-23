@@ -2,7 +2,7 @@
   "schema": "wildbloom-node.vendor.v1",
   "bundle": "desktop/ui/vendor/wildbloom-direct.js",
   "repository": "https://github.com/forgesworn/wildbloom",
-  "commit": "e04bdefe29c0319c1384d24c0e33a9b55dbea3c7",
+  "commit": "72f9d2bb90109a9e7a59eafc28d1f236206e5a6b",
   "sources": {
     "src/direct/config.ts": {
       "sha256": "5e58c618efbe81b122ae8d3de5c3e91efa3c85868457892ac9ac75e6a898dbdb"
@@ -38,5 +38,5 @@
       ]
     }
   },
-  "sha256": "05087fab6a1866abb3e21cea496422073ded697dab345e57cfe152893e6015e2"
+  "sha256": "0242433956eaec157be394171f5a1a10bd06246ded92619021eb2475a6488d25"
 }
