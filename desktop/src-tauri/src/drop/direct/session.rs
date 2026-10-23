@@ -5,12 +5,13 @@
 //! 1. Show the link and words; run the PAKE; show the three check words and
 //!    wait for the owner's yes or no.
 //! 2. Only on yes, switch the confirmed channel to `foregather-exchange/1`
-//!    and send `invite` (`dir:"to-drop"`, `hide`, `ice` = the page's own TURN
-//!    credential, a fresh 16-byte `id`, `max` 250,000,000).
+//!    and send `invite` (`dir:"to-drop"`, `hide`, `ice` = the page's ICE entry
+//!    from the node, or the built-in STUN default, a fresh 16-byte `id`, `max`
+//!    250,000,000).
 //! 3. Read `manifest` and ask the owner.  `decline` ends it there: no
 //!    connection was made and nothing was allocated on a TURN server.
 //! 4. On accept, open the hidden window, make the connection from Drop's own
-//!    credential (relay-only when hiding), send `accept` with the offer, read
+//!    ICE entry (relay-only when hiding), send `accept` with the offer, read
 //!    `answer`, keep its key here and hand only the SDP to the window.
 //! 5. While the data flows, answer an ICE failure (or a long disconnection)
 //!    with `restart`, at most five times and only before the deadline, each
@@ -575,6 +576,9 @@ struct Run<T, H> {
     deadline: Instant,
     expires_at: u64,
     hide: bool,
+    /// The ICE configuration holds a TURN URL.  Without one the two ends can
+    /// only meet directly, and a failure to connect says so.
+    relay_offered: bool,
     id: String,
     exchange: Option<ExchangeChannel>,
     /// The page can still be read: the relay has not failed.
@@ -642,6 +646,7 @@ pub async fn run<T: LiveTransport + 'static, H: DirectHost>(
         deadline: pairing::deadline_at(expires_at),
         expires_at,
         hide,
+        relay_offered: false,
         id: String::new(),
         exchange: None,
         exchange_alive: true,
@@ -753,8 +758,9 @@ impl<T: LiveTransport, H: DirectHost> Run<T, H> {
         };
         self.exchange = Some(ExchangeChannel::new(channel).map_err(|_| End::quiet("protocol"))?);
 
-        // 2. The invitation, with the page's own TURN credential.
+        // 2. The invitation, with the page's own ICE entry.
         let TurnCredentials { own, peer, .. } = turn;
+        self.relay_offered = own.has_turn();
         self.id = fresh_id().ok_or(End::quiet("protocol"))?;
         if let Ok(mut transfer) = self.controls.transfer.lock() {
             *transfer = Some(self.id.clone());
@@ -812,7 +818,7 @@ impl<T: LiveTransport, H: DirectHost> Run<T, H> {
             Err(_) => return Err(End::Cancelled),
         }
 
-        // 4. The connection: Drop's own credential, relay-only when hiding.
+        // 4. The connection: Drop's own ICE entry, relay-only when hiding.
         self.awake = Some(self.host.keep_awake());
         self.emit_progress();
         if !self.host.open_peer() {
@@ -1122,11 +1128,21 @@ impl<T: LiveTransport, H: DirectHost> Run<T, H> {
         }
     }
 
+    /// Why a connection that never came up ended: `connect_direct` when no
+    /// relay was on offer, because some networks do not allow a direct one.
+    fn connect_reason(&self) -> &'static str {
+        if self.relay_offered {
+            "connect"
+        } else {
+            "connect_direct"
+        }
+    }
+
     fn give_up(&self) -> End {
         End::failed(if self.ever_connected {
             "lost"
         } else {
-            "connect"
+            self.connect_reason()
         })
     }
 
@@ -1478,7 +1494,7 @@ impl<T: LiveTransport, H: DirectHost> Run<T, H> {
             return Some(End::Kept(kept.clone()));
         }
         if self.connect_by.is_some_and(|by| at >= by) {
-            return Some(End::failed("connect"));
+            return Some(End::failed(self.connect_reason()));
         }
         if self.stall_at().is_some_and(|by| at >= by) {
             return Some(End::failed("lost"));

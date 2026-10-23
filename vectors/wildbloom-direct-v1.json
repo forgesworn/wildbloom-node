@@ -11,7 +11,8 @@
     "stun:turn.example.net:3478",
     "turn:turn.example.net:3478?transport=udp",
     "turn:turn.example.net:3478?transport=tcp",
-    "turns:turn.example.net:5349?transport=tcp"
+    "turns:turn.example.net:5349?transport=tcp",
+    "stun:stun.example.net:3478"
   ],
   "limits": {
     "messageBytes": 16379,
@@ -107,6 +108,20 @@
       "sha256": "e898696e4753df739cffbfaa581b5fa07f2dff44be7847e3cb6526042047139f"
     },
     {
+      "name": "invite, STUN only",
+      "from": "drop",
+      "index": 0,
+      "text": "{\"dir\":\"to-drop\",\"event\":\"invite\",\"hide\":false,\"ice\":[{\"credential\":\"\",\"urls\":[\"stun:stun.example.net:3478\"],\"username\":\"\"}],\"id\":\"AAECAwQFBgcICQoLDA0ODw\",\"max\":250000000,\"v\":1}",
+      "sha256": "3a8c5f6c5b933513bf220ea9dc41785eeb284150c2bd72b1da652b5ffcdd409a"
+    },
+    {
+      "name": "invite, STUN server and TURN server as two entries",
+      "from": "drop",
+      "index": 0,
+      "text": "{\"dir\":\"to-drop\",\"event\":\"invite\",\"hide\":true,\"ice\":[{\"credential\":\"\",\"urls\":[\"stun:stun.example.net:3478\"],\"username\":\"\"},{\"credential\":\"c3ludGhldGljLWNyZWRlbnRpYWw=\",\"urls\":[\"turn:turn.example.net:3478?transport=udp\"],\"username\":\"1800003600:dGVzdC1sYWJlbA\"}],\"id\":\"AAECAwQFBgcICQoLDA0ODw\",\"max\":250000000,\"v\":1}",
+      "sha256": "b1725b5cf23c88475aa762b4a657303d42314a18b620e194e94ffb713b1a49be"
+    },
+    {
       "name": "empty file",
       "from": "page",
       "index": 0,
@@ -193,11 +208,11 @@
       "stopReason": "unsupported"
     },
     {
-      "name": "no TURN URL",
+      "name": "STUN-only server with a credential",
       "from": "drop",
       "index": 0,
       "text": "{\"dir\":\"to-drop\",\"event\":\"invite\",\"hide\":true,\"ice\":[{\"credential\":\"c3ludGhldGljLWNyZWRlbnRpYWw=\",\"urls\":[\"stun:turn.example.net:3478\"],\"username\":\"1800003600:dGVzdC1sYWJlbA\"}],\"id\":\"AAECAwQFBgcICQoLDA0ODw\",\"max\":250000000,\"v\":1}",
-      "stopReason": "unsupported"
+      "stopReason": "failed"
     },
     {
       "name": "no ICE servers",
@@ -212,6 +227,27 @@
       "index": 0,
       "text": "{\"dir\":\"to-drop\",\"event\":\"invite\",\"hide\":true,\"ice\":[{\"credential\":\"\",\"urls\":[\"stun:turn.example.net:3478\",\"turn:turn.example.net:3478?transport=udp\",\"turns:turn.example.net:5349?transport=tcp\"],\"username\":\"1800003600:dGVzdC1sYWJlbA\"}],\"id\":\"AAECAwQFBgcICQoLDA0ODw\",\"max\":250000000,\"v\":1}",
       "stopReason": "failed"
+    },
+    {
+      "name": "STUN-only server with a username and no credential",
+      "from": "drop",
+      "index": 0,
+      "text": "{\"dir\":\"to-drop\",\"event\":\"invite\",\"hide\":true,\"ice\":[{\"credential\":\"\",\"urls\":[\"stun:turn.example.net:3478\"],\"username\":\"1800003600:dGVzdC1sYWJlbA\"}],\"id\":\"AAECAwQFBgcICQoLDA0ODw\",\"max\":250000000,\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "TURN server with an empty username",
+      "from": "drop",
+      "index": 0,
+      "text": "{\"dir\":\"to-drop\",\"event\":\"invite\",\"hide\":true,\"ice\":[{\"credential\":\"c3ludGhldGljLWNyZWRlbnRpYWw=\",\"urls\":[\"turn:turn.example.net:3478?transport=udp\"],\"username\":\"\"}],\"id\":\"AAECAwQFBgcICQoLDA0ODw\",\"max\":250000000,\"v\":1}",
+      "stopReason": "failed"
+    },
+    {
+      "name": "STUN-only server not on the allowlist",
+      "from": "drop",
+      "index": 0,
+      "text": "{\"dir\":\"to-drop\",\"event\":\"invite\",\"hide\":false,\"ice\":[{\"credential\":\"\",\"urls\":[\"stun:stun.example.org:3478\"],\"username\":\"\"}],\"id\":\"AAECAwQFBgcICQoLDA0ODw\",\"max\":250000000,\"v\":1}",
+      "stopReason": "unsupported"
     },
     {
       "name": "identifier of 15 bytes",

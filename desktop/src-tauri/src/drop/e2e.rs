@@ -2629,7 +2629,7 @@ async fn direct_receive_services() {
         return;
     };
     // The node issues credentials before Drop asks: a quick check that the
-    // issuer is on, so a daemon without it fails here, not as `no_turn`.
+    // issuer is on, so a daemon without it fails here with a clear message.
     let probe = svc
         .http
         .post(svc.online.url("turn/v1/credentials"))

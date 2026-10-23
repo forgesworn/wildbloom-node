@@ -331,7 +331,7 @@ try {
   });
 
   await journey('hiding without a TURN URL is refused as no-relay; requests for another transfer are not served', async (w) => {
-    await emit(w, { transfer: 'T1', seq: 1, op: 'create', iceServers: [{ urls: ['stun:127.0.0.1:9'], username: 'synthetic-user', credential: SECRET }], relayOnly: true, envelopeBytes: ENVELOPE, size: SIZE });
+    await emit(w, { transfer: 'T1', seq: 1, op: 'create', iceServers: [{ urls: ['stun:127.0.0.1:9'], username: '', credential: '' }], relayOnly: true, envelopeBytes: ENVELOPE, size: SIZE });
     await reported(w, { kind: 'error', seq: 1, reason: 'no-relay' }, 'no-relay');
     await emit(w, { transfer: 'T1', seq: 2, op: 'create', iceServers: [{ urls: ['turn:127.0.0.1:9?transport=udp'], username: 'synthetic-user', credential: SECRET }], relayOnly: true, envelopeBytes: ENVELOPE, size: SIZE });
     await reported(w, { kind: 'done', seq: 2 }, 'a relay-only create');
@@ -342,6 +342,26 @@ try {
     await emit(w, { transfer: 'T1', seq: 5, op: 'close', stop: null });
     await reported(w, { kind: 'done', seq: 5 }, 'close');
     assert.ok(!JSON.stringify(await reports(w)).includes(SECRET), 'Reports never carry the credential.');
+  });
+
+  await journey('a STUN-only server reaches the peer without a username or credential member', async (w) => {
+    await w.page.evaluate(() => {
+      const Original = window.RTCPeerConnection;
+      window.__configs = [];
+      window.RTCPeerConnection = class extends Original {
+        constructor(configuration, ...rest) {
+          super(configuration, ...rest);
+          window.__configs.push(JSON.parse(JSON.stringify(configuration)));
+        }
+      };
+    });
+    await emit(w, { transfer: 'T1', seq: 1, op: 'create', iceServers: [{ urls: ['stun:127.0.0.1:9'], username: '', credential: '' }], relayOnly: false, envelopeBytes: ENVELOPE, size: SIZE });
+    await reported(w, { kind: 'done', seq: 1 }, 'a create with STUN alone');
+    const [configuration] = await w.page.evaluate(() => window.__configs);
+    assert.deepEqual(configuration.iceServers, [{ urls: ['stun:127.0.0.1:9'] }], 'No credential member for a STUN server.');
+    assert.equal(configuration.iceTransportPolicy, 'all');
+    await emit(w, { transfer: 'T1', seq: 2, op: 'close', stop: null });
+    await reported(w, { kind: 'done', seq: 2 }, 'close');
   });
 
   console.log(`direct window: ${passed} passed`);

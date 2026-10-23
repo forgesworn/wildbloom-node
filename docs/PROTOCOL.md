@@ -192,7 +192,8 @@ not returned.  Upstream failures are redacted to `502` or `503`.
 ### TURN credential issuer
 
 `--turn-issuer --turn-url <url>` (with `--device-grants`) adds one route for
-[direct send](#direct-send-experimental):
+[direct send](#direct-send-experimental).  Despite the name it hands out an ICE
+configuration: TURN credentials, or `stun:` URLs alone:
 
 | Endpoint | Authority | Result |
 | --- | --- | --- |
@@ -200,9 +201,15 @@ not returned.  Upstream failures are redacted to `502` or `503`.
 
 `--turn-url` is given 1 to 4 times, or comma-separated.  Each value is a
 distinct `stun:`, `turn:` or `turns:` URL of at most 256 bytes of printable
-ASCII without spaces, quotes or backslashes, and at least one is `turn:` or
-`turns:`.  The URLs are checked at start-up; a node with a bad one does not
-start.
+ASCII without spaces, quotes or backslashes.  The URLs are checked at
+start-up; a node with a bad one does not start.
+
+The issuer has two modes.  If any URL is `turn:` or `turns:`, the secret below
+is required and the node mints credentials.  If every URL is `stun:`, the
+secret must be absent (a `--turn-secret-file` or `WILDBLOOM_TURN_SECRET` that
+is given anyway stops the node from starting), nothing is minted, and the
+response carries the URLs with an empty `username` and `credential` in `own`
+and `peer`.
 
 The authority is the pairing issuer's, through the same code: the checkout
 NIP-98 profile (exact `u` and `method`, a `payload` tag for the empty body, at
@@ -223,7 +230,9 @@ The response carries `Cache-Control: no-store` and is exactly:
 
 `own` is for the caller and `peer` for the verified person at the other end.
 Each has exactly the members and limits of an [`ice`](#invitation-and-manifest)
-entry, so Drop puts `peer` into `invite` unchanged.  `urls` are the configured
+entry, so Drop puts `peer` into `invite` unchanged.  In the STUN-only mode both
+hold `"credential":""` and `"username":""`, for example
+`{"expires":1800003600,"own":{"credential":"","urls":["stun:stun.example.net:3478"],"username":""},"peer":{"credential":"","urls":["stun:stun.example.net:3478"],"username":""}}`.  `urls` are the configured
 URLs in their configured order.  `expires` is the issue time plus 900
 seconds: Drop asks just before it opens a session, which lasts at most 600
 seconds, so every allocation and restart falls inside it.  Each credential is coturn's TURN REST form (`use-auth-secret` with
@@ -260,15 +269,27 @@ Operator notes:
 
 - The coturn in front of it needs this secret as an additional
   `static-auth-secret` line.  The line must be distinct from any other
-  service's secret on that server, such as KithMoot's on
-  `kithmoot.forgesworn.dev`, so it can be rotated or revoked alone.  A local
-  check with coturn 4.17.2 accepted credentials made from either of two
+  service's secret on that server, so it can be rotated or revoked alone.  A
+  local check with coturn 4.17.2 accepted credentials made from either of two
   `static-auth-secret` lines and refused one made from neither.
 - Nothing works until both are deployed: the node flags and the coturn line.
   Until then the node issues credentials that the TURN server refuses.
+- The sending page accepts only the URLs it was built with.  Build it with the
+  same URLs in `VITE_WILDBLOOM_DIRECT_ICE`, or it refuses them as
+  `unsupported`.
 - To rotate, add the new line to coturn, restart the node with the new secret,
   and remove the old line 15 minutes later, once the last credential signed
   with it has expired.
+
+Recipes for a self-hoster:
+
+- Own TURN: run coturn, then
+  `wildbloomd --device-grants --turn-issuer --turn-url 'turn:turn.example.net:3478?transport=udp' --turn-url stun:turn.example.net:3478 --turn-secret-file /abs/path/0600-file`,
+  and build the page with `VITE_WILDBLOOM_DIRECT_ICE` listing the same URLs.
+- Own STUN only: `wildbloomd --device-grants --turn-issuer --turn-url stun:stun.example.net:3478`
+  with no secret, and the same page build rule.
+- Neither: configure nothing on the node.  Drop uses the Cloudflare STUN
+  default above, and the default page build allows it.
 
 ## Experimental private storage offer
 
@@ -308,8 +329,8 @@ built.  Version 1 covers a page sending a file to Drop (`to-drop`).
 The node takes no part in the transfer.  Its roles are the existing
 [pairing creation-grant issuer](#pairing-creation-grant-issuer), which lets
 Drop open the session, and the
-[TURN credential issuer](#turn-credential-issuer), which mints the TURN
-credentials.  `wildbloomd` runs no WebRTC, STUN or TURN code, and Blossom
+[TURN credential issuer](#turn-credential-issuer), which hands out the ICE
+configuration, if it runs one.  `wildbloomd` runs no WebRTC, STUN or TURN code, and Blossom
 storage and the transports above are unchanged.  Nothing about the file rests
 on any server.
 
@@ -398,7 +419,7 @@ session therefore exposes no address and allocates nothing on a TURN server.
 | --- | --- |
 | `dir` | `"to-drop"`: the page sends the file to Drop.  `"from-drop"` is reserved for Drop sending to the page; its message order is not specified yet.  A page refuses a direction it does not implement with `unsupported`; the `send` page implements only `to-drop` |
 | `hide` | `true` when Drop uses relay-only ICE and its address is hidden behind TURN.  It only tells the page what to say |
-| `ice` | 1 to 4 servers, each exactly `{"credential","urls","username"}`.  `urls` holds 1 to 4 `stun:`, `turn:` or `turns:` URLs of at most 256 bytes; `username` and `credential` hold 1 to 256 bytes without control characters.  At least one URL is `turn:` or `turns:` |
+| `ice` | 1 to 4 servers, each exactly `{"credential","urls","username"}`.  `urls` holds 1 to 4 `stun:`, `turn:` or `turns:` URLs of at most 256 bytes.  An entry with any `turn:` or `turns:` URL has a `username` and a `credential` of 1 to 256 bytes each, without control characters.  An entry of `stun:` URLs only carries no credential: its `username` and `credential` are both exactly `""`.  Any other combination (a STUN-only entry with a credential, one field empty and one not, a TURN entry with an empty field) is malformed.  The list need not hold a TURN URL |
 | `id` | 16 random bytes in canonical unpadded base64url: the transfer's name in each app's own state.  It is never sent to a server, and is neither the relay locator nor a TURN username |
 | `max` | The largest file, in bytes, Drop will accept: 1 to 250,000,000 in v1 |
 | `name` | The FSWNENC2 metadata name: a fixed point of the shared name rule (`sanitise_name` in `crates/envelope`) with none of the disguising characters below |
@@ -427,31 +448,46 @@ larger than `max`, and Drop refuses one with `unsupported`.
 ICE server or size) or `failed` (a protocol, connection or verification
 failure).
 
-### ICE servers and the TURN credential
+### ICE servers and credentials
 
-Drop obtains two short-lived TURN REST credentials (coturn's `use-auth-secret`
-form, each with its own random username label): one for itself and one for the
-page.  The page's credential travels only inside `invite`, after the check
-words, so only the verified peer receives it.  It never appears in the link, a
-URL, the relay's public fields, a log or browser storage, and the page forgets
-it when the direct send ends.  Drop obtains both from the node's
-[TURN credential issuer](#turn-credential-issuer) before it opens the session,
-so a node without the issuer fails before any link is shown, and puts `peer`
-into `ice` unchanged.  An abandoned session's credentials lapse unused.
+Drop obtains its ICE configuration from the node's
+[TURN credential issuer](#turn-credential-issuer) if the node runs one: either
+two short-lived TURN REST credentials (coturn's `use-auth-secret` form, each
+with its own random username label), one for itself and one for the page, or
+`stun:` URLs alone, with no credential.  If the node answers `404` (it runs no
+issuer), Drop uses its built-in default for both ends: the single entry
+`{"credential":"","urls":["stun:stun.cloudflare.com:3478"],"username":""}`.
+That STUN server is run by Cloudflare, Inc., which learns the public address and
+port of each end that does not hide, and when it asked.  It carries no file
+data.  Any other failure of the issuer ends the session before a link is shown.
+Drop puts `peer` into `ice` unchanged.
+
+A page's TURN credential, when there is one, travels only inside `invite`,
+after the check words, so only the verified peer receives it.  It never appears
+in the link, a URL, the relay's public fields, a log or browser storage, and the
+page forgets it when the direct send ends.  An abandoned session's credentials
+lapse unused.  A STUN server is never given a username or a credential.
 
 Each URL in `ice` must equal, byte for byte, an entry of the page's build-time
-allowlist; otherwise the page refuses with `unsupported`.  A paired but hostile
-inviter therefore cannot point the page at its own TURN server to learn an
-address the page asked to hide.  The page builds its configuration only from
-`ice` and adds no other server; Drop uses its own credential with the same
-servers.
+allowlist; otherwise the page refuses with `unsupported`.  The check comes after
+the syntax rules above.  A paired but hostile inviter therefore cannot point the
+page at its own STUN or TURN server to learn an address the page asked to hide.
+The page builds its configuration only from `ice` and adds no other server;
+Drop uses its own entry with the same servers.  The default page build allows
+`stun:stun.cloudflare.com:3478` alone, which cannot relay.
 
 Each side decides for itself whether to hide its own address.  Hiding means
 `iceTransportPolicy: "relay"` with STUN URLs removed: the other device then sees
 only the TURN server's address, while the TURN server still sees the real one.
-Drop hides by default; the page connects directly unless the person turns
-hiding on.  Browsers already hide local addresses behind mDNS names, because
-these pages never ask for camera or microphone access.
+Hiding therefore needs a TURN URL.  An end that wants to hide and has none
+refuses: Drop before it shows a link, and the page by not offering the choice.
+Drop hides when its setting is on, which is off unless the person turned it on;
+the page connects directly unless the person turns hiding on.  Browsers already
+hide local addresses behind mDNS names, because these pages never ask for
+camera or microphone access.
+
+Without TURN, two ends that are each behind a symmetric NAT (some mobile data
+and work networks) cannot connect; each end reports that it could not connect.
 
 ### Session descriptions
 
@@ -555,8 +591,10 @@ timed by its own clocks instead.
 
 The pairing relay holds the hellos, proofs and a few KiB of encrypted exchange
 messages until Drop deletes the session or it expires; logical expiry is not
-erasure.  STUN and TURN servers see both addresses, byte counts and timing.  A
-TURN server relays DTLS records that carry FSWNENC2 records, and stores nothing.
+erasure.  A STUN server sees the public address and port of each end that asks
+it, and when; with the default configuration that is Cloudflare's server, and
+it carries no file data.  A TURN server sees both addresses, byte counts and
+timing.  A TURN server relays DTLS records that carry FSWNENC2 records, and stores nothing.
 No server sees the words, the check words, the descriptions, or the file's
 name, size, key or bytes, and TURN usernames share no identifier with the relay
 session.  Without hiding, each side sees the other's public address.

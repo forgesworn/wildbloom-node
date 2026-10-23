@@ -5,7 +5,7 @@
 //! servers and credentials are synthetic.
 
 use super::*;
-use crate::drop::direct::messages::IceServer;
+use crate::drop::direct::messages::{IceServer, default_stun};
 use crate::drop::direct::sink::tests::{sealed, sha};
 use crate::drop::relay;
 use foregather_kit::Namespace;
@@ -364,6 +364,9 @@ struct Harness {
     task: tokio::task::JoinHandle<ReceiveState>,
     temp: PathBuf,
     received: PathBuf,
+    /// The ICE configuration and hiding choice the session was opened with.
+    ice: TurnCredentials,
+    hide: bool,
     _dir: tempfile::TempDir,
 }
 
@@ -385,6 +388,18 @@ fn start_full(
     can_open: bool,
     timing: Timing,
     space: fn(&std::path::Path) -> Option<u64>,
+) -> Harness {
+    start_custom(lifetime, can_open, timing, space, turn(), true)
+}
+
+/// The same, with the ICE configuration and the hiding choice given.
+fn start_custom(
+    lifetime: u64,
+    can_open: bool,
+    timing: Timing,
+    space: fn(&std::path::Path) -> Option<u64>,
+    turn: TurnCredentials,
+    hide: bool,
 ) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let temp = dir.path().join("drop-temp");
@@ -418,9 +433,10 @@ fn start_full(
         link: "https://wildbloom.example.invalid/send/#synthetic".into(),
         words: words.split(' ').map(str::to_owned).collect(),
         expires_at: session.expires,
-        turn: turn(),
-        hide: true,
+        turn: turn.clone(),
+        hide,
     };
+    let ice = turn.clone();
     let dirs = Dirs {
         temp: temp.clone(),
         received: received.clone(),
@@ -434,7 +450,7 @@ fn start_full(
         dirs,
         timing,
     ));
-    let allowlist = turn().peer.urls.clone();
+    let allowlist = turn.peer.urls.clone();
     Harness {
         relay: relay.clone(),
         host,
@@ -453,6 +469,8 @@ fn start_full(
         task,
         temp,
         received,
+        ice,
+        hide,
         _dir: dir,
     }
 }
@@ -535,8 +553,8 @@ impl Harness {
         assert_eq!(
             create.op,
             PeerOp::Create {
-                ice_servers: vec![turn().own],
-                relay_only: true,
+                ice_servers: vec![self.ice.own.clone()],
+                relay_only: self.hide,
                 envelope_bytes: file.envelope.len() as u64,
                 size: file.manifest.size,
             }
@@ -1178,6 +1196,33 @@ async fn a_connection_that_never_comes_up_is_given_up() {
     assert_eq!(h.closed().await, Some(2));
     assert_eq!(h.phone.read().await, stop(StopReason::Failed));
     assert_eq!(h.end().await.reason, Some("connect"));
+}
+
+/// The configuration a node without an issuer gives: STUN alone for both
+/// ends.
+fn stun_only() -> TurnCredentials {
+    TurnCredentials {
+        expires: 0,
+        own: default_stun(),
+        peer: default_stun(),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stun_only_session_gives_up_as_a_direct_connection_failure() {
+    let mut h = start_custom(600, true, TIMING, plenty, stun_only(), false);
+    let f = file("a.bin", 1000);
+    h.accepted(&f).await;
+    h.phone.send(&Message::Answer {
+        key: f.key.clone(),
+        sdp: PAGE_SDP.into(),
+    });
+    let answer = h.web.next().await;
+    h.web.done(&answer);
+    assert_eq!(h.closed().await, Some(2));
+    assert_eq!(h.phone.read().await, stop(StopReason::Failed));
+    // No relay was on offer, so the person is told a direct connection failed.
+    assert_eq!(h.end().await.reason, Some("connect_direct"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

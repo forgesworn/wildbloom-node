@@ -741,8 +741,9 @@ pub async fn live_grant(
     Ok(grant)
 }
 
-/// Two TURN REST credentials on the same servers from the node's issuer:
-/// `own` for this computer and `peer` for the verified person at the other
+/// The ICE configuration from the node's issuer, on the same servers for
+/// both ends: TURN REST credentials, or `stun:` URLs with no credential.
+/// `own` is for this computer and `peer` for the verified person at the other
 /// end of a direct send.  `Debug` hides the usernames and credentials.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -752,14 +753,15 @@ pub struct TurnCredentials {
     pub peer: super::direct::messages::IceServer,
 }
 
-/// Why the node gave no TURN credentials.  No variant carries a header or
+/// Why the node gave no ICE configuration.  No variant carries a header or
 /// body.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum TurnError {
     #[error("the node did not answer")]
     Unreachable,
-    /// 404: the node does not run the TURN credential issuer.
-    #[error("the node does not issue TURN credentials")]
+    /// 404: the node does not run the issuer, so Drop uses its built-in STUN
+    /// default.
+    #[error("the node does not issue an ICE configuration")]
     NotOffered,
     /// 429: this computer has asked too often in the last hour.
     #[error("too many requests for TURN credentials this hour")]
@@ -772,8 +774,8 @@ pub enum TurnError {
 }
 
 /// Reads the issuer's reply: exactly `{"expires","own","peer"}`, each entry
-/// exactly an `ice` server that passes the `ice` rules and names a `turn:` or
-/// `turns:` URL.
+/// exactly an `ice` server that passes the `ice` rules: TURN credentials, or
+/// `stun:` URLs with an empty username and credential.
 pub fn parse_turn_credentials(bytes: &[u8]) -> Result<TurnCredentials, TurnError> {
     // Objects only: a derived struct would also take the array form.
     let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| TurnError::Invalid)?;
@@ -788,9 +790,8 @@ pub fn parse_turn_credentials(bytes: &[u8]) -> Result<TurnCredentials, TurnError
     // Read from the bytes, not the value, so a duplicate member is refused.
     let credentials: TurnCredentials =
         serde_json::from_slice(bytes).map_err(|_| TurnError::Invalid)?;
-    let sound =
-        |server: &super::direct::messages::IceServer| server.well_formed() && server.has_turn();
-    if credentials.expires == 0 || !sound(&credentials.own) || !sound(&credentials.peer) {
+    if credentials.expires == 0 || !credentials.own.well_formed() || !credentials.peer.well_formed()
+    {
         return Err(TurnError::Invalid);
     }
     Ok(credentials)
@@ -1136,8 +1137,15 @@ mod tests {
                 v.as_object_mut().unwrap().remove("peer");
             }),
             ("extra entry member", |v| v["own"]["ttl"] = 1.into()),
-            ("no TURN URL", |v| {
+            ("STUN-only server with a credential", |v| {
                 v["peer"]["urls"] = serde_json::json!(["stun:turn.example.net:3478"])
+            }),
+            ("STUN-only server with a username only", |v| {
+                v["own"]["urls"] = serde_json::json!(["stun:turn.example.net:3478"]);
+                v["own"]["credential"] = "".into();
+            }),
+            ("TURN server with an empty username", |v| {
+                v["own"]["username"] = "".into()
             }),
             ("five URLs", |v| {
                 v["own"]["urls"] =
@@ -1177,6 +1185,20 @@ mod tests {
         );
         assert_eq!(parse_turn_credentials(b"[]"), Err(TurnError::Invalid));
         assert_eq!(parse_turn_credentials(b""), Err(TurnError::Invalid));
+    }
+
+    /// A STUN-only reply, as a node with only `--turn-url stun:...` sends.
+    #[test]
+    fn a_stun_only_reply_parses_when_it_carries_no_credential() {
+        let entry = serde_json::json!({
+            "credential": "",
+            "urls": ["stun:stun.example.net:3478"],
+            "username": "",
+        });
+        let reply = serde_json::json!({"expires": 1_800_003_600u64, "own": entry, "peer": entry});
+        let parsed = parse_turn_credentials(reply.to_string().as_bytes()).unwrap();
+        assert!(!parsed.own.has_turn() && !parsed.peer.has_turn());
+        assert!(parsed.own.username.is_empty() && parsed.own.credential.is_empty());
     }
 
     /// A server that answers one request with `status` and `body`.

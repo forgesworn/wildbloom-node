@@ -833,7 +833,7 @@
     online: { configured: false, url: '', reachable: true, failedChecks: 0, usedBytes: 0, limitBytes: 0, full: false },
     approval: { state: 'none' }, recovery: { confirmed: true }, watchFolder: { enabled: false, path: '' },
     limits: { dropMaxBytes: 1e9, shareMaxBytes: 250e6 }, browserApproval: false,
-    receiving: { hideAddress: true, folder: '', maxBytes: 250e6 },
+    receiving: { hideAddress: false, folder: '', maxBytes: 250e6 },
   };
   const rows = new Map();
   const rowEls = new Map();

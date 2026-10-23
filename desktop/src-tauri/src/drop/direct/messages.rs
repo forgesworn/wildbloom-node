@@ -72,8 +72,10 @@ impl StopReason {
 }
 
 /// One ICE server: exactly `{"credential","urls","username"}`.  The same
-/// shape is a TURN credential from the node's issuer and an `ice` entry.
-/// `Debug` hides the username and credential.
+/// shape is the ICE configuration from the node's issuer and an `ice` entry.
+/// An entry with any `turn:` or `turns:` URL carries a username and a
+/// credential; an entry of `stun:` URLs only has both empty.  `Debug` hides
+/// the username and credential.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IceServer {
@@ -132,17 +134,39 @@ pub fn is_turn_url(url: &str) -> bool {
     url.starts_with("turn:") || url.starts_with("turns:")
 }
 
+/// The STUN server used when the node runs no ICE issuer: Cloudflare's free
+/// public one, as KithMoot uses.  No ForgeSworn server is a default.  The
+/// page's build allowlist holds the same string.
+pub const DEFAULT_STUN_URL: &str = "stun:stun.cloudflare.com:3478";
+
+/// The built-in ICE entry for Drop and for the page: the default STUN URL and
+/// no credential.  It is not secret.
+pub fn default_stun() -> IceServer {
+    IceServer {
+        credential: String::new(),
+        urls: vec![DEFAULT_STUN_URL.to_owned()],
+        username: String::new(),
+    }
+}
+
 impl IceServer {
-    /// The syntax rules of one `ice` entry: 1 to 4 URLs, and a username and
-    /// credential of 1 to 256 bytes without control characters.
+    /// The syntax rules of one `ice` entry: 1 to 4 URLs; then, if any is a
+    /// `turn:` or `turns:` URL, a username and credential of 1 to 256 bytes
+    /// without control characters, and otherwise both exactly empty, so a
+    /// credential never goes to a STUN server.
     pub fn well_formed(&self) -> bool {
+        let secrets = [&self.username, &self.credential];
         (1..=URLS_PER_SERVER).contains(&self.urls.len())
             && self.urls.iter().all(|url| valid_ice_url(url))
-            && [&self.username, &self.credential].iter().all(|secret| {
-                !secret.is_empty()
-                    && secret.len() <= CREDENTIAL_BYTES
-                    && !secret.chars().any(is_control)
-            })
+            && if self.has_turn() {
+                secrets.iter().all(|secret| {
+                    !secret.is_empty()
+                        && secret.len() <= CREDENTIAL_BYTES
+                        && !secret.chars().any(is_control)
+                })
+            } else {
+                secrets.iter().all(|secret| secret.is_empty())
+            }
     }
 
     pub fn has_turn(&self) -> bool {
@@ -314,9 +338,11 @@ pub fn encode(message: &Message) -> Result<Vec<u8>, EncodeError> {
     let string = |text: &str| Value::String(text.to_owned());
     match message {
         Message::Invite { hide, ice, id, max } => {
+            // A hidden address needs a TURN URL, so Drop never sends a hidden
+            // invitation it cannot honour.  Readers do not check `hide`.
             let ice_ok = (1..=ICE_SERVERS).contains(&ice.len())
                 && ice.iter().all(IceServer::well_formed)
-                && ice.iter().any(IceServer::has_turn);
+                && (!*hide || ice.iter().any(IceServer::has_turn));
             if !ice_ok || !canonical_id(id) || !(1..=MAX_FILE_BYTES).contains(max) {
                 return Err(EncodeError::Invalid);
             }
@@ -537,9 +563,6 @@ fn read_ice(value: &Value, allowlist: &[&str]) -> Result<Vec<IceServer>, Refusal
         .any(|url| !allowlist.contains(&url.as_str()))
     {
         return Err(unsupported("an ice URL is not on the build-time allowlist"));
-    }
-    if !servers.iter().any(IceServer::has_turn) {
-        return Err(unsupported("no TURN URL"));
     }
     Ok(servers)
 }
@@ -1002,6 +1025,48 @@ mod tests {
         "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\na=fingerprint:sha-256 AA:BB\r\n".into()
     }
 
+    /// The built-in default is Cloudflare's STUN server, spelt exactly as the
+    /// page's build allowlist spells it, with no credential.
+    #[test]
+    fn the_built_in_default_is_cloudflare_stun_alone() {
+        assert_eq!(DEFAULT_STUN_URL, "stun:stun.cloudflare.com:3478");
+        let server = default_stun();
+        assert_eq!(
+            server.urls,
+            vec!["stun:stun.cloudflare.com:3478".to_owned()]
+        );
+        assert!(server.username.is_empty() && server.credential.is_empty());
+        assert!(server.well_formed() && !server.has_turn());
+        assert!(!DEFAULT_STUN_URL.contains("forgesworn"));
+    }
+
+    #[test]
+    fn an_ice_entry_is_well_formed_only_in_its_two_forms() {
+        let entry = |urls: &[&str], username: &str, credential: &str| IceServer {
+            credential: credential.into(),
+            urls: urls.iter().map(|url| (*url).to_owned()).collect(),
+            username: username.into(),
+        };
+        let stun = "stun:s.example:3478";
+        let turn = "turn:t.example:3478?transport=udp";
+        // STUN alone: both empty.
+        assert!(entry(&[stun], "", "").well_formed());
+        assert!(!entry(&[stun], "u", "c").well_formed());
+        assert!(!entry(&[stun], "u", "").well_formed());
+        assert!(!entry(&[stun], "", "c").well_formed());
+        // Any TURN URL: both present, at most 256 bytes, no control characters.
+        assert!(entry(&[turn], "u", "c").well_formed());
+        assert!(entry(&[stun, turn], "u", "c").well_formed());
+        assert!(!entry(&[turn], "", "c").well_formed());
+        assert!(!entry(&[turn], "u", "").well_formed());
+        assert!(!entry(&[stun, turn], "", "").well_formed());
+        assert!(!entry(&[turn], &"u".repeat(257), "c").well_formed());
+        assert!(!entry(&[turn], "u\n", "c").well_formed());
+        // The URL rules are unchanged.
+        assert!(!entry(&[], "", "").well_formed());
+        assert!(!entry(&["stun:bad host"], "", "").well_formed());
+    }
+
     fn ice() -> IceServer {
         IceServer {
             credential: "c3ludGhldGljLWNyZWRlbnRpYWw=".into(),
@@ -1033,12 +1098,26 @@ mod tests {
             encode(&invite(vec![ice()], "AAECAwQFBgcICQoLDA0ODx", 1)),
             Err(EncodeError::Invalid)
         );
+        // A STUN-only entry with a credential is malformed.
         let mut stun_only = ice();
         stun_only.urls = vec!["stun:turn.example.net:3478".into()];
         assert_eq!(
             encode(&invite(vec![stun_only], &id, 1)),
             Err(EncodeError::Invalid)
         );
+        // STUN alone can carry an invitation that does not hide, never one that does.
+        let hidden = |hide, ice: Vec<IceServer>| Message::Invite {
+            hide,
+            ice,
+            id: id.clone(),
+            max: 1,
+        };
+        assert!(encode(&hidden(false, vec![default_stun()])).is_ok());
+        assert_eq!(
+            encode(&hidden(true, vec![default_stun()])),
+            Err(EncodeError::Invalid)
+        );
+        assert!(encode(&hidden(true, vec![default_stun(), ice()])).is_ok());
         let mut empty = ice();
         empty.credential = String::new();
         assert_eq!(

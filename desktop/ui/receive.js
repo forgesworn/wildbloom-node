@@ -27,7 +27,6 @@
     const limit = formatBytes(context?.receiving?.maxBytes || 250e6);
     switch (reason) {
       case 'node_unreachable': return "Can't reach your online node, or this computer isn't approved there. Nothing was received.";
-      case 'no_turn': return "Your online node can't help with direct transfers yet, so it can't receive files this way.";
       case 'turn_refused': return 'Your online node refused to set up the transfer. Nothing was received.';
       case 'turn_limit': return 'Too many tries this hour. Try again later.';
       case 'relay_unreachable': return "Can't reach the sharing service. Check your internet connection.";
@@ -40,10 +39,11 @@
       case 'peer_failed': return 'Their side ran into a problem. Nothing was kept.';
       case 'peer_storage': return "Their device ran out of room, so the transfer stopped. Nothing was kept.";
       case 'connect': return "This computer and theirs couldn't connect. Nothing was kept.";
+      case 'connect_direct': return "This computer and theirs couldn't connect directly. Some networks, like mobile data or work Wi-Fi, don't allow it. Nothing was kept.";
       case 'lost': return "The connection was lost and couldn't be restored. Nothing was kept.";
       case 'verification': return "The file didn't check out, so Drop threw it away. Nothing was kept.";
       case 'storage': return "There isn't enough room on this computer. Nothing was kept.";
-      case 'no_relay': return "Hiding your address needs your online node, and it wasn't available. You can turn this off in Settings.";
+      case 'no_relay': return "Hiding your address needs a relay server, and your online node doesn't offer one. Turn hiding off in Settings to receive directly.";
       case 'webview': return "Drop couldn't set up the connection on this computer. Nothing was kept.";
       default: return 'Something went wrong. Nothing was kept.';
     }

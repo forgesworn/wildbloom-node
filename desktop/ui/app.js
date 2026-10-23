@@ -177,8 +177,8 @@ elements.checkUpdate.addEventListener("click", async () => {
   // A backend that doesn't report sharing yet gets today's behaviour.
   const currentSharing = () => ({ afterDownload: "delete", expirySeconds: 86400, ...(snapshot?.sharing || {}) });
 
-  // A backend that doesn't report receiving yet hides the address, as Drop does by default.
-  const currentReceiving = () => ({ hideAddress: true, folder: "", ...(snapshot?.receiving || {}) });
+  // A backend that doesn't report receiving yet leaves the address showing, as Drop does by default.
+  const currentReceiving = () => ({ hideAddress: false, folder: "", ...(snapshot?.receiving || {}) });
 
   function render() {
     const online = snapshot?.online;
