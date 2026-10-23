@@ -191,9 +191,10 @@ struct Cli {
     )]
     pairing_operator_token_file: Option<PathBuf>,
 
-    /// Issue short-lived TURN credentials to granted devices for direct send.
-    /// The shared secret comes from --turn-secret-file or the
-    /// WILDBLOOM_TURN_SECRET environment variable, never an argument.
+    /// Hand out direct-send ICE servers to granted devices: STUN URLs alone,
+    /// or TURN with short-lived credentials (the secret is then required, from
+    /// --turn-secret-file or the WILDBLOOM_TURN_SECRET environment variable,
+    /// never an argument; with STUN alone it must be absent).
     #[arg(
         long,
         env = "WILDBLOOM_TURN_ISSUER",
@@ -201,7 +202,8 @@ struct Cli {
     )]
     turn_issuer: bool,
 
-    /// stun:, turn: or turns: URL returned with every TURN credential (1 to 4; repeatable or comma-separated).
+    /// stun:, turn: or turns: URL handed out with every direct-send ICE entry (1 to 4; repeatable or comma-separated).
+    /// STUN URLs alone need no secret; any turn: or turns: URL does.
     #[arg(
         long = "turn-url",
         env = "WILDBLOOM_TURN_URLS",
@@ -211,6 +213,7 @@ struct Cli {
     turn_urls: Vec<String>,
 
     /// Private (0600) file holding the TURN server's static-auth-secret.
+    /// Required if and only if a --turn-url is turn: or turns:.
     #[arg(long, env = "WILDBLOOM_TURN_SECRET_FILE", requires = "turn_issuer")]
     turn_secret_file: Option<PathBuf>,
 
@@ -289,6 +292,33 @@ enum Command {
     Replicas(replicas::Cli),
 }
 
+/// The ICE URLs and, if any is TURN, the secret. STUN URLs alone take no
+/// secret, and one given anyway stops the node rather than being ignored.
+type TurnIssuerConfig = (Vec<String>, Option<grants::turn::TurnSecret>);
+
+fn issuer_config(
+    enabled: bool,
+    turn_urls: &[String],
+    secret_file: Option<&std::path::Path>,
+    env_secret: Option<std::ffi::OsString>,
+) -> Result<Option<TurnIssuerConfig>, &'static str> {
+    if !enabled {
+        return Ok(None);
+    }
+    let urls = grants::turn::ice_urls(turn_urls)?;
+    let secret = if grants::turn::has_turn_url(&urls) {
+        Some(grants::turn::TurnSecret::from_sources(
+            secret_file,
+            env_secret,
+        )?)
+    } else if secret_file.is_some() || env_secret.is_some() {
+        return Err("a TURN secret was given but no --turn-url is turn: or turns:");
+    } else {
+        None
+    };
+    Ok(Some((urls, secret)))
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
@@ -316,17 +346,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !cli.bind.ip().is_loopback() && !cli.allow_public_bind {
         return Err("refusing a non-loopback bind without --allow-public-bind".into());
     }
-    let turn_issuer = if cli.turn_issuer {
-        Some((
-            grants::turn::ice_urls(&cli.turn_urls)?,
-            grants::turn::TurnSecret::from_sources(
-                cli.turn_secret_file.as_deref(),
-                std::env::var_os(grants::turn::SECRET_ENV),
-            )?,
-        ))
-    } else {
-        None
-    };
+    let turn_issuer = issuer_config(
+        cli.turn_issuer,
+        &cli.turn_urls,
+        cli.turn_secret_file.as_deref(),
+        std::env::var_os(grants::turn::SECRET_ENV),
+    )?;
     let store = Store::open(StoreConfig {
         root: data_dir.clone(),
         quota_bytes: cli.quota_bytes,
@@ -912,6 +937,75 @@ mod tests {
             ]
         );
         assert!(grants::turn::ice_urls(&cli.turn_urls).is_ok());
+        // STUN alone is a valid configuration and needs no secret.
+        let cli = Cli::try_parse_from([
+            "wildbloomd",
+            "--device-grants",
+            "--turn-issuer",
+            "--turn-url",
+            "stun:stun.example.net:3478",
+        ])
+        .unwrap();
+        let urls = grants::turn::ice_urls(&cli.turn_urls).unwrap();
+        assert!(cli.turn_issuer && !grants::turn::has_turn_url(&urls));
+        assert!(cli.turn_secret_file.is_none());
+    }
+
+    #[test]
+    fn the_turn_secret_is_required_if_and_only_if_a_url_is_turn() {
+        let parse = |urls: &[&str], file: Option<&str>| {
+            let mut args = vec!["wildbloomd", "--device-grants", "--turn-issuer"];
+            for url in urls {
+                args.extend(["--turn-url", url]);
+            }
+            if let Some(file) = file {
+                args.extend(["--turn-secret-file", file]);
+            }
+            Cli::try_parse_from(args).unwrap()
+        };
+        let issuer_config_for = |cli: &Cli, env: Option<std::ffi::OsString>| {
+            issuer_config(
+                cli.turn_issuer,
+                &cli.turn_urls,
+                cli.turn_secret_file.as_deref(),
+                env,
+            )
+        };
+        let secret = || {
+            Some(std::ffi::OsString::from(
+                "synthetic-wildbloom-turn-secret-0001",
+            ))
+        };
+        let stun = ["stun:stun.example.net:3478"];
+        let turn = ["stun:turn.example.net:3478", "turn:turn.example.net:3478"];
+        // STUN alone starts with no secret, and holds none.
+        let config = issuer_config_for(&parse(&stun, None), None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(config.0, stun);
+        assert!(config.1.is_none());
+        // A secret given with STUN alone is an error, from either source.
+        let message = "a TURN secret was given but no --turn-url is turn: or turns:";
+        assert_eq!(
+            issuer_config_for(&parse(&stun, Some("/var/lib/example/turn-secret")), None).err(),
+            Some(message)
+        );
+        assert_eq!(
+            issuer_config_for(&parse(&stun, None), secret()).err(),
+            Some(message)
+        );
+        // TURN needs one, as before.
+        assert!(issuer_config_for(&parse(&turn, None), None).is_err());
+        let config = issuer_config_for(&parse(&turn, None), secret())
+            .unwrap()
+            .unwrap();
+        assert!(config.1.is_some());
+        // Not asked for: nothing.
+        assert!(
+            issuer_config_for(&Cli::try_parse_from(["wildbloomd"]).unwrap(), secret())
+                .unwrap()
+                .is_none()
+        );
     }
 
     const KEEPER: &str = "ab0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd";

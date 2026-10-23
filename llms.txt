@@ -96,12 +96,15 @@ Key CLI flags (each also has a `WILDBLOOM_*` environment variable; see
   `--pairing-issuer`.
 - `--pairing-operator-token-file <PATH>`: private file holding the pairing
   operator token.
-- `--turn-issuer`: issue short-lived TURN REST credentials to devices for
-  direct send; needs `--device-grants` and `--turn-url`.
+- `--turn-issuer`: issue ICE server lists (with short-lived TURN REST
+  credentials when a TURN URL is set) to devices for direct send; needs `--device-grants` and
+  `--turn-url`.
 - `--turn-url <URL>`: `stun:`, `turn:` or `turns:` URL returned with each
-  credential, 1 to 4, at least one TURN.
+  credential, 1 to 4. They may all be `stun:`, in which case no secret is
+  needed and none may be set.
 - `--turn-secret-file <PATH>`: private file holding the TURN server's
-  `static-auth-secret` (or `WILDBLOOM_TURN_SECRET`).
+  `static-auth-secret` (or `WILDBLOOM_TURN_SECRET`); needed only when a TURN
+  URL is configured.
 - `--max-concurrent-writes <N>`: concurrent upload and mirror streams, default 4.
 - `--repair-interval <SECONDS>`: integrity scan and repair interval, default
   3600; 0 disables repair.
