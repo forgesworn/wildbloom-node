@@ -84,7 +84,7 @@ Conventions
   how long a sent copy stays otherwise: an hour, a day (the default) or a week. Both are read
   when a file is sent; a share already sent keeps what it was sent with. A changed setting
   is sent as `drop://status`.
-- **Added.** `receiving` is "Receive a file". `hideAddress` (default true) is the node
+- **Added.** `receiving` is "Receive a file". `hideAddress` (default false) is the node
   window's "Hide my address when receiving" setting (`set_receiving`): Drop then connects only
   through the relay, so the sender sees the relay's address, not this computer's. It is read
   when a receive starts. `folder` is where received files land, outside the Wildbloom folder
@@ -346,8 +346,7 @@ time.
 | `reason` | Meaning |
 |---|---|
 | `node_unreachable` | The online node did not answer, or this computer is not approved there. |
-| `no_turn` | The online node does not issue relay (TURN) credentials yet, so it cannot receive files directly. |
-| `turn_refused`, `turn_limit` | The node refused relay credentials (`turn_limit`: too many tries this hour; try later). |
+| `turn_refused`, `turn_limit` | The node refused to hand out its ICE configuration (`turn_limit`: too many tries this hour; try later). A node with no issuer is not a failure: Drop uses its built-in STUN server. |
 | `relay_unreachable` | The pairing relay failed. |
 | `expired` | The 10-minute window ended before the file started to arrive. |
 | `wrong_words` | Someone opened the link with the wrong words. The link can't be used again. |
@@ -356,11 +355,12 @@ time.
 | `unsupported` | Their page can't use what this computer offered (for example its relay). |
 | `protocol` | Something arrived that the protocol does not allow. |
 | `peer_failed`, `peer_storage` | Their side failed. |
-| `connect` | The two devices never connected. |
+| `connect` | The two devices never connected, with a relay on offer. |
+| `connect_direct` | The two devices never connected and no relay was on offer, so only a direct connection was possible. Some networks, like mobile data or work Wi-Fi, do not allow one. |
 | `lost` | The connection was lost and could not be restored, or no new byte arrived for 90 seconds while connected. |
 | `verification` | The file did not check out (wrong size, damaged or not what they offered). Nothing was kept. |
 | `storage` | There is no room on this computer. Nothing was kept. Also sent instead of `consent` when the temp and Received folders' volumes lack twice the envelope and 64 MiB free. |
-| `no_relay` | Hiding the address needs a relay and none was offered. |
+| `no_relay` | Hiding the address needs a TURN relay and the online node offers none. Sent before any link is shown when the setting is on. |
 | `webview` | The connection could not be set up in this app. |
 
 An unknown `reason` falls back to a generic "Something went wrong. Nothing was kept."

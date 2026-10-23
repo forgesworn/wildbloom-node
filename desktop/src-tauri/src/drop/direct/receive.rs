@@ -9,7 +9,7 @@ use super::session::{self, Controls, DirectHost, Dirs, Opened, Timing};
 use super::sink::SinkError;
 use super::{
     AddedToWildbloom, PURPOSE, PeerReport, PeerRequest, ReceiveState, ReceivingSettings,
-    messages::MAX_FILE_BYTES,
+    messages::{MAX_FILE_BYTES, default_stun},
 };
 use crate::drop::client::{self, NodeEndpoint, TurnError};
 use crate::drop::engine::{Engine, internal};
@@ -19,8 +19,35 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-/// The receiving setting in the index: `off` turns hiding off; anything else
-/// (and nothing) is the default, on.
+/// The ICE configuration for one receive from the issuer's answer.  A node
+/// with no issuer (404) gives the built-in STUN entry for both ends.
+/// `expires` is not read in a direct send, which lasts at most the session's
+/// own ten minutes.  Hiding means relay-only ICE, which needs a TURN URL, so
+/// it is refused here, before any pairing link exists.
+fn ice_for_receive(
+    answer: Result<client::TurnCredentials, TurnError>,
+    hide: bool,
+) -> Result<client::TurnCredentials, &'static str> {
+    let turn = match answer {
+        Ok(turn) => turn,
+        Err(TurnError::NotOffered) => client::TurnCredentials {
+            expires: 0,
+            own: default_stun(),
+            peer: default_stun(),
+        },
+        Err(TurnError::Unreachable) => return Err("node_unreachable"),
+        Err(TurnError::Limited) => return Err("turn_limit"),
+        Err(TurnError::Refused(_) | TurnError::Invalid) => return Err("turn_refused"),
+    };
+    if hide && !turn.own.has_turn() {
+        return Err("no_relay");
+    }
+    Ok(turn)
+}
+
+/// The receiving setting in the index: `on` turns hiding on; anything else
+/// (and nothing) is the default, off.  Hiding needs a TURN server, which a
+/// default install has none of.
 pub(crate) const HIDE_ADDRESS: &str = "receive_hide_address";
 
 struct Running {
@@ -111,9 +138,9 @@ pub(crate) fn display_path(path: &Path, home: Option<&Path>) -> String {
 }
 
 impl Engine {
-    /// Hiding Drop's address (relay-only ICE) is on unless turned off.
+    /// Hiding Drop's address (relay-only ICE) is off unless turned on.
     pub fn receive_hide_address(&self) -> bool {
-        self.index.get(HIDE_ADDRESS).ok().flatten().as_deref() != Some("off")
+        self.index.get(HIDE_ADDRESS).ok().flatten().as_deref() == Some("on")
     }
 
     pub fn receiving_settings(&self) -> ReceivingSettings {
@@ -238,23 +265,20 @@ impl Engine {
         }
     }
 
-    /// Drop's and the page's TURN credentials, then a live session for
-    /// purpose `send` under the send page's link.  The credentials come
-    /// first, so a node without the issuer fails before any link is shown.
+    /// Drop's and the page's ICE configuration, then a live session for
+    /// purpose `send` under the send page's link.  The configuration comes
+    /// first, so a node that refuses it, or a person who hides their address
+    /// where there is no TURN server to hide behind, fails before any link
+    /// is shown.  A node with no issuer (404) gives the built-in STUN default.
     async fn open_receive(
         &self,
         node: &NodeEndpoint,
         slot: &RelaySlot,
     ) -> Result<Opened<Live>, &'static str> {
         let identity = self.identity().map_err(|_| "node_unreachable")?;
-        let turn = client::turn_credentials(&self.http, node, identity.device.keys())
-            .await
-            .map_err(|error| match error {
-                TurnError::Unreachable => "node_unreachable",
-                TurnError::NotOffered => "no_turn",
-                TurnError::Limited => "turn_limit",
-                TurnError::Refused(_) | TurnError::Invalid => "turn_refused",
-            })?;
+        let hide = self.receive_hide_address();
+        let answer = client::turn_credentials(&self.http, node, identity.device.keys()).await;
+        let turn = ice_for_receive(answer, hide)?;
         let (live, session, secret) = self
             .open_pairing(
                 node,
@@ -273,7 +297,7 @@ impl Engine {
             session,
             secret,
             turn,
-            hide: self.receive_hide_address(),
+            hide,
         })
     }
 
@@ -483,6 +507,7 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::drop::direct::messages::IceServer;
     use crate::drop::engine::{EngineConfig, Host, LocalNode, ONLINE_BLOB_LIMIT, kv};
     use crate::drop::keychain::{MemoryStore, SecretStore};
     use crate::drop::status::StatusLine;
@@ -565,21 +590,72 @@ mod tests {
         (engine, host)
     }
 
+    #[test]
+    fn a_node_without_an_issuer_gives_the_built_in_stun_entry() {
+        let turn = ice_for_receive(Err(TurnError::NotOffered), false).unwrap();
+        assert_eq!(turn.own, default_stun());
+        assert_eq!(turn.peer, default_stun());
+        assert_eq!(turn.own.urls, vec!["stun:stun.cloudflare.com:3478"]);
+        assert!(!turn.own.has_turn());
+    }
+
+    /// Hiding with nothing to hide behind ends before a pairing link is made:
+    /// `open_receive` returns this error before it reaches `open_pairing`.
+    #[test]
+    fn hiding_without_a_turn_url_is_refused_before_any_link() {
+        assert_eq!(
+            ice_for_receive(Err(TurnError::NotOffered), true).unwrap_err(),
+            "no_relay"
+        );
+        let stun_only = client::TurnCredentials {
+            expires: 1_800_003_600,
+            own: default_stun(),
+            peer: default_stun(),
+        };
+        assert_eq!(
+            ice_for_receive(Ok(stun_only.clone()), true).unwrap_err(),
+            "no_relay"
+        );
+        assert!(ice_for_receive(Ok(stun_only), false).is_ok());
+        let relay = |label: &str| IceServer {
+            credential: "Y3JlZA".into(),
+            urls: vec!["turn:turn.example.net:3478?transport=udp".into()],
+            username: format!("1800003600:{label}"),
+        };
+        let with_turn = client::TurnCredentials {
+            expires: 1_800_003_600,
+            own: relay("b3du"),
+            peer: relay("cGVlcg"),
+        };
+        assert!(ice_for_receive(Ok(with_turn), true).is_ok());
+    }
+
+    #[test]
+    fn the_other_issuer_failures_keep_their_codes() {
+        for (error, code) in [
+            (TurnError::Unreachable, "node_unreachable"),
+            (TurnError::Limited, "turn_limit"),
+            (TurnError::Refused(403), "turn_refused"),
+            (TurnError::Invalid, "turn_refused"),
+        ] {
+            assert_eq!(ice_for_receive(Err(error), false).unwrap_err(), code);
+        }
+    }
+
     #[tokio::test]
-    async fn hiding_defaults_on_persists_and_shows_in_the_status() {
+    async fn hiding_defaults_off_persists_and_shows_in_the_status() {
         let dir = tempfile::tempdir().unwrap();
         let (engine, host) = engine(dir.path());
-        assert!(engine.receive_hide_address());
+        assert!(!engine.receive_hide_address());
         assert_eq!(
             serde_json::to_value(engine.status()).unwrap()["receiving"],
-            serde_json::json!({ "hideAddress": true, "folder": "~/Downloads/Wildbloom Received",
+            serde_json::json!({ "hideAddress": false, "folder": "~/Downloads/Wildbloom Received",
                                 "maxBytes": 250_000_000 })
         );
-        engine.set_receiving(false).unwrap();
-        assert!(!engine.receive_hide_address());
+        engine.set_receiving(true).unwrap();
+        assert!(engine.receive_hide_address());
         assert!(
-            !host
-                .statuses
+            host.statuses
                 .lock()
                 .unwrap()
                 .last()
@@ -587,11 +663,14 @@ mod tests {
                 .receiving
                 .hide_address
         );
-        engine.set_receiving(true).unwrap();
-        assert!(engine.status().receiving.hide_address);
+        engine.set_receiving(false).unwrap();
+        assert!(!engine.status().receiving.hide_address);
         // An unknown stored value reads as the default.
         engine.index.set(HIDE_ADDRESS, "maybe").unwrap();
-        assert!(engine.receive_hide_address());
+        assert!(!engine.receive_hide_address());
+        // A stored `off` from an earlier version stays off.
+        engine.index.set(HIDE_ADDRESS, "off").unwrap();
+        assert!(!engine.receive_hide_address());
     }
 
     #[tokio::test]

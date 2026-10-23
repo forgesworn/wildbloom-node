@@ -2,16 +2,16 @@
   "schema": "wildbloom-node.vendor.v1",
   "bundle": "desktop/ui/vendor/wildbloom-direct.js",
   "repository": "https://github.com/forgesworn/wildbloom",
-  "commit": "98fdd4a8f8eddf3d4f77e78f6d796839cf22ed1f",
+  "commit": "e04bdefe29c0319c1384d24c0e33a9b55dbea3c7",
   "sources": {
     "src/direct/config.ts": {
-      "sha256": "4dff027bb3695b9abb68da700d271f2f667be0f17854b5b30f9b7e43dff2beb8"
+      "sha256": "5e58c618efbe81b122ae8d3de5c3e91efa3c85868457892ac9ac75e6a898dbdb"
     },
     "src/direct/frames.ts": {
       "sha256": "33a7f9af96392cfb6be3eb191673f83d6026fb5ee142445d1781b5d3144dfecb"
     },
     "src/direct/peer.ts": {
-      "sha256": "b438c81071d75706810156a8c9b4fe855d4b5aba6c2c9a26a7e321d464c10b31"
+      "sha256": "ef4a8c6530d1452231e1ccf173e53bae14cd54218774237e68c53b5252564fda"
     },
     "src/direct/transfer.ts": {
       "sha256": "40769e01a4392fcdbaf1ffad7569aab62343fc73b026f96c9889827a8725a780"
@@ -38,5 +38,5 @@
       ]
     }
   },
-  "sha256": "c54dff57953101bb341faa6a8b99647df9fa5894483bbbfd2778e1a7bc1c2023"
+  "sha256": "05087fab6a1866abb3e21cea496422073ded697dab345e57cfe152893e6015e2"
 }

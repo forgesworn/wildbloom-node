@@ -60,7 +60,7 @@
           r12: { state: 'cancelled', by: 'you' },
           r12b: { state: 'cancelled', by: 'them' },
         };
-        for (const reason of ['node_unreachable', 'no_turn', 'turn_refused', 'turn_limit', 'relay_unreachable', 'expired', 'wrong_words', 'mismatch', 'too_big', 'unsupported', 'protocol', 'peer_failed', 'peer_storage', 'connect', 'lost', 'verification', 'storage', 'no_relay', 'webview', 'something_new']) receives[`f-${reason}`] = { state: 'failed', reason };
+        for (const reason of ['node_unreachable', 'turn_refused', 'turn_limit', 'relay_unreachable', 'expired', 'wrong_words', 'mismatch', 'too_big', 'unsupported', 'protocol', 'peer_failed', 'peer_storage', 'connect', 'connect_direct', 'lost', 'verification', 'storage', 'no_relay', 'webview', 'something_new']) receives[`f-${reason}`] = { state: 'failed', reason };
         const receiveKey = name.startsWith('receive-') ? name.slice(8) : null;
         if (receiveKey) stub.receive = receives[receiveKey] || { state: 'idle' };
         const waitFor = async (test) => { for (let i = 0; i < 200; i++) { const v = test(); if (v) return v; await new Promise((r) => setTimeout(r, 25)); } return null; };

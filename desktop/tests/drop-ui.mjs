@@ -1445,7 +1445,7 @@ const STATES = [
   'share-s5&os=windows', 'share-s5&os=linux&desktop=kde',
   'receive-idle', 'receive-r1', 'receive-r2', 'receive-r3', 'receive-r4', 'receive-r5', 'receive-r6', 'receive-r6b', 'receive-r6c', 'receive-r7', 'receive-r7b', 'receive-r7c',
   'receive-r8', 'receive-r8b', 'receive-r9', 'receive-r10', 'receive-r10b', 'receive-r11', 'receive-r12', 'receive-r12b',
-  'receive-f-no_turn', 'receive-f-wrong_words', 'receive-f-unsupported', 'receive-f-no_relay', 'receive-f-verification',
+  'receive-f-connect_direct', 'receive-f-wrong_words', 'receive-f-unsupported', 'receive-f-no_relay', 'receive-f-verification',
   'receive-r4&os=windows', 'receive-r6&os=linux&desktop=kde',
 ];
 const SIZES = [[400, 600], [340, 420], [760, 600]];
@@ -1955,6 +1955,8 @@ scenario('receive: the whole happy path, answers sent once, nothing about time o
   assert.match(await sheetText(page), /Nothing has been sent yet\. Only accept a file you expect\./);
   assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Receive a file', 'focus is not on Accept');
   assert.deepEqual(await buttonsOf(page), ['Decline', 'Accept']);
+  // Hiding is off by default; this owner has turned it on.
+  await page.evaluate(() => { window.__stub.state.receiving.hideAddress = true; });
   await sheet.getByRole('button', { name: 'Accept', exact: true }).click();
   assert.deepEqual((await calls(page, 'receive_consent')).map((c) => c.args), [{ accept: true }]);
   await page.waitForFunction(() => document.querySelector('dialog.receive .share-slot').textContent.includes('Connecting'));
@@ -2130,7 +2132,7 @@ scenario('receive: every failure has plain words, no jargon, and Start again', a
   const page = await drop('list');
   await ready(page);
   await openReceive(page);
-  const reasons = ['node_unreachable', 'no_turn', 'turn_refused', 'turn_limit', 'relay_unreachable', 'expired', 'wrong_words', 'mismatch', 'too_big', 'unsupported', 'protocol', 'peer_failed', 'peer_storage', 'connect', 'lost', 'verification', 'storage', 'no_relay', 'webview', 'a_reason_from_the_future'];
+  const reasons = ['node_unreachable', 'turn_refused', 'turn_limit', 'relay_unreachable', 'expired', 'wrong_words', 'mismatch', 'too_big', 'unsupported', 'protocol', 'peer_failed', 'peer_storage', 'connect', 'connect_direct', 'lost', 'verification', 'storage', 'no_relay', 'webview', 'a_reason_from_the_future'];
   const seen = new Set();
   for (const reason of reasons) {
     await setReceive(page, { state: 'failed', reason });
@@ -2257,7 +2259,7 @@ scenario('settings: hide my address when receiving', async () => {
   const page = await settingsPage({ scheme: 'dark' });
   const box_ = page.getByRole('checkbox', { name: 'Hide my address when receiving' });
   assert.equal(await box_.count(), 1);
-  assert.equal(await box_.isChecked(), true, 'on by default');
+  assert.equal(await box_.isChecked(), false, 'off by default');
   assert.equal(await text(page.locator('#drop-receiving-hint')), "The other person sees the relay's address instead of yours, and sends may be slower.");
   assert.equal(await box_.getAttribute('aria-describedby'), 'drop-receiving-hint');
   assert.equal(await text(page.locator('#drop-receiving-folder')), 'Received files go to ~/Downloads/Wildbloom Received.');
@@ -2280,17 +2282,17 @@ scenario('settings: hide my address when receiving', async () => {
   assert.equal(await show.isVisible(), false);
   await page.evaluate(() => { window.__stub.state.receiving.folder = '~/Downloads/Wildbloom Received'; window.__stub.flush(); });
   await page.waitForFunction(() => !document.querySelector('#drop-receiving-row').hidden);
-  await box_.uncheck();
+  await box_.check();
   await page.waitForFunction(() => window.__stub.calls.some((c) => c.command === 'set_receiving'));
-  assert.deepEqual((await calls(page, 'set_receiving')).map((c) => c.args), [{ hideAddress: false }]);
-  assert.equal(await box_.isChecked(), false);
-  await page.evaluate(() => { window.__stub.state.receiving.hideAddress = true; window.__stub.flush(); });
-  await page.waitForFunction(() => document.querySelector('#drop-hide-address').checked);
+  assert.deepEqual((await calls(page, 'set_receiving')).map((c) => c.args), [{ hideAddress: true }]);
+  assert.equal(await box_.isChecked(), true);
+  await page.evaluate(() => { window.__stub.state.receiving.hideAddress = false; window.__stub.flush(); });
+  await page.waitForFunction(() => !document.querySelector('#drop-hide-address').checked);
   await page.evaluate(() => { window.__stub.handlers.set_receiving = () => { throw { code: 'unknown' }; }; });
   await box_.click();
   await page.locator('#drop-settings-error:not([hidden])').waitFor();
   assert.equal(await text(page.locator('#drop-settings-error')), "Couldn't change that setting.");
-  assert.equal(await box_.isChecked(), true, 'the box goes back');
+  assert.equal(await box_.isChecked(), false, 'the box goes back');
   const result = await new AxeBuilder({ page }).include('#drop-settings').withTags(AXE_TAGS).analyze();
   assert.deepEqual(result.violations.map((v) => ({ id: v.id, nodes: v.nodes.map((n) => n.target) })), []);
   for (const width of [820, 420, 320]) {

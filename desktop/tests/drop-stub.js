@@ -68,7 +68,7 @@
     limits: { dropMaxBytes: 1_000_000_000, shareMaxBytes: 250_000_000 },
     browserApproval: false,
     sharing: { afterDownload: 'delete', expirySeconds: 86400 },
-    receiving: { hideAddress: true, folder: '~/Downloads/Wildbloom Received', maxBytes: 250_000_000 },
+    receiving: { hideAddress: false, folder: '~/Downloads/Wildbloom Received', maxBytes: 250_000_000 },
   });
 
   const name = params.get('state') || 'list';
