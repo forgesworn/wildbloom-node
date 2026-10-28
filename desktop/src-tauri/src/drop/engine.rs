@@ -442,7 +442,15 @@ impl Engine {
         Ok(keychain)
     }
 
+    /// Whether the keychain answers.  Once the identity is loaded that is
+    /// proven and the keychain is not read again: `status` runs after every
+    /// pull, and on macOS 14 each successful legacy keychain read leaks about
+    /// 16 KiB of untagged VM in the calling process, so a read per status
+    /// grew a long-running app by gigabytes.  "Try again" clears the cache.
     fn keychain_ok(&self) -> bool {
+        if self.identity.lock().is_ok_and(|slot| slot.is_some()) {
+            return true;
+        }
         match self.keychain() {
             Ok(keychain) => device::identity_state(&keychain).is_ok(),
             Err(_) => false,
@@ -456,7 +464,8 @@ impl Engine {
         if let Ok(mut identity) = self.identity.lock() {
             *identity = None;
         }
-        let _ = self.keychain();
+        // Reloaded once here, so later statuses answer from the cache.
+        let _ = self.identity();
     }
 
     pub(crate) fn identity_state(&self) -> CommandResult<IdentityState> {
