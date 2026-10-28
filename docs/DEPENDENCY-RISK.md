@@ -48,3 +48,17 @@ script ignores that one advisory only after checking that every locked
 `webpki-roots` in both lockfiles is the 0.26.11 shim or 1.0.10 or later, so a
 locked 1.x older than the fix still fails CI.  Drop the ignore once neither
 lockfile contains 0.26.11.
+
+## crypto-bigint 0.5 timing advisory
+
+RUSTSEC-2026-0387 reports secret-dependent branches in several crypto-bigint
+operations meant to be constant time; it is fixed in 0.7.6 and 0.5.x gets no
+fix.  `wildbloomd` locks crypto-bigint 0.5.5 only through `wildbloom-checkout`
+-> `lnurlcash-core` -> `k256` 0.13 (`elliptic-curve` 0.13).  `k256` does its
+own field and scalar arithmetic; crypto-bigint sits underneath the
+`elliptic-curve` scalar primitives and `Reduce<U256>`, which `lnurlcash-core`
+uses when it reduces a Schnorr tweak.  Exploiting the leak needs fine-grained
+timing of those operations on the node, so the audit script ignores this one
+advisory for the root lockfile.  The desktop lockfile does not contain
+crypto-bigint.  Drop the ignore once `lnurlcash-core` moves to `k256` 0.14,
+which uses the fixed crypto-bigint line, and Wildbloom pins that revision.
