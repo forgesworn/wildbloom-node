@@ -1519,6 +1519,42 @@ mod tests {
         engine.rows().iter().filter(|r| r.state == state).count()
     }
 
+    /// A status runs after every pull.  It must not read the keychain once
+    /// the identity is loaded: on macOS 14 each successful read leaks VM.
+    #[tokio::test]
+    async fn statuses_do_not_read_the_keychain_once_the_identity_is_loaded() {
+        use std::sync::atomic::Ordering;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(MemoryStore::default());
+        let engine = engine_at(dir.path(), &store);
+        engine.set_online_node(None).await.unwrap();
+        engine.confirm_recovery_saved().unwrap();
+        let reads = || store.reads.load(Ordering::Relaxed);
+
+        let before = reads();
+        for _ in 0..50 {
+            assert_eq!(engine.status().keychain, "ok");
+            assert!(engine.first_run().is_none());
+            engine.emit_status();
+        }
+        assert_eq!(reads(), before, "no keychain read per status");
+
+        // "Try again" probes the keychain for real, once.
+        let snapshot = engine.drop_status(Some("keychain")).await;
+        assert_eq!(snapshot.status.keychain, "ok");
+        let after_recheck = reads();
+        assert!(after_recheck > before, "a recheck reads the keychain");
+        for _ in 0..50 {
+            engine.emit_status();
+        }
+        assert_eq!(reads(), after_recheck, "and is cached again");
+
+        // A keychain that stops answering is still reported after a recheck.
+        *store.fail_with.lock().unwrap() = Some(crate::drop::keychain::KeychainError::Denied);
+        let snapshot = engine.drop_status(Some("keychain")).await;
+        assert_eq!(snapshot.status.keychain, "unavailable");
+    }
+
     #[tokio::test]
     async fn a_mass_deletion_is_held_until_the_owner_chooses() {
         let dir = tempfile::tempdir().unwrap();

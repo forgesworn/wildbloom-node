@@ -255,6 +255,8 @@ fn file_account(id: &FileId) -> String {
 pub struct MemoryStore {
     entries: std::sync::Mutex<std::collections::HashMap<String, Zeroizing<Vec<u8>>>>,
     pub fail_with: std::sync::Mutex<Option<KeychainError>>,
+    /// How many reads reached the store.
+    pub reads: std::sync::atomic::AtomicUsize,
 }
 
 #[cfg(test)]
@@ -276,6 +278,8 @@ impl MemoryStore {
 #[cfg(test)]
 impl SecretStore for MemoryStore {
     fn read(&self, account: &str) -> Result<Option<Zeroizing<Vec<u8>>>, KeychainError> {
+        self.reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.check()?;
         Ok(self.entries.lock().unwrap().get(account).cloned())
     }
