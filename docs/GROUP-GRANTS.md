@@ -499,6 +499,65 @@ itself, at the cost of its own bandwidth.
   relay takes grant events as `EVENT` messages, keeps them in its authority
   store, answers `OK`, and never stores or fans them out.
 
+#### 6.9.1 Keeper-controlled KithMoot node profile
+
+This optional profile puts the authoritative grant ledger in KithMoot's
+supervisor, with Spry serving TURN and Shelter serving one room-partitioned
+relay. It does not add either service to `wildbloomd`, change Blossom token
+rules or enable the planned generic relay adapter above. Its implementation
+and release gates are tracked in KithMoot's node design and backend PRs.
+
+- The keeper posts its signed kind 27541 grant to the supervisor's
+  `POST /groups/v1/events`, inside a body-bound NIP-98 request from that same
+  authority. The supervisor verifies the enrolled room/authority, node host,
+  ordering, reset floor, terminal revocation and protected keys. It retains
+  the signed grant as authority and projects only derived allowlists into
+  Spry and Shelter. Neither child receives room or keeper signing secrets.
+- A normal admitted device has `turn`, `relay-read` and `relay-write`.
+  Files are off in node profile v1: storage scopes are refused by this
+  supervisor. The ordinary Wildbloom group profile continues to accept its
+  documented storage scopes and ignore scopes it does not serve.
+- The supervisor acknowledges admission only after both children confirm
+  their projections. A failed child leaves the committed grant pending;
+  reposting the identical signed event is safe. Child state is reconciled
+  after restart. Each child requires a 15-second monotonic supervisor lease.
+- Spry accepts the device's NIP-98 credential request at `/v1/credentials`.
+  Its sealed room grant is controlled only by the supervisor's pretrusted
+  pairing, with vouching disabled. The username expires within five minutes
+  and no later than the keeper-signed grant or room end. Removal revokes
+  cached credentials and active allocations; other rooms retain access.
+- Shelter authenticates the room device with NIP-42 and signed `room` and
+  `mode` tags. Its room door checks the projected read/write permissions on
+  every operation and live delivery. The connection selects the partition;
+  rotating event authors cannot select another room. Every write needs
+  bounded NIP-40 expiry. An ask-only door carries recipient-addressed kind
+  1059 envelopes; possession of the link grants no room read permission.
+- Raw grant events are not published as relay `EVENT` messages in this
+  profile. A removed device loses access, while the existing keeper-signed
+  removal/rekey flow supplies device deletion authority. A grant reset or
+  refused connection alone never authorises wiping a device's room data.
+- A room close has an explicit keeper-signed kind 27543 statement, signed
+  reset and closing events, and a durable operation ID. The supervisor
+  records intent before publication, attempts both child teardowns and
+  reports completion only after both acknowledgements and erasure. A compact
+  closure proof is retained for 30 days without raw room IDs or member keys.
+  The node's own kind 27544 completion receipt is a separate signed assertion.
+
+**O9 for this profile:** after a local single-use six-minute pairing code
+binds the node owner, that owner may enrol a room remotely with an exact
+body-bound NIP-98 POST to `/node/v1/enrol`. The body names public room
+authority and inviter keys, never their secrets; they are the same key in
+node v1. Only that enrolled authority can sign device grants. This exception
+does not make Wildbloom's existing local enrolment remote, and O9 remains
+open for the ordinary Wildbloom group profile.
+
+The shared `fold-kit/node-room` source codec uses ask-only link version 6,
+keeper-signed node descriptors, sealed admission answers containing the
+verified grant, explicit closure proofs and deterministic vectors. Backend
+tests and codec vectors do not substitute for published signed dependencies,
+web/Android parity, external network qualification, physical device checks
+or applicable UI maintainer acceptance.
+
 ## 7. Delivery
 
 ### 7.1 Keeper to device, inside the room
@@ -825,7 +884,8 @@ Still open:
 - **O8.** Mirrors between group nodes: a source token in the mirror body, or
   the coordinator copies by itself?
 - **O9.** Should enrolment ever be remote (an owner-signed event), or only local
-  as here?
+  as here? Section 6.9.1 answers this only for the separate KithMoot node
+  profile; Wildbloom's group-mode choice remains open.
 - **O10.** A handover event signed by an old authority key, so nodes follow a
   replaced key without their owners?  Not proposed: a stolen key could hand
   itself on.
