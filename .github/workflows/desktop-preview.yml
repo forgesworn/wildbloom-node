@@ -24,7 +24,7 @@ jobs:
           for platform in linux-x86_64 macos-aarch64 macos-x86_64 windows-x86_64; do
             scripts/prepare-tor-runtime.sh "$platform" "$RUNNER_TEMP/tor-$platform"
           done
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: verified-tor-downloads
           path: ${{ runner.temp }}/verified-tor-downloads
@@ -62,7 +62,7 @@ jobs:
             bundles: nsis,msi
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.94.1
           targets: ${{ matrix.target }}
@@ -86,7 +86,7 @@ jobs:
             'WILDBLOOM_GPGV_BIN=/c/msys64/usr/bin/gpgv.exe' \
             'WILDBLOOM_GPG_PATH_STYLE=windows' \
             >> "$GITHUB_ENV"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: verified-tor-downloads
           path: ${{ runner.temp }}/verified-tor-downloads
@@ -128,7 +128,7 @@ jobs:
             --candidate-adhoc --require-upgrade --output "$RUNNER_TEMP/macos-install.json"
       - name: Retain macOS installation evidence
         if: always() && runner.os == 'macOS'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-install-${{ matrix.target }}
           path: ${{ runner.temp }}/macos-install.json
@@ -139,7 +139,7 @@ jobs:
         shell: pwsh
         run: scripts/accept-desktop-windows.ps1 "desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
       - name: Upload unsigned preview installers
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wildbloom-node-${{ matrix.target }}-unsigned-preview
           path: desktop/src-tauri/target/${{ matrix.target }}/release/bundle
