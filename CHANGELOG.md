@@ -2,13 +2,6 @@
 
 ## Unreleased
 
-- Update Shelter Kit from 0.5.0 to 0.5.3. A deduplicated upload or mirror
-  whose local file was lost now restores it from the verified body and returns
-  201 (it returned 200 and left the file missing), so the replica coordinator
-  can repair a node directly. An unclaimed blob whose file is missing no longer
-  blocks every write and repair. Dependency advisories are updated. No schema
-  change.
-
 - Add `wildbloomd --group-mode`, a closed storage node for the devices of
   enrolled groups (phase S3 of `docs/GROUP-GRANTS.md`).  `--group-keeper
   <keeper>:<ceiling bytes>` enrols a room authority key; its kind `27541`
@@ -16,6 +9,22 @@
   node, every read needs a BUD-11 `get` token and sees only what the signer's
   group holds, and group reads are never cacheable.  It refuses
   `--open-shelter`, `--service-profile` and `--checkout-profile`.
+
+## 0.3.13 preview - 2026-11-05
+
+- Drop no longer grows without limit on macOS.  Each status read the device
+  and recovery secrets from the Keychain twice, and on macOS 14 every
+  successful read leaks about 16 KiB, so a long-running app reached 3 GB.
+  Status now answers from the identity already loaded; "Try again" still
+  probes the Keychain for real.
+- Update Shelter Kit from 0.5.0 to 0.5.3.  A deduplicated upload or mirror
+  whose local file was lost now restores it from the verified body and returns
+  201 (it returned 200 and left the file missing), so the replica coordinator
+  can repair a node directly.  An unclaimed blob whose file is missing no
+  longer blocks every write and repair.  No schema change.
+- Update locked dependencies: `nostr` 0.45.7, `reqwest` 0.13.5, `clap`
+  4.6.7, `sha3` 0.12 and `thiserror` 2.0.21.  Drop's yanked `async-executor`
+  1.14.0 and `nostr-sdk` 0.45.4 are replaced with 1.14.1 and 0.45.6.
 
 ## 0.3.12 preview - 2026-10-24
 
