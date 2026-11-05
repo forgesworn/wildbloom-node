@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Update Shelter Kit from 0.5.0 to 0.5.3. A deduplicated upload or mirror
+  whose local file was lost now restores it from the verified body and returns
+  201 (it returned 200 and left the file missing), so the replica coordinator
+  can repair a node directly. An unclaimed blob whose file is missing no longer
+  blocks every write and repair. Dependency advisories are updated. No schema
+  change.
+
 - Add `wildbloomd --group-mode`, a closed storage node for the devices of
   enrolled groups (phase S3 of `docs/GROUP-GRANTS.md`).  `--group-keeper
   <keeper>:<ceiling bytes>` enrols a room authority key; its kind `27541`
