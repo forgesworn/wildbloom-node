@@ -12,7 +12,7 @@ not live-wallet/mint acceptance or a production sales deployment.
 
 The implementation reuses these pinned libraries:
 
-- Shelter Kit `v0.5.0`: capacity holds and paid allowances.
+- Shelter Kit `v0.5.3`: capacity holds and paid allowances (added in `v0.5.0`).
 - ForgeSworn `toll-booth-rs` at `acd8b1495b4033fcbf3156b9f32d70fcabec74fa`:
   the `LightningBackend` interface. Its generic monetary credits and L402
   middleware are not used. Its Rust Phoenixd module is currently a placeholder;
