@@ -1,6 +1,7 @@
 # Architecture
 
 Wildbloom separates storage semantics from the shell that runs them.
+For the neighbouring projects and the interface to each, see [ECOSYSTEM.md](ECOSYSTEM.md).
 
 ```text
 Wildbloom / V4V client

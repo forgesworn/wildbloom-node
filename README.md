@@ -116,6 +116,8 @@ admission and eviction promises.  The implementation and adversarial local
 tests are present; cross-platform CI and the independent V4V recovery journey
 remain release evidence rather than assumptions.
 
+For the projects Wildbloom Node works with and the interface to each, see [Where Wildbloom Node fits](docs/ECOSYSTEM.md).
+
 ## Install and run
 
 The desktop application is the intended consumer install. Try the
@@ -349,10 +351,10 @@ If this is useful, sponsor [TheCryptoDonkey on GitHub](https://github.com/sponso
 
 ### Paid-storage core prerelease
 
-The daemon pins Shelter Kit `v0.5.0`, which adds schema-6 protected capacity
-allowances and durable sale holds. An explicit `--checkout-profile` enables
-Lightning and LNURLcash checkout with authoritative receiving checks. It is off
-by default and requires operator-owned credentials; see [setup and limitations](docs/CHECKOUT.md). See [the paid core contract](https://github.com/forgesworn/shelter-kit/blob/v0.5.0/PAID-STORAGE.md).
+The daemon pins Shelter Kit `v0.5.3`. Since `v0.5.0` the core has schema-6
+protected capacity allowances and durable sale holds. An explicit
+`--checkout-profile` enables Lightning and LNURLcash checkout with
+authoritative receiving checks. It is off by default and requires operator-owned credentials; see [setup and limitations](docs/CHECKOUT.md). See [the paid core contract](https://github.com/forgesworn/shelter-kit/blob/v0.5.3/PAID-STORAGE.md).
 
 Back up the data directory before upgrading. Schema 6 cannot be reopened with
 the previous schema-5 core; do not downgrade by changing the schema version.
