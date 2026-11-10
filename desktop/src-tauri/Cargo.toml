@@ -6,7 +6,7 @@ authors = ["ForgeSworn"]
 license = "MIT"
 repository = "https://github.com/forgesworn/wildbloom-node"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 build = "build.rs"
 
 [workspace]
@@ -31,7 +31,7 @@ url = "2.5.7"
 # the private SQLite file index and HTTP body streaming.
 foregather-kit = { git = "https://github.com/forgesworn/foregather-kit", tag = "v0.6.0", features = ["experimental-live"] }
 nostr-connect = { version = "=0.45.2", default-features = false, features = ["aws_lc_rs", "rustls-tls-native-roots"] }
-rusqlite = { version = "0.40.0", features = ["bundled"] }
+rusqlite = { version = "0.41.1", features = ["bundled"] }
 futures-util = "0.3.31"
 bytes = "1.10.1"
 base64 = "0.22.1"

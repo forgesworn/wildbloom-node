@@ -5,7 +5,7 @@ resolver = "3"
 [workspace.package]
 version = "0.3.13"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 license = "MIT"
 authors = ["ForgeSworn"]
 repository = "https://github.com/forgesworn/wildbloom-node"
@@ -32,4 +32,4 @@ tokio = { version = "1.48.0", features = ["fs", "io-util", "macros", "net", "pro
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
 url = "2.5.7"
-wildbloom-core = { package = "shelter-kit", git = "https://github.com/forgesworn/shelter-kit", tag = "v0.5.3" }
+wildbloom-core = { package = "shelter-kit", git = "https://github.com/forgesworn/shelter-kit", tag = "v0.6.0" }
