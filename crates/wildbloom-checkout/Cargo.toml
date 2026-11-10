@@ -24,11 +24,11 @@ thiserror.workspace = true
 tokio.workspace = true
 url.workspace = true
 wildbloom-core.workspace = true
-rusqlite = { version = "0.40.0", features = ["bundled"] }
+rusqlite = { version = "0.41.1", features = ["bundled"] }
 async-trait = "0.1"
 lightning-invoice = "=0.34.1"
 toll-booth = { git = "https://github.com/forgesworn/toll-booth-rs", rev = "acd8b1495b4033fcbf3156b9f32d70fcabec74fa", default-features = false }
-lnurlcash-core = { git = "https://github.com/lnurlcash/lnurlcash-core", rev = "adc9c475cf7a7cdd9ac09a059347d0aaae287995", default-features = false }
+lnurlcash-core = { git = "https://github.com/lnurlcash/lnurlcash-core", tag = "v0.2.4", default-features = false }
 
 [dev-dependencies]
 futures-util.workspace = true

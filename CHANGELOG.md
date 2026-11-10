@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Update Shelter Kit from 0.5.3 to 0.6.0 and `rusqlite` to 0.41.1, which
+  bundles SQLite 3.54.1, for RUSTSEC-2026-0459.  This covers `wildbloomd`,
+  the checkout crate and Drop's desktop store.  SQLite before 3.54.0 can
+  return uninitialised page-cache memory when a database is opened together
+  with a `-wal` file whose page size differs.  No schema change; existing
+  stores open as before.  The minimum Rust version is now 1.89.
+- Update `lnurlcash-core` from 0.2.3 to 0.2.4 for the checkout crate.  It
+  moves to `k256` 0.14 and the fixed `crypto-bigint` 0.7 line
+  (RUSTSEC-2026-0387), so the audit no longer ignores that advisory.  Its
+  API and wire formats are unchanged.
 - Add `wildbloomd --group-mode`, a closed storage node for the devices of
   enrolled groups (phase S3 of `docs/GROUP-GRANTS.md`).  `--group-keeper
   <keeper>:<ceiling bytes>` enrols a room authority key; its kind `27541`
