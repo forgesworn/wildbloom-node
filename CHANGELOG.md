@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.14 preview - 2026-11-10
 
 - Update Shelter Kit from 0.5.3 to 0.6.0 and `rusqlite` to 0.41.1, which
   bundles SQLite 3.54.1, for RUSTSEC-2026-0459.  This covers `wildbloomd`,
@@ -12,13 +12,6 @@
   moves to `k256` 0.14 and the fixed `crypto-bigint` 0.7 line
   (RUSTSEC-2026-0387), so the audit no longer ignores that advisory.  Its
   API and wire formats are unchanged.
-- Add `wildbloomd --group-mode`, a closed storage node for the devices of
-  enrolled groups (phase S3 of `docs/GROUP-GRANTS.md`).  `--group-keeper
-  <keeper>:<ceiling bytes>` enrols a room authority key; its kind `27541`
-  grants arrive on `POST /groups/v1/events`.  Only granted keys may use the
-  node, every read needs a BUD-11 `get` token and sees only what the signer's
-  group holds, and group reads are never cacheable.  It refuses
-  `--open-shelter`, `--service-profile` and `--checkout-profile`.
 
 ## 0.3.13 preview - 2026-11-05
 
@@ -38,6 +31,14 @@
 
 ## 0.3.12 preview - 2026-10-24
 
+- Add `wildbloomd --group-mode`, a closed storage node for the devices of
+  enrolled groups (phase S3 of `docs/GROUP-GRANTS.md`).  `--group-keeper
+  <keeper>:<ceiling bytes>` enrols a room authority key; its kind `27541`
+  grants arrive on `POST /groups/v1/events`.  Only granted keys may use the
+  node, every read needs a BUD-11 `get` token and sees only what the signer's
+  group holds, and group reads are never cacheable.  It refuses
+  `--open-shelter`, `--service-profile` and `--checkout-profile`.
+  (Recorded late: this shipped in 0.3.12 but stayed under Unreleased.)
 - Direct send works without TURN.  Drop and the `/send` and `/get` pages now
   default to the public STUN server `stun:stun.cloudflare.com:3478`; no
   ForgeSworn-run STUN or TURN server is built in any more.  A node without a
