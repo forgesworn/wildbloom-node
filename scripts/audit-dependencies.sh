@@ -23,10 +23,7 @@ check_webpki_roots() {
 check_webpki_roots Cargo.lock
 check_webpki_roots desktop/src-tauri/Cargo.lock
 
-# RUSTSEC-2026-0387 (crypto-bigint 0.5 timing) reaches wildbloomd only through
-# lnurlcash-core's k256 0.13.  0.5.x has no fix; the way out is k256 0.14.
-# See docs/DEPENDENCY-RISK.md.
-cargo audit --deny warnings --ignore RUSTSEC-2026-0381 --ignore RUSTSEC-2026-0387
+cargo audit --deny warnings --ignore RUSTSEC-2026-0381
 
 # These informational advisories are locked transitive dependencies of Tauri's
 # current Linux WebKit/GTK shell and URL-pattern parser, and of the zbus 5
