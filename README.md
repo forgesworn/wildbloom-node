@@ -91,6 +91,10 @@ session remains for live browser media rather than storage.
   spare capacity and are evicted first.
 - Opaque attachment serving for friend-only and guest-only blobs, including
   `nosniff`; conflicting owner MIME claims also fail opaque.
+- Owner HTML, SVG and XML also download as opaque attachments. All successful
+  blob responses have `nosniff`; passive media retains its MIME type.
+- An optional [Linux outbound guard](docs/LINUX-EGRESS.md) confines a dedicated
+  daemon UID while retaining explicitly configured local services.
 - Crash reconciliation restores indexed tombstones and removes unindexed files
   left by interrupted file/database transactions.
 - Loopback-only binding by default, with a persistent Tor v3 onion or an

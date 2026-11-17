@@ -1,0 +1,12 @@
+[Unit]
+Description=Wildbloom Node outbound network guard
+After=nftables.service ufw.service docker.service
+Before=wildbloom-node.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/wildbloom-node/egress.nft
+ExecReload=/usr/sbin/nft -f /etc/wildbloom-node/egress.nft
+# Keep the rules on stop. Explicit rollback deletes only our named table.
+

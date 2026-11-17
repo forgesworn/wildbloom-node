@@ -129,6 +129,12 @@ Files held only for friends or guests are returned as
 `X-Content-Type-Options: nosniff`.  They are not an inline public CDN on the
 operator's hostname.
 
+Owner-declared HTML, XML and all `+xml` types (including SVG and XHTML) also
+download as opaque attachments. The comparison ignores case and MIME
+parameters; a filename extension cannot override it. All successful blob GET,
+HEAD and range responses have `nosniff`. Stored declarations, descriptors,
+hashes and bytes remain unchanged, and passive owner media keeps its MIME type.
+
 An envelope parser may reject malformed framing for non-owner claims.  It
 cannot prove confidentiality, harmlessness or ownership: an adversary can wrap
 arbitrary bytes in a valid envelope and publish the key elsewhere.  Entropy

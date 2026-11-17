@@ -9,6 +9,14 @@ permissions:
   contents: read
 
 jobs:
+  egress:
+    name: Linux outbound network guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - run: sudo apt-get update && sudo apt-get install --yes nftables iproute2
+      - run: sudo python3 scripts/test-egress-policy.py
+
   desktop-ui:
     name: Desktop pool controls
     runs-on: ubuntu-latest
@@ -103,6 +111,23 @@ jobs:
           name: native-${{ runner.os }}-pool-lifecycle
           path: ${{ runner.temp }}/native-pool-lifecycle.json
           if-no-files-found: warn
+      - name: Record Linux daemon build identity
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          git rev-parse HEAD > target/release/source-commit.txt
+          cd target/release
+          sha256sum wildbloomd > wildbloomd.sha256
+      - name: Retain Linux daemon for explicit headless deployments
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wildbloomd-linux-x64
+          path: |
+            target/release/wildbloomd
+            target/release/wildbloomd.sha256
+            target/release/source-commit.txt
+          if-no-files-found: error
 
   audit:
     name: Dependency audit

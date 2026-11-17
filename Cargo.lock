@@ -2331,8 +2331,8 @@ dependencies = [
 
 [[package]]
 name = "shelter-kit"
-version = "0.6.0"
-source = "git+https://github.com/forgesworn/shelter-kit?tag=v0.6.0#ea54357c94caa2176912485c89a1c7446a231e32"
+version = "0.6.1"
+source = "git+https://github.com/forgesworn/shelter-kit?tag=v0.6.1#6ad89f1f281af14410f637f5a3e5f32fc6fae3a9"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -2516,7 +2516,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -3142,7 +3142,7 @@ dependencies = [
 
 [[package]]
 name = "wildbloomd"
-version = "0.3.14"
+version = "0.3.15"
 dependencies = [
  "async-trait",
  "axum",
