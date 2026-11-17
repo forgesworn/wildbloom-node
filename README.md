@@ -123,8 +123,8 @@ remain release evidence rather than assumptions.
 ## Install and run
 
 The desktop application is the intended consumer install. Try the
-[signed Mac preview](https://github.com/forgesworn/wildbloom-node/releases/tag/v0.3.3-preview.2)
-or [Windows/Linux previews](https://github.com/forgesworn/wildbloom-node/releases/tag/v0.3.3-preview.1),
+[signed Mac preview](https://github.com/forgesworn/wildbloom-node/releases/tag/v0.3.15-preview.2)
+or [Windows/Linux previews](https://github.com/forgesworn/wildbloom-node/releases/tag/v0.3.15-preview.1),
 or build from a revision you have reviewed. The releases include checksums and
 exact validation scope. Windows packages remain unsigned; Mac packages are
 manual installs with [signing evidence and remaining gates](docs/MACOS-SIGNING-2026-10-06.md).
