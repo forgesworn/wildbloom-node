@@ -3,7 +3,35 @@
 `scripts/audit-dependencies.sh` fails on every RustSec vulnerability and every
 new informational warning in either lockfile.
 
-The desktop lock currently has 20 explicit informational exceptions.  Ten mark
+## Chrono maintenance in the pinned dependencies
+
+RUSTSEC-2026-0543, issued after the previous release, marks all Chrono versions
+as unmaintained; it does not identify a vulnerability or offer a patched
+version. The headless lock uses Chrono 0.4.45 solely through `toll-booth` 0.2.1
+at `acd8b1495b4033fcbf3156b9f32d70fcabec74fa`. That dependency uses it for
+timestamps, quota dates and expiry parsing. Replacing its public date/time
+types is separate upstream work and must retain expiry/refusal behaviour.
+
+The headless audit temporarily accepts only this maintenance advisory. It first
+checks the exact version, direct dependency and pinned revision with `cargo tree`;
+a changed consumer or source fails closed. Other Chrono advisories still fail.
+Remove the exception when Toll Booth replaces Chrono.
+
+The desktop lock also includes Chrono 0.4.45, through `serde_with` 3.22.0's
+optional Chrono support. Tauri's current feature selection does not activate
+that support (`cargo tree --target all --all-features --invert chrono` prints
+no dependency). The desktop audit checks the exact locked version and sole
+consumer before accepting this maintenance advisory. Remove it when
+`serde_with` replaces Chrono. These exceptions accept a maintenance risk;
+neither suppresses a Chrono vulnerability.
+
+RUSTSEC-2026-0486 is fixed by locking Rustix 1.1.6 in both products. The older
+0.38 line also present in the desktop is unaffected. No exception covers it.
+
+The desktop also locks `quinn-udp` 0.5.16 for RUSTSEC-2026-0538 and moves the
+yanked `nostr-connect` 0.45.2 to 0.45.3, retaining the same TLS features.
+
+Besides Chrono, the desktop lock has 20 explicit informational exceptions. Ten mark
 the GTK3 Rust bindings used by Tauri's Linux WebKit shell as unmaintained.  Five
 mark the old `unic-*` crates behind Tauri's URL-pattern parser as unmaintained,
 and one is the proc-macro helper used by the GTK bindings.  The remaining
