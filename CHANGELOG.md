@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.15 preview - 2026-11-17
+
+- Update Shelter Kit to 0.6.1: HTML, SVG and XML download as opaque attachments
+  even for owner uploads, and every successful blob response has `nosniff`.
+  File bytes, hashes, stored declarations, ranges and ordinary media remain
+  compatible. No schema change.
+- Add an optional Linux nftables egress guard for a dedicated daemon UID,
+  exact local service/DNS exceptions, persistence examples and a disposable
+  network-namespace acceptance test. Existing installations opt in after
+  reviewing their actual service dependencies.
+- Retain the tested Linux daemon and source/hash identity in CI for explicit
+  headless deployments. Desktop installer publication remains separate.
+- Lock Rustix 1.1.6 for RUSTSEC-2026-0486 in both lockfiles and Quinn UDP
+  0.5.16 for RUSTSEC-2026-0538 in the desktop. Replace yanked Nostr Connect
+  0.45.2 with 0.45.3, retaining the same TLS features. Record bounded,
+  dependency-checked exceptions for Chrono's maintenance-only advisory;
+  other advisories and consumers still fail the audit.
+
 ## 0.3.14 preview - 2026-11-10
 
 - Update Shelter Kit from 0.5.3 to 0.6.0 and `rusqlite` to 0.41.1, which

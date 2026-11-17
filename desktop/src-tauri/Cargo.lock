@@ -3094,9 +3094,9 @@ dependencies = [
 
 [[package]]
 name = "nostr-connect"
-version = "0.45.2"
+version = "0.45.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5dcb124b932705c146e3e7e61d1b4d2c63720434422ed191a550228d04149555"
+checksum = "99a90f462a73bcb95134a2f3a731c4a9c5ee5d3156bc4f4663bc114ee533bb98"
 dependencies = [
  "async-utility",
  "futures-core",
@@ -3930,9 +3930,9 @@ dependencies = [
 
 [[package]]
 name = "quinn-udp"
-version = "0.5.15"
+version = "0.5.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35a133f956daabe89a61a685c2649f13d82d5aa4bd5d12d1277e1072a21c0694"
+checksum = "af66907df18639dcf4db56ca65490cabc4b27a97dbadd96f2926cca73298f016"
 dependencies = [
  "cfg_aliases",
  "libc",
@@ -4254,9 +4254,9 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "1.1.4"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
  "bitflags 2.13.1",
  "errno",
@@ -6466,7 +6466,7 @@ checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
 
 [[package]]
 name = "wildbloom-desktop"
-version = "0.3.14"
+version = "0.3.15"
 dependencies = [
  "base64 0.22.1",
  "bytes",

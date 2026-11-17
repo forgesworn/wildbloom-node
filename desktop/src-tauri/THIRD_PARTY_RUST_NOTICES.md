@@ -655,7 +655,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-## clipboard-win 5.4.1
+## clipboard-win 5.4.3
 
 Licence: BSL-1.0
 Source: https://github.com/DoumanAsh/clipboard-win
@@ -3872,7 +3872,7 @@ OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
 CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ```
 
-## rustls-webpki 0.103.15
+## rustls-webpki 0.103.16
 
 Licence: ISC
 Source: https://github.com/rustls/webpki
@@ -4547,7 +4547,7 @@ Source: https://github.com/briansmith/untrusted
 // OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ```
 
-## webpki-root-certs 1.0.9
+## webpki-root-certs 1.0.10
 
 Licence: CDLA-Permissive-2.0
 Source: https://github.com/rustls/webpki-roots
@@ -4689,7 +4689,7 @@ of Data, including for example machine learning models and models'
 insights.
 ```
 
-## webpki-roots 1.0.9
+## webpki-roots 1.0.10
 
 Licence: CDLA-Permissive-2.0
 Source: https://github.com/rustls/webpki-roots

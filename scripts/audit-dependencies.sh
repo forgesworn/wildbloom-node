@@ -23,7 +23,30 @@ check_webpki_roots() {
 check_webpki_roots Cargo.lock
 check_webpki_roots desktop/src-tauri/Cargo.lock
 
-cargo audit --deny warnings --ignore RUSTSEC-2026-0381
+# RUSTSEC-2026-0543 reports maintenance status, not a vulnerability. Keep the
+# temporary exception confined to the reviewed toll-booth dependency. A new
+# direct consumer, chrono version or toll-booth revision requires another review.
+chrono_tree="$(cargo tree --locked --invert chrono --depth 1 --prefix none --format '{p}')"
+expected_chrono=$'chrono v0.4.45\ntoll-booth v0.2.1 (https://github.com/forgesworn/toll-booth-rs?rev=acd8b1495b4033fcbf3156b9f32d70fcabec74fa#acd8b149)'
+if [[ "$chrono_tree" != "$expected_chrono" ]]; then
+  echo 'chrono maintenance exception no longer matches the reviewed dependency; see docs/DEPENDENCY-RISK.md' >&2
+  exit 1
+fi
+cargo audit --deny warnings --ignore RUSTSEC-2026-0381 --ignore RUSTSEC-2026-0543
+
+# Cargo locks serde_with's optional Chrono support even though Tauri does not
+# enable it. Bound this maintenance exception to the exact locked consumer;
+# do not extend it to an added user of Chrono.
+python3 - <<'PY'
+import tomllib
+with open("desktop/src-tauri/Cargo.lock", "rb") as lock:
+    packages = tomllib.load(lock)["package"]
+chrono = [(p["name"], p["version"]) for p in packages if p["name"] == "chrono"]
+users = [(p["name"], p["version"]) for p in packages
+         if any(d.split()[0] == "chrono" for d in p.get("dependencies", []))]
+if chrono != [("chrono", "0.4.45")] or users != [("serde_with", "3.22.0")]:
+    raise SystemExit("desktop Chrono maintenance exception changed; see docs/DEPENDENCY-RISK.md")
+PY
 
 # These informational advisories are locked transitive dependencies of Tauri's
 # current Linux WebKit/GTK shell and URL-pattern parser, and of the zbus 5
@@ -51,7 +74,7 @@ desktop_ignores=(
   RUSTSEC-2026-0371
   RUSTSEC-2026-0372
 )
-audit_arguments=(--file desktop/src-tauri/Cargo.lock --deny unmaintained --deny unsound --ignore RUSTSEC-2026-0381)
+audit_arguments=(--file desktop/src-tauri/Cargo.lock --deny unmaintained --deny unsound --ignore RUSTSEC-2026-0381 --ignore RUSTSEC-2026-0543)
 for advisory in "${desktop_ignores[@]}"; do
   audit_arguments+=(--ignore "$advisory")
 done
