@@ -3,6 +3,20 @@
 `scripts/audit-dependencies.sh` fails on every RustSec vulnerability and every
 new informational warning in either lockfile.
 
+## Heapless in the Nostr dependency tree
+
+The headless and desktop workspaces use the same local copy of
+`faster-hex` 0.10.1. The registry archive has SHA-256
+`04839bdf9d8c10f66806fad16b852fc72aab80873aebc3cb69d85b4fa41543ed`.
+Its manifest requires `heapless` 0.9.4 or later in the 0.9 series for the
+fixed-capacity path. Cargo records that dependency in both lockfiles. The
+upstream licence and third-party notices are in `vendor/faster-hex/`.
+The vendored manifest declares the patched dependency's Rust 1.88 minimum.
+
+This resolves RUSTSEC-2026-0574 through RUSTSEC-2026-0582 without adding audit
+exceptions. Remove the local patch when the Nostr dependencies can resolve a
+published `faster-hex` release with a fixed dependency.
+
 ## Chrono maintenance in the pinned dependencies
 
 RUSTSEC-2026-0543, issued after the previous release, marks all Chrono versions
