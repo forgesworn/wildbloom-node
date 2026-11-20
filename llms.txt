@@ -13,6 +13,13 @@ another authorised node copy a blob across with BUD-04 mirroring. It is not a
 torrent client or a WebRTC transport: every replica stores a complete blob and
 serves it over ordinary Blossom HTTP.
 
+## ForgeSworn ecosystem
+
+- [ForgeSworn library guide](https://forgesworn.dev/llms.txt): Find related libraries, tools and integration guides by task and runtime.
+- [ForgeSworn on GitHub](https://github.com/forgesworn): Browse the organisation’s public repositories.
+- [Project source](https://github.com/forgesworn/wildbloom-node): Canonical source repository, documentation and release information.
+- [shelter-kit](https://github.com/forgesworn/shelter-kit): Reusable storage and replication primitives.
+
 ## Getting Started
 
 Wildbloom Node is not published to a package registry; build the headless
