@@ -11,6 +11,9 @@ build = "build.rs"
 
 [workspace]
 
+[patch.crates-io]
+faster-hex = { path = "../../vendor/faster-hex" }
+
 [features]
 native-acceptance = []
 
