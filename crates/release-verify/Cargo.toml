@@ -7,7 +7,7 @@ license = "MIT"
 
 [dependencies]
 base64.workspace = true
-minisign-verify = "=0.2.5"
+minisign-verify = "=0.3.0"
 serde_json.workspace = true
 
 [dev-dependencies]
