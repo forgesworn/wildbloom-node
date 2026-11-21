@@ -72,7 +72,7 @@ The endpoint and publisher share one snapshot builder. Availability is coarse:
 | Service | Accepting means |
 | --- | --- |
 | Paid offer | Its entire capacity fits the current quota minus committed usage, including sold capacity, live quote holds and in-flight writes. |
-| Free mirror | Some new positive-sized guest mirror fits above Shelter Kit v0.5.0's guest high watermark. It does not promise that a maximum-size blob fits. |
+| Free mirror | Some new positive-sized guest mirror fits above Shelter Kit v0.5.3's guest high watermark. It does not promise that a maximum-size blob fits. |
 
 Insufficient capacity appears full. A failed commitment read appears unknown.
 A missing mirror transport appears paused. This is an observation of local
